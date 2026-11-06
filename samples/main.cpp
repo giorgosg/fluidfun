@@ -674,6 +674,16 @@ int main( int argc, char** argv )
 	CreateUI( s_context.window, glslVersion );
 	s_context.draw = CreateDraw();
 
+	// Open a sample by name, for example SAMPLE_NAME=Tank
+	const char* sampleName = getenv( "SAMPLE_NAME" );
+	for ( int i = 0; sampleName != nullptr && i < g_sampleCount; ++i )
+	{
+		if ( strcmp( g_sampleEntries[i].name, sampleName ) == 0 )
+		{
+			s_context.sampleIndex = i;
+		}
+	}
+
 	s_context.sampleIndex = b2ClampInt( s_context.sampleIndex, 0, g_sampleCount - 1 );
 	SelectSample( &s_context, s_context.sampleIndex, false );
 

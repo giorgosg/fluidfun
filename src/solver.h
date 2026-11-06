@@ -73,7 +73,8 @@ typedef enum b2SolverStageType
 	b2_stageIntegratePositions,
 	b2_stageRelax,
 	b2_stageRestitution,
-	b2_stageStoreImpulses
+	b2_stageStoreImpulses,
+	b2_stageUser
 } b2SolverStageType;
 
 typedef enum b2SolverBlockType
@@ -211,6 +212,9 @@ typedef struct b2StepContext
 	int workerCount;
 
 	b2SolverStage* stages;
+
+	// Active while the sub-step callback runs inside the solver, otherwise null
+	struct b2SubStepContext* subStep;
 	int stageCount;
 	bool enableWarmStarting;
 

@@ -167,6 +167,9 @@ typedef struct b2World
 	float hitEventThreshold;
 	float restitutionThreshold;
 	int restitutionIterations;
+
+	b2SubStepFcn* subStepFcn;
+	void* subStepContext;
 	bool enableRestitutionPropagation;
 	float maxLinearSpeed;
 	float contactSpeed;
