@@ -156,6 +156,7 @@ set(BOX2D_SAMPLE_COMMON_FILES
     sample_continuous.cpp
     sample_determinism.cpp
     sample_events.cpp
+    sample_fluid.cpp
     sample_geometry.cpp
     sample_issues.cpp
     sample_joints.cpp
@@ -181,7 +182,7 @@ if(BOX2D_COMPILE_WARNING_AS_ERROR)
 endif()
 
 target_include_directories(samples PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${JSMN_DIR})
-target_link_libraries(samples PUBLIC box2d shared imgui implot glfw glad nfd)
+target_link_libraries(samples PUBLIC box2d shared fluid_scenes imgui implot glfw glad nfd)
 
 # target_compile_definitions(samples PRIVATE "$<$<CONFIG:DEBUG>:SAMPLES_DEBUG>")
 # message(STATUS "runtime = ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")

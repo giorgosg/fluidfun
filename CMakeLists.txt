@@ -106,6 +106,9 @@ endif()
 
 add_subdirectory(src)
 
+# Particle liquids, built on the sub-step callback
+add_subdirectory(fluid)
+
 # This hides samples, test, and doxygen from apps that use box2d via FetchContent
 if(PROJECT_IS_TOP_LEVEL)
 	option(BOX2D_SAMPLES "Build the Box2D samples" ON)
@@ -130,16 +133,8 @@ if(PROJECT_IS_TOP_LEVEL)
 		message(STATUS "Skipping Box2D unit tests")
 	endif()
 
-	# The fluid library lives above this submodule
-	add_subdirectory(.. ${CMAKE_BINARY_DIR}/fluids)
-
 	if(BOX2D_SAMPLES)
 		add_subdirectory(samples)
-		target_sources(samples PRIVATE ../lab/sample_fluid.cpp)
-		target_link_libraries(samples PRIVATE box2d_fluids)
-		target_sources(samples PRIVATE ../lab/scene.c)
-		target_include_directories(samples PRIVATE ../lab)
-
 		# default startup project for Visual Studio
 		if(MSVC)
 			set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT samples)
