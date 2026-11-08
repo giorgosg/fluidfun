@@ -22,6 +22,10 @@ typedef float b2fCoord;
 #define B2F_CONTACTS_PER_PARTICLE 4
 #define B2F_WALL_TABLE_SIZE 128
 
+// Neighbours the density pass keeps per particle for the move pass. A particle with more keeps none, and the
+// move pass scans the grid for it as before.
+#define B2F_PAIRS_PER_PARTICLE 32
+
 // The most one density pass may move a particle, as a fraction of the interaction radius. Effective stiffness
 // climbs with density, so without this a pressure pulse overshoots and sends out the next pulse. Water can
 // then churn indefinitely at fine spacings, even at depths it would hold if it started still.
@@ -41,7 +45,7 @@ typedef float b2fCoord;
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them
 #define B2F_WORK_FIELDS( X )                                                                                            \
 	X( float, dx ) X( float, dy ) X( float, rho ) X( float, rhoNear ) X( float, wallDensity ) X( float, wallNearDensity ) \
-		X( int, contactCount ) X( int, cell ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
+		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
 			X( float, adaptMass ) X( float, adaptTarget ) X( float, adaptPressure ) X( unsigned char, adaptClass )      \
 				X( unsigned char, adaptUsed )
 
@@ -87,6 +91,14 @@ typedef struct b2fContact
 	float move;
 } b2fContact;
 
+// A neighbour within reach, found by the density pass. Nothing moves before the move pass reads it, so the
+// distance is exact there.
+typedef struct b2fPair
+{
+	int j;
+	float l;
+} b2fPair;
+
 typedef struct b2fReaction
 {
 	float x, y, angular;
@@ -113,6 +125,7 @@ struct b2fFluid
 	} sorted;
 	B2F_WORK_FIELDS( B2F_DECLARE_FIELD )
 	b2fContact* contacts;
+	b2fPair* pairs;
 
 	int sizeChanges;
 	float maxRadius;

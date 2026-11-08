@@ -71,6 +71,7 @@ b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def )
 #undef B2F_ALLOC_FIELD
 #undef B2F_ALLOC_SORTED
 	f->contacts = calloc( n, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
+	f->pairs = malloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
 	b2fBuildWallTable( f );
 
 	b2World_SetSubStepCallback( worldId, Substep, f );
@@ -92,6 +93,7 @@ void b2fDestroyFluid( b2fFluid* f )
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
 	free( f->contacts );
+	free( f->pairs );
 	free( f->cellStart );
 	free( f->shapes );
 	free( f->bodies );

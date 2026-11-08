@@ -2,23 +2,31 @@
 // Double density relaxation (Clavet et al. 2005) with viscosity, run as parallel passes over sorted particles.
 #include "fluid_internal.h"
 
-// Densities and pressures for one particle use current positions.
-static inline void Density( const b2fFluid* f, int i, float* density, float* nearDensity )
+// Densities and pressures for one particle use current positions. Also keeps each neighbour within reach for the move pass.
+static inline void Density( b2fFluid* f, int i, float* density, float* nearDensity )
 {
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
 	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 	float a = 0.0f, b = 0.0f;
+	b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+	int n = 0;
 	FOR_NEIGHBOURS( f, i, j )
 	{
 		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
 		if ( d2 < h2 && j != i )
 		{
-			float q = 1.0f - sqrtf( d2 ) * inv;
+			float l = sqrtf( d2 ), q = 1.0f - l * inv;
 			float q2 = q * q;
 			a += q2;
 			b += q2 * q;
+			if ( n < B2F_PAIRS_PER_PARTICLE )
+			{
+				pairs[n] = ( b2fPair ){ j, l };
+			}
+			n += 1;
 		}
 	}
+	f->pairCount[i] = n <= B2F_PAIRS_PER_PARTICLE ? n : -1;
 	*density = a + f->wallDensity[i];
 	*nearDensity = b + f->wallNearDensity[i];
 }
@@ -41,21 +49,29 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 
 // With sizes that differ, a pair uses the mean size and weights the other particle by its area, which keeps
 // moves equal and opposite in momentum. Each particle's own pressure scales with its own size squared.
-static inline void AdaptiveDensity( const b2fFluid* f, int i, float* density, float* nearDensity )
+static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* nearDensity )
 {
 	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 	float si = f->size[i], a = 0.0f, b = 0.0f;
+	b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+	int n = 0;
 	FOR_NEIGHBOURS( f, i, j )
 	{
 		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
 		if ( d2 < h * h && j != i )
 		{
 			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
-			float q = 1.0f - sqrtf( d2 ) / h;
+			float l = sqrtf( d2 ), q = 1.0f - l / h;
 			a += w * q * q;
 			b += w * q * q * q;
+			if ( n < B2F_PAIRS_PER_PARTICLE )
+			{
+				pairs[n] = ( b2fPair ){ j, l };
+			}
+			n += 1;
 		}
 	}
+	f->pairCount[i] = n <= B2F_PAIRS_PER_PARTICLE ? n : -1;
 	*density = a + f->wallDensity[i];
 	*nearDensity = b + f->wallNearDensity[i];
 }
@@ -69,18 +85,42 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
 		float hi2 = 4.0f * si * si;
 		float pressure = k * hi2 * ( f->rho[i] - rest ), nearPressure = kn * hi2 * f->rhoNear[i];
-		FOR_NEIGHBOURS( f, i, j )
+#define B2F_ADAPTIVE_PAIR( j, l )                                                                                    \
+	{                                                                                                                  \
+		float sj = f->size[j], h = si + sj;                                                                            \
+		float q = 1.0f - l / h, mean = 0.5f * h, w = sj * sj / ( mean * mean ), hj2 = 4.0f * sj * sj;                \
+		float pj = k * hj2 * ( f->rho[j] - rest ), nj = kn * hj2 * f->rhoNear[j];                                     \
+		float d = 0.5f * w * ( ( pressure + pj ) * q + ( nearPressure + nj ) * q * q ) / ( h * l );                   \
+		moveX -= d * dx;                                                                                               \
+		moveY -= d * dy;                                                                                               \
+	}
+		int n = f->pairCount[i];
+		if ( n >= 0 )
 		{
-			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
-			if ( d2 < h * h && d2 > 1e-12f && j != i )
+			const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+			for ( int p = 0; p < n; ++p )
 			{
-				float l = sqrtf( d2 ), q = 1.0f - l / h, mean = 0.5f * h, w = sj * sj / ( mean * mean ), hj2 = 4.0f * sj * sj;
-				float pj = k * hj2 * ( f->rho[j] - rest ), nj = kn * hj2 * f->rhoNear[j];
-				float d = 0.5f * w * ( ( pressure + pj ) * q + ( nearPressure + nj ) * q * q ) / ( h * l );
-				moveX -= d * dx;
-				moveY -= d * dy;
+				int j = pairs[p].j;
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
+				if ( d2 > 1e-12f )
+				{
+					B2F_ADAPTIVE_PAIR( j, l )
+				}
 			}
 		}
+		else
+		{
+			FOR_NEIGHBOURS( f, i, j )
+			{
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+				if ( d2 < h * h && d2 > 1e-12f && j != i )
+				{
+					float l = sqrtf( d2 );
+					B2F_ADAPTIVE_PAIR( j, l )
+				}
+			}
+		}
+#undef B2F_ADAPTIVE_PAIR
 		f->dx[i] = moveX;
 		f->dy[i] = moveY;
 	}
@@ -122,17 +162,40 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float moveX = 0.0f, moveY = 0.0f;
 		float rhoI = f->rho[i], nearI = f->rhoNear[i];
-		FOR_NEIGHBOURS( f, i, j )
+#define B2F_UNIFORM_PAIR( j, l )                                                                                     \
+	{                                                                                                                  \
+		float q = 1.0f - l * inv;                                                                                      \
+		float d = 0.5f * ( scale * ( rhoI + f->rho[j] - rest ) * q + nearScale * ( nearI + f->rhoNear[j] ) * q * q ) / l; \
+		moveX -= d * dx;                                                                                               \
+		moveY -= d * dy;                                                                                               \
+	}
+		int n = f->pairCount[i];
+		if ( n >= 0 )
 		{
-			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
-			if ( d2 < h2 && d2 > 1e-12f && j != i )
+			const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+			for ( int p = 0; p < n; ++p )
 			{
-				float l = sqrtf( d2 ), q = 1.0f - l * inv;
-				float d = 0.5f * ( scale * ( rhoI + f->rho[j] - rest ) * q + nearScale * ( nearI + f->rhoNear[j] ) * q * q ) / l;
-				moveX -= d * dx;
-				moveY -= d * dy;
+				int j = pairs[p].j;
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
+				if ( d2 > 1e-12f )
+				{
+					B2F_UNIFORM_PAIR( j, l )
+				}
 			}
 		}
+		else
+		{
+			FOR_NEIGHBOURS( f, i, j )
+			{
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
+				if ( d2 < h2 && d2 > 1e-12f && j != i )
+				{
+					float l = sqrtf( d2 );
+					B2F_UNIFORM_PAIR( j, l )
+				}
+			}
+		}
+#undef B2F_UNIFORM_PAIR
 		f->dx[i] = moveX;
 		f->dy[i] = moveY;
 	}
