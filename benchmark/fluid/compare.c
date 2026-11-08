@@ -107,7 +107,7 @@ int main( int argc, char** argv )
 			fflush( stdout );
 		}
 
-		const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
+		const b2Pos* pos = b2fFluid_GetPositions( fluid );
 		const float* vx = b2fFluid_GetVelocitiesX( fluid );
 		const float* vy = b2fFluid_GetVelocitiesY( fluid );
 		double sum = 0.0, top = 0.0;
@@ -116,7 +116,7 @@ int main( int argc, char** argv )
 			double v2 = vx[i] * vx[i] + vy[i] * vy[i];
 			sum += v2;
 			top = v2 > top ? v2 : top;
-			if ( ( isfinite( y[i] ) == false || y[i] > 3.0f * depth + 10.0f ) && getenv( "LAB_KEEP_GOING" ) == NULL )
+			if ( ( isfinite( pos[i].y ) == false || pos[i].y > 3.0f * depth + 10.0f ) && getenv( "LAB_KEEP_GOING" ) == NULL )
 			{
 				blown = true;
 			}
@@ -126,15 +126,15 @@ int main( int argc, char** argv )
 		{
 			double fastest = 0.0;
 			float fastX = 0.0f, fastY = 0.0f;
-			const b2fCoord* px = b2fFluid_GetPositionsX( fluid );
+			const b2Pos* pos = b2fFluid_GetPositions( fluid );
 			for ( int i = 0; i < n; ++i )
 			{
 				double v2 = vx[i] * vx[i] + vy[i] * vy[i];
 				if ( v2 > fastest )
 				{
 					fastest = v2;
-					fastX = (float)px[i];
-					fastY = (float)y[i];
+					fastX = (float)pos[i].x;
+					fastY = (float)pos[i].y;
 				}
 			}
 			printf( "  t=%.1f rms=%.2f fastest %.1f at x=%.1f y=%.1f\n", (double)frame / 60.0, sqrt( sum / n ), sqrt( fastest ), (double)fastX, (double)fastY );
@@ -164,13 +164,12 @@ int main( int argc, char** argv )
 		// Height as the median of the surface across columns of the tank
 		enum { binCount = 48 };
 		float tops[binCount] = { 0 };
-		const b2fCoord* x = b2fFluid_GetPositionsX( fluid );
-		const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
+		const b2Pos* pos = b2fFluid_GetPositions( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
-			int bin = (int)( ( x[i] + halfWidth ) / ( 2.0f * halfWidth ) * binCount );
+			int bin = (int)( ( pos[i].x + halfWidth ) / ( 2.0f * halfWidth ) * binCount );
 			bin = bin < 0 ? 0 : ( bin >= binCount ? binCount - 1 : bin );
-			tops[bin] = tops[bin] > y[i] ? tops[bin] : (float)y[i];
+			tops[bin] = tops[bin] > pos[i].y ? tops[bin] : (float)pos[i].y;
 		}
 		qsort( tops, binCount, sizeof( float ), CompareFloats );
 		float height = tops[binCount / 2] + 0.43f * spacing;
@@ -181,7 +180,7 @@ int main( int argc, char** argv )
 			float bandHeight = height / 6.0f;
 			for ( int i = 0; i < n; ++i )
 			{
-				int band = (int)( y[i] / bandHeight );
+				int band = (int)( pos[i].y / bandHeight );
 				band = band < 0 ? 0 : ( band > 5 ? 5 : band );
 				slice[band] += 1.0f;
 			}
@@ -202,7 +201,7 @@ int main( int argc, char** argv )
 			float best = 1e9f;
 			for ( int j = 0; j < n; ++j )
 			{
-				float dx = (float)( x[j] - x[i] ), dy = (float)( y[j] - y[i] ), d2 = dx * dx + dy * dy;
+				float dx = (float)( pos[j].x - pos[i].x ), dy = (float)( pos[j].y - pos[i].y ), d2 = dx * dx + dy * dy;
 				if ( j != i && d2 < best )
 				{
 					best = d2;

@@ -60,14 +60,14 @@ static double BoxSum( const double* table, int stride, int x0, int y0, int x1, i
 
 static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach )
 {
-	b2fCoord minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0];
+	b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
 	float largest = 0.0f;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		minX = minX < f->x[i] ? minX : f->x[i];
-		maxX = maxX > f->x[i] ? maxX : f->x[i];
-		minY = minY < f->y[i] ? minY : f->y[i];
-		maxY = maxY > f->y[i] ? maxY : f->y[i];
+		minX = minX < f->pos[i].x ? minX : f->pos[i].x;
+		maxX = maxX > f->pos[i].x ? maxX : f->pos[i].x;
+		minY = minY < f->pos[i].y ? minY : f->pos[i].y;
+		maxY = maxY > f->pos[i].y ? maxY : f->pos[i].y;
 		largest = largest > f->size[i] ? largest : f->size[i];
 	}
 
@@ -103,7 +103,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	float g = -f->gravityY, perMetre = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( f->def.stiffness * spacing * spacing );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		int cx = (int)( (float)( f->x[i] - originX ) / cell ), cy = (int)( (float)( f->y[i] - originY ) / cell );
+		int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
 		int c = ( cy + 1 ) * stride + cx + 1;
 		double m = f->mass * f->size[i] * f->size[i] * inverse;
 		f->boxMass[c] += m;
@@ -219,7 +219,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	// Blended between cells, so a target does not step as a particle crosses one
 	for ( int i = 0; i < f->count; ++i )
 	{
-		float u = (float)( f->x[i] - originX ) / cell - 0.5f, v = (float)( f->y[i] - originY ) / cell - 0.5f;
+		float u = (float)( f->pos[i].x - originX ) / cell - 0.5f, v = (float)( f->pos[i].y - originY ) / cell - 0.5f;
 		int cx = (int)floorf( u ), cy = (int)floorf( v );
 		float fx = u - (float)cx, fy = v - (float)cy;
 		cx = cx < 0 ? 0 : ( cx > width - 2 ? width - 2 : cx );
@@ -299,7 +299,7 @@ void b2fAdaptSizes( b2fFluid* f )
 	{
 		int cls = f->adaptClass[i];
 
-		b2fCoord x = f->x[i], y = f->y[i];
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float reachI = 2.0f * f->size[i], reach2 = reachI * reachI;
 
 		// Splits happen after this pass, but count as changes here
@@ -334,7 +334,7 @@ void b2fAdaptSizes( b2fFluid* f )
 				continue;
 			}
 
-			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y );
+			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y );
 			if ( dx * dx + dy * dy < reach2 && f->adaptMass[j] + give / (float)( count + 1 ) < baseMass )
 			{
 				partners[count++] = j;
@@ -351,8 +351,8 @@ void b2fAdaptSizes( b2fFluid* f )
 		{
 			int j = partners[k];
 			float m = f->adaptMass[j], total = m + share;
-			f->x[j] = ( f->x[j] * m + x * share ) / total;
-			f->y[j] = ( f->y[j] * m + y * share ) / total;
+			f->pos[j].x = ( f->pos[j].x * m + x * share ) / total;
+			f->pos[j].y = ( f->pos[j].y * m + y * share ) / total;
 			f->vx[j] = ( f->vx[j] * m + f->vx[i] * share ) / total;
 			f->vy[j] = ( f->vy[j] * m + f->vy[i] * share ) / total;
 			f->adaptMass[j] = total;
@@ -408,7 +408,7 @@ void b2fAdaptSizes( b2fFluid* f )
 		int ring = children > 4 ? children - 1 : children;
 		float radius = child * B2F_SPAWN_SPACING * 0.5f / sinf( 3.14159265f / (float)ring );
 		float phase = 2.3999632f * (float)f->id[i];
-		b2fCoord x = f->x[i], y = f->y[i];
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 
 		// A child inside a shape reads as a deep collision and would kick the body, so stay whole until clear
 		bool clear = true;
@@ -451,8 +451,8 @@ void b2fAdaptSizes( b2fFluid* f )
 			}
 			bool centre = children > 4 && c == children - 1;
 			float angle = phase + 6.2831853f * (float)c / (float)ring;
-			f->x[index] = centre ? x : x + radius * cosf( angle );
-			f->y[index] = centre ? y : y + radius * sinf( angle );
+			f->pos[index].x = centre ? x : x + radius * cosf( angle );
+			f->pos[index].y = centre ? y : y + radius * sinf( angle );
 			f->size[index] = child;
 		}
 	}

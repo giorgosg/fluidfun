@@ -4,6 +4,13 @@
 
 #include "box2d/fluidfun.h"
 
+// One coordinate of a b2Pos: double when Box2D is built for large worlds
+#if defined( BOX2D_DOUBLE_PRECISION )
+typedef double b2fCoord;
+#else
+typedef float b2fCoord;
+#endif
+
 #include "box2d/math_functions.h"
 
 #include <float.h>
@@ -28,7 +35,7 @@
 // Fields every particle carries, kept in sort order. Sorting, compaction, splits and spawning all go through
 // this list, so a new field is one entry here.
 #define B2F_PARTICLE_FIELDS( X )                                                                                        \
-	X( b2fCoord, x ) X( b2fCoord, y ) X( b2fCoord, px ) X( b2fCoord, py ) X( float, vx ) X( float, vy ) X( float, size )            \
+	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size )            \
 		X( float, speedMemory ) X( int, id )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them
@@ -151,7 +158,7 @@ static inline void b2fCopyParticle( b2fFluid* f, int to, int from )
 
 static inline void b2fClearParticle( b2fFluid* f, int i )
 {
-#define B2F_CLEAR_FIELD( type, name ) f->name[i] = 0;
+#define B2F_CLEAR_FIELD( type, name ) f->name[i] = ( type ){ 0 };
 	B2F_PARTICLE_FIELDS( B2F_CLEAR_FIELD )
 #undef B2F_CLEAR_FIELD
 }

@@ -9,13 +9,6 @@ extern "C" {
 
 typedef struct b2fFluid b2fFluid;
 
-/// A particle coordinate. Double when Box2D is built for large worlds, matching b2Pos.
-#if defined( BOX2D_DOUBLE_PRECISION )
-typedef double b2fCoord;
-#else
-typedef float b2fCoord;
-#endif
-
 typedef struct b2fFluidDef
 {
 	/// Rest distance between particles. The interaction radius is twice this.
@@ -96,8 +89,8 @@ B2_API float b2fFluid_GetMovedMass( const b2fFluid* fluid );
 B2_API void b2fFluid_Prepare( b2fFluid* fluid );
 
 B2_API int b2fFluid_GetParticleCount( const b2fFluid* fluid );
-B2_API const b2fCoord* b2fFluid_GetPositionsX( const b2fFluid* fluid );
-B2_API const b2fCoord* b2fFluid_GetPositionsY( const b2fFluid* fluid );
+/// World positions, in double when Box2D is built for large worlds
+B2_API const b2Pos* b2fFluid_GetPositions( const b2fFluid* fluid );
 B2_API const float* b2fFluid_GetVelocitiesX( const b2fFluid* fluid );
 B2_API const float* b2fFluid_GetVelocitiesY( const b2fFluid* fluid );
 

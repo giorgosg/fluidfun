@@ -17,8 +17,8 @@ static bool AddParticle( b2fFluid* f, b2fCoord x, b2fCoord y, float size )
 	}
 	int i = f->count++;
 	b2fClearParticle( f, i );
-	f->x[i] = x;
-	f->y[i] = y;
+	f->pos[i].x = x;
+	f->pos[i].y = y;
 	f->id[i] = f->nextParticleId++;
 	f->size[i] = size;
 	return true;
@@ -141,13 +141,13 @@ int b2fFluid_MoveParticles( b2fFluid* f, b2AABB from, b2AABB to, b2Vec2 velocity
 	int moved = 0;
 	for ( int i = 0; i < f->count && moved < maxCount; ++i )
 	{
-		if ( f->x[i] < from.lowerBound.x || f->x[i] > from.upperBound.x || f->y[i] < from.lowerBound.y || f->y[i] > from.upperBound.y )
+		if ( f->pos[i].x < from.lowerBound.x || f->pos[i].x > from.upperBound.x || f->pos[i].y < from.lowerBound.y || f->pos[i].y > from.upperBound.y )
 		{
 			continue;
 		}
 
-		f->x[i] = to.lowerBound.x + spacing * (float)( moved % perRow );
-		f->y[i] = to.lowerBound.y + spacing * (float)( moved / perRow );
+		f->pos[i].x = to.lowerBound.x + spacing * (float)( moved % perRow );
+		f->pos[i].y = to.lowerBound.y + spacing * (float)( moved / perRow );
 		f->vx[i] = velocity.x;
 		f->vy[i] = velocity.y;
 		float ratio = f->size[i] / f->def.particleSpacing;

@@ -197,14 +197,14 @@ void b2fGatherShapes( b2fFluid* f )
 	f->bodyCount = 0;
 	if ( f->count > 0 )
 	{
-		b2fCoord minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0];
+		b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
 		float maxSpeed2 = 0.0f;
 		for ( int i = 0; i < f->count; ++i )
 		{
-			minX = minX < f->x[i] ? minX : f->x[i];
-			maxX = maxX > f->x[i] ? maxX : f->x[i];
-			minY = minY < f->y[i] ? minY : f->y[i];
-			maxY = maxY > f->y[i] ? maxY : f->y[i];
+			minX = minX < f->pos[i].x ? minX : f->pos[i].x;
+			maxX = maxX > f->pos[i].x ? maxX : f->pos[i].x;
+			minY = minY < f->pos[i].y ? minY : f->pos[i].y;
+			maxY = maxY > f->pos[i].y ? maxY : f->pos[i].y;
 			float speed2 = f->vx[i] * f->vx[i] + f->vy[i] * f->vy[i];
 			maxSpeed2 = maxSpeed2 > speed2 ? maxSpeed2 : speed2;
 		}
@@ -324,7 +324,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 			tableScale = (float)B2F_WALL_TABLE_SIZE / h;
 		}
 
-		b2fCoord x = f->x[i], y = f->y[i];
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float density = 0.0f, nearDensity = 0.0f;
 		int count = 0;
 		b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
@@ -418,19 +418,19 @@ static void CollideTask( int start, int end, int worker, void* context )
 					float impulse = m * contacts[c].move * inv;
 					float impulseX = -impulse * contacts[c].normalX;
 					float impulseY = -impulse * contacts[c].normalY;
-					float rx = (float)( f->x[i] - body->center.x ), ry = (float)( f->y[i] - body->center.y );
+					float rx = (float)( f->pos[i].x - body->center.x ), ry = (float)( f->pos[i].y - body->center.y );
 					b2fReaction* reaction = reactions + contacts[c].bodyIndex;
 					reaction->x += impulseX;
 					reaction->y += impulseY;
 					reaction->angular += rx * impulseY - ry * impulseX;
-					SamplePatches( f, chunk, body, f->x[i], f->y[i], impulse );
+					SamplePatches( f, chunk, body, f->pos[i].x, f->pos[i].y, impulse );
 				}
 			}
 
 			for ( int si = 0; si < f->shapeCount; ++si )
 			{
 				const b2fShape* s = f->shapes + si;
-				b2fCoord x = f->x[i], y = f->y[i];
+				b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 				if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
 				{
 					continue;
@@ -461,8 +461,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 				float w = body->motion.angularVelocity;
 				float bodyVx = body->motion.linearVelocity.x - w * r.y;
 				float bodyVy = body->motion.linearVelocity.y + w * r.x;
-				float relX = (float)( x + moveX - f->px[i] ) * inv - bodyVx;
-				float relY = (float)( y + moveY - f->py[i] ) * inv - bodyVy;
+				float relX = (float)( x + moveX - f->prev[i].x ) * inv - bodyVx;
+				float relY = (float)( y + moveY - f->prev[i].y ) * inv - bodyVy;
 				float normalSpeed = relX * n.x + relY * n.y;
 				float tangentX = relX - normalSpeed * n.x, tangentY = relY - normalSpeed * n.y;
 				float tangentSpeed = sqrtf( tangentX * tangentX + tangentY * tangentY );
@@ -474,8 +474,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 					moveY -= h * slip * tangentY / tangentSpeed;
 				}
 
-				f->x[i] = x + moveX;
-				f->y[i] = y + moveY;
+				f->pos[i].x = x + moveX;
+				f->pos[i].y = y + moveY;
 
 				if ( body->awake )
 				{

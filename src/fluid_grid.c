@@ -4,13 +4,13 @@
 
 static void BuildGrid( b2fFluid* f )
 {
-	b2fCoord minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0];
+	b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
 	for ( int i = 1; i < f->count; ++i )
 	{
-		minX = minX < f->x[i] ? minX : f->x[i];
-		maxX = maxX > f->x[i] ? maxX : f->x[i];
-		minY = minY < f->y[i] ? minY : f->y[i];
-		maxY = maxY > f->y[i] ? maxY : f->y[i];
+		minX = minX < f->pos[i].x ? minX : f->pos[i].x;
+		maxX = maxX > f->pos[i].x ? maxX : f->pos[i].x;
+		minY = minY < f->pos[i].y ? minY : f->pos[i].y;
+		maxY = maxY > f->pos[i].y ? maxY : f->pos[i].y;
 	}
 
 	// Cells must fit the largest particle, however few of them there are
@@ -49,8 +49,8 @@ static void BuildGrid( b2fFluid* f )
 	float inv = 1.0f / cs;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		int cx = (int)( (float)( f->x[i] - f->gridX ) * inv );
-		int cy = (int)( (float)( f->y[i] - f->gridY ) * inv );
+		int cx = (int)( (float)( f->pos[i].x - f->gridX ) * inv );
+		int cy = (int)( (float)( f->pos[i].y - f->gridY ) * inv );
 		cx = cx < 1 ? 1 : ( cx > width - 2 ? width - 2 : cx );
 		cy = cy < 1 ? 1 : ( cy > height - 2 ? height - 2 : cy );
 		int c = cy * width + cx;

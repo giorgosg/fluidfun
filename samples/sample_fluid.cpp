@@ -49,8 +49,7 @@ public:
 		Sample::Step();
 
 		int n = b2fFluid_GetParticleCount( m_fluid );
-		const b2fCoord* x = b2fFluid_GetPositionsX( m_fluid );
-		const b2fCoord* y = b2fFluid_GetPositionsY( m_fluid );
+		const b2Pos* pos = b2fFluid_GetPositions( m_fluid );
 		const float* vx = b2fFluid_GetVelocitiesX( m_fluid );
 		const float* vy = b2fFluid_GetVelocitiesY( m_fluid );
 		const float* size = b2fFluid_GetSizes( m_fluid );
@@ -64,7 +63,7 @@ public:
 			{
 				green = b2MinInt( 255, (int)( (float)green + 60.0f * scale ) );
 			}
-			DrawPoint( m_context->draw, { x[i], y[i] }, m_pointSize * scale, b2HexColor( ( red << 16 ) | ( green << 8 ) | 0xFF ) );
+			DrawPoint( m_context->draw, pos[i], m_pointSize * scale, b2HexColor( ( red << 16 ) | ( green << 8 ) | 0xFF ) );
 		}
 	}
 

@@ -6,11 +6,11 @@
 static inline void Density( const b2fFluid* f, int i, float* density, float* nearDensity )
 {
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
-	b2fCoord x = f->x[i], y = f->y[i];
+	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 	float a = 0.0f, b = 0.0f;
 	FOR_NEIGHBOURS( f, i, j )
 	{
-		float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy;
+		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
 		if ( d2 < h2 && j != i )
 		{
 			float q = 1.0f - sqrtf( d2 ) * inv;
@@ -34,8 +34,8 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 		float move = pressure * contacts[c].pressureWeight + nearPressure * contacts[c].nearWeight;
 		move = move < 0.0f ? 0.0f : ( move > limit ? limit : move );
 		contacts[c].move = move;
-		f->x[i] += move * contacts[c].normalX;
-		f->y[i] += move * contacts[c].normalY;
+		f->pos[i].x += move * contacts[c].normalX;
+		f->pos[i].y += move * contacts[c].normalY;
 	}
 }
 
@@ -43,11 +43,11 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 // moves equal and opposite in momentum. Each particle's own pressure scales with its own size squared.
 static inline void AdaptiveDensity( const b2fFluid* f, int i, float* density, float* nearDensity )
 {
-	b2fCoord x = f->x[i], y = f->y[i];
+	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 	float si = f->size[i], a = 0.0f, b = 0.0f;
 	FOR_NEIGHBOURS( f, i, j )
 	{
-		float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
 		if ( d2 < h * h && j != i )
 		{
 			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
@@ -65,13 +65,13 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 	float k = f->def.stiffness, kn = f->def.nearStiffness, rest = f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		b2fCoord x = f->x[i], y = f->y[i];
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
 		float hi2 = 4.0f * si * si;
 		float pressure = k * hi2 * ( f->rho[i] - rest ), nearPressure = kn * hi2 * f->rhoNear[i];
 		FOR_NEIGHBOURS( f, i, j )
 		{
-			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
 			if ( d2 < h * h && d2 > 1e-12f && j != i )
 			{
 				float l = sqrtf( d2 ), q = 1.0f - l / h, mean = 0.5f * h, w = sj * sj / ( mean * mean ), hj2 = 4.0f * sj * sj;
@@ -119,12 +119,12 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 	float scale = f->def.stiffness * h, nearScale = f->def.nearStiffness * h, rest = 2.0f * f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		b2fCoord x = f->x[i], y = f->y[i];
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float moveX = 0.0f, moveY = 0.0f;
 		float rhoI = f->rho[i], nearI = f->rhoNear[i];
 		FOR_NEIGHBOURS( f, i, j )
 		{
-			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy;
+			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
 			if ( d2 < h2 && d2 > 1e-12f && j != i )
 			{
 				float l = sqrtf( d2 ), q = 1.0f - l * inv;
@@ -162,8 +162,8 @@ static void ApplyTask( int start, int end, int worker, void* context )
 				f->dy[i] *= scale;
 			}
 		}
-		f->x[i] += f->dx[i];
-		f->y[i] += f->dy[i];
+		f->pos[i].x += f->dx[i];
+		f->pos[i].y += f->dy[i];
 		if ( f->contactCount[i] > 0 )
 		{
 			float h = adaptive ? 2.0f * f->size[i] : f->radius;
@@ -181,10 +181,10 @@ static void PredictTask( int start, int end, int worker, void* context )
 	{
 		f->vx[i] += gx;
 		f->vy[i] += gy;
-		f->px[i] = f->x[i];
-		f->py[i] = f->y[i];
-		f->x[i] += h * f->vx[i];
-		f->y[i] += h * f->vy[i];
+		f->prev[i].x = f->pos[i].x;
+		f->prev[i].y = f->pos[i].y;
+		f->pos[i].x += h * f->vx[i];
+		f->pos[i].y += h * f->vy[i];
 	}
 }
 
@@ -198,12 +198,12 @@ static void ViscosityTask( int start, int end, int worker, void* context )
 	bool adaptive = f->def.adaptiveRatio > 1.0f;
 	for ( int i = start; i < end; ++i )
 	{
-		b2fCoord x = f->x[i], y = f->y[i];
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
 		float si = f->size[i];
 		FOR_NEIGHBOURS( f, i, j )
 		{
-			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy, w = 1.0f;
+			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, w = 1.0f;
 			if ( adaptive )
 			{
 				float sj = f->size[j], mean = 0.5f * ( si + sj );
@@ -239,8 +239,8 @@ static void ApplyViscosityTask( int start, int end, int worker, void* context )
 	{
 		f->vx[i] += f->dx[i];
 		f->vy[i] += f->dy[i];
-		f->x[i] += h * f->dx[i];
-		f->y[i] += h * f->dy[i];
+		f->pos[i].x += h * f->dx[i];
+		f->pos[i].y += h * f->dy[i];
 	}
 }
 
@@ -251,14 +251,14 @@ static void VelocityTask( int start, int end, int worker, void* context )
 	float h = f->h, inv = 1.0f / h, limit = 0.5f * f->radius, limit2 = limit * limit;
 	for ( int i = start; i < end; ++i )
 	{
-		float dx = (float)( f->x[i] - f->px[i] ), dy = (float)( f->y[i] - f->py[i] ), d2 = dx * dx + dy * dy;
+		float dx = (float)( f->pos[i].x - f->prev[i].x ), dy = (float)( f->pos[i].y - f->prev[i].y ), d2 = dx * dx + dy * dy;
 		if ( d2 > limit2 )
 		{
 			float scale = limit / sqrtf( d2 );
 			dx *= scale;
 			dy *= scale;
-			f->x[i] = f->px[i] + dx;
-			f->y[i] = f->py[i] + dy;
+			f->pos[i].x = f->prev[i].x + dx;
+			f->pos[i].y = f->prev[i].y + dy;
 		}
 		f->vx[i] = dx * inv;
 		f->vy[i] = dy * inv;

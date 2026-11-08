@@ -84,12 +84,11 @@ static void WriteFrame( const char* path, b2fFluid* fluid, const LabScene* scene
 	viewCenter = scene->viewCenter;
 
 	int n = b2fFluid_GetParticleCount( fluid );
-	const b2fCoord* x = b2fFluid_GetPositionsX( fluid );
-	const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
+	const b2Pos* pos = b2fFluid_GetPositions( fluid );
 	for ( int i = 0; i < n; ++i )
 	{
-		int px = (int)( 0.5f * imageWidth + ( x[i] - viewCenter.x ) * viewScale );
-		int py = (int)( 0.5f * imageHeight - ( y[i] - viewCenter.y ) * viewScale );
+		int px = (int)( 0.5f * imageWidth + ( pos[i].x - viewCenter.x ) * viewScale );
+		int py = (int)( 0.5f * imageHeight - ( pos[i].y - viewCenter.y ) * viewScale );
 		PlotPixel( px, py, 60, 140, 255 );
 		PlotPixel( px + 1, py, 60, 140, 255 );
 		PlotPixel( px, py + 1, 60, 140, 255 );
@@ -211,24 +210,24 @@ int main( int argc, char** argv )
 			{
 				// Mass weighted height of the liquid: lower means it packed tighter or left a gap
 				int n = b2fFluid_GetParticleCount( fluid );
-				const b2fCoord* py = b2fFluid_GetPositionsY( fluid );
+				const b2Pos* pos = b2fFluid_GetPositions( fluid );
 				const float* ps = b2fFluid_GetSizes( fluid );
 				double my = 0.0, m = 0.0, fineY = 0.0, coarseY = 0.0;
 				int fine = 0, coarse = 0;
 				for ( int k = 0; k < n; ++k )
 				{
 					double w = (double)ps[k] * ps[k];
-					my += w * py[k];
+					my += w * pos[k].y;
 					m += w;
 					float r = ps[k] / def.particleSpacing;
 					if ( r < 1.5f )
 					{
-						fineY += py[k];
+						fineY += pos[k].y;
 						fine += 1;
 					}
 					else if ( r > 3.0f )
 					{
-						coarseY += py[k];
+						coarseY += pos[k].y;
 						coarse += 1;
 					}
 				}
@@ -267,8 +266,7 @@ int main( int argc, char** argv )
 
 			if ( getenv( "LAB_EVENTS" ) && i % 6 == 0 )
 			{
-				const b2fCoord* ex = b2fFluid_GetPositionsX( fluid );
-				const b2fCoord* ey = b2fFluid_GetPositionsY( fluid );
+				const b2Pos* pos = b2fFluid_GetPositions( fluid );
 				const float* evx = b2fFluid_GetVelocitiesX( fluid );
 				const float* evy = b2fFluid_GetVelocitiesY( fluid );
 				int count = b2fFluid_GetParticleCount( fluid );
@@ -284,13 +282,12 @@ int main( int argc, char** argv )
 						bi = k;
 					}
 				}
-				printf( "EV %.2f rms=%.3f top=%.2f x=%.2f y=%.2f N=%d\n", (double)i / 60.0, sqrt( e / count ), sqrt( best ), (double)ex[bi], (double)ey[bi], count );
+				printf( "EV %.2f rms=%.3f top=%.2f x=%.2f y=%.2f N=%d\n", (double)i / 60.0, sqrt( e / count ), sqrt( best ), (double)pos[bi].x, (double)pos[bi].y, count );
 			}
 
 			if ( getenv( "LAB_TRACE" ) && i % 30 == 0 )
 			{
-				const b2fCoord* tx = b2fFluid_GetPositionsX( fluid );
-				const b2fCoord* ty = b2fFluid_GetPositionsY( fluid );
+				const b2Pos* pos = b2fFluid_GetPositions( fluid );
 				const float* tvx = b2fFluid_GetVelocitiesX( fluid );
 				const float* tvy = b2fFluid_GetVelocitiesY( fluid );
 				int count = b2fFluid_GetParticleCount( fluid );
@@ -299,10 +296,10 @@ int main( int argc, char** argv )
 				{
 					float v = tvx[k] * tvx[k] + tvy[k] * tvy[k];
 					maxSpeed = maxSpeed > v ? maxSpeed : v;
-					minY = minY < ty[k] ? minY : (float)ty[k];
-					maxY = maxY > ty[k] ? maxY : (float)ty[k];
-					minX = minX < tx[k] ? minX : (float)tx[k];
-					maxX = maxX > tx[k] ? maxX : (float)tx[k];
+					minY = minY < pos[k].y ? minY : (float)pos[k].y;
+					maxY = maxY > pos[k].y ? maxY : (float)pos[k].y;
+					minX = minX < pos[k].x ? minX : (float)pos[k].x;
+					maxX = maxX > pos[k].x ? maxX : (float)pos[k].x;
 				}
 				printf( "  frame %d: %.1f ms x[%.1f %.1f] y[%.2f %.2f] vmax %.1f\n", i, p.total, minX, maxX, minY, maxY, sqrtf( maxSpeed ) );
 				fflush( stdout );
@@ -312,16 +309,23 @@ int main( int argc, char** argv )
 
 		int n = b2fFluid_GetParticleCount( fluid );
 		uint64_t hash = 14695981039346656037ull;
-		hash = HashBytes( hash, b2fFluid_GetPositionsX( fluid ), (size_t)n * sizeof( b2fCoord ) );
-		hash = HashBytes( hash, b2fFluid_GetPositionsY( fluid ), (size_t)n * sizeof( b2fCoord ) );
+		const b2Pos* hashed = b2fFluid_GetPositions( fluid );
+		for ( int i = 0; i < n; ++i )
+		{
+			hash = HashBytes( hash, &hashed[i].x, sizeof( hashed[i].x ) );
+		}
+		for ( int i = 0; i < n; ++i )
+		{
+			hash = HashBytes( hash, &hashed[i].y, sizeof( hashed[i].y ) );
+		}
 		hash = HashBytes( hash, b2fFluid_GetVelocitiesX( fluid ), (size_t)n * sizeof( float ) );
 		hash = HashBytes( hash, b2fFluid_GetVelocitiesY( fluid ), (size_t)n * sizeof( float ) );
 
 		float top = -1e9f;
-		const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
+		const b2Pos* pos = b2fFluid_GetPositions( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
-			top = top > y[i] ? top : (float)y[i];
+			top = top > pos[i].y ? top : (float)pos[i].y;
 		}
 
 		float f = (float)frames;
@@ -356,14 +360,14 @@ int main( int argc, char** argv )
 		if ( getenv( "LAB_SQUEEZE" ) )
 		{
 			// How far past rest each particle is squeezed, against its depth below the surface, by size
-			const b2fCoord* py = b2fFluid_GetPositionsY( fluid );
+			const b2Pos* pos = b2fFluid_GetPositions( fluid );
 			const float* ps = b2fFluid_GetSizes( fluid );
 			const float* rho = b2fFluid_GetDensities( fluid );
 			float rest = b2fFluid_GetRestDensity( fluid );
 			float surface = -1e9f;
 			for ( int i = 0; i < n; ++i )
 			{
-				surface = surface > py[i] ? surface : (float)py[i];
+				surface = surface > pos[i].y ? surface : (float)pos[i].y;
 			}
 			enum { bins = 48 };
 			double sum[3][bins] = { { 0 } }, sum2[3][bins] = { { 0 } };
@@ -371,7 +375,7 @@ int main( int argc, char** argv )
 			float binDepth = 0.5f;
 			for ( int i = 0; i < n; ++i )
 			{
-				int b = (int)( ( surface - py[i] ) / binDepth );
+				int b = (int)( ( surface - pos[i].y ) / binDepth );
 				float r = ps[i] / def.particleSpacing;
 				int c = r < 1.5f ? 0 : r < 3.0f ? 1 : 2;
 				if ( b >= 0 && b < bins )
@@ -387,7 +391,7 @@ int main( int argc, char** argv )
 				FILE* dump = fopen( getenv( "LAB_SQUEEZE_DUMP" ), "w" );
 				for ( int i = 0; dump != NULL && i < n; ++i )
 				{
-					fprintf( dump, "%g %g %g\n", (double)( surface - py[i] ), (double)( ps[i] / def.particleSpacing ), (double)( rho[i] / rest - 1.0f ) );
+					fprintf( dump, "%g %g %g\n", (double)( surface - pos[i].y ), (double)( ps[i] / def.particleSpacing ), (double)( rho[i] / rest - 1.0f ) );
 				}
 				if ( dump != NULL )
 				{
