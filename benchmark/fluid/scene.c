@@ -72,6 +72,9 @@ static b2BodyId AddWheel( LabScene* scene, b2WorldId worldId, b2BodyId anchorBod
 	return wheel;
 }
 
+#define LAB_WHEEL_GAP 0.8f
+#define LAB_WHEEL_SINK_END 22.0f
+
 static b2fFluid* AddLiquid( b2WorldId worldId, const b2fFluidDef* def, b2Vec2 lower, b2Vec2 upper )
 {
 	b2fFluid* fluid = b2fCreateFluid( worldId, def );
@@ -128,8 +131,8 @@ LabScene LabDefaultScene( LabSceneType type )
 
 		case lab_wheel:
 			s.name = "Water Wheel";
-			s.viewCenter = (b2Vec2){ 0.0f, 5.0f };
-			s.viewHalfWidth = 12.5f;
+			s.viewCenter = (b2Vec2){ 6.0f, 4.7f };
+			s.viewHalfWidth = 13.0f;
 			s.controlLabel = "Flow per frame";
 			s.control = 15.0f;
 			s.controlMin = 0.0f;
@@ -254,7 +257,7 @@ static b2fFluid* CreateBoat( b2WorldId worldId, LabScene* scene, const b2fFluidD
 
 	// The blade tips must clear the stern. Joined bodies do not collide, so overlapping blades would crush
 	// water against the hull, and that jams the motor.
-	scene->driven = AddWheel( scene, worldId, hull, (b2Vec2){ -18.0f - 4.9f, deck + 0.25f }, 1.3f, 8, 0.1f, true, scene->control, 120.0f );
+	scene->driven = AddWheel( scene, worldId, hull, (b2Vec2){ -18.0f - 4.9f, deck + 0.25f }, 1.3f, 8, 0.2f, true, scene->control, 120.0f );
 	return AddLiquid( worldId, def, (b2Vec2){ -29.9f, 0.05f }, (b2Vec2){ 29.9f, 3.1f } );
 }
 
@@ -271,25 +274,44 @@ static b2fFluid* CreateDrum( b2WorldId worldId, LabScene* scene, const b2fFluidD
 
 	AddCrate( scene, worldId, -2.0f, 10.5f, 0.6f, 0.4f );
 	AddCrate( scene, worldId, 2.0f, 10.5f, 0.6f, 2.0f );
+
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	shapeDef.density = 0.6f;
+	b2Capsule capsule = { { -0.7f, 0.0f }, { 0.7f, 0.0f }, 0.35f };
+	b2CreateCapsuleShape( AddBody( scene, worldId, b2_dynamicBody, 0.0f, 12.3f ), &shapeDef, &capsule );
+
+	shapeDef.density = 0.9f;
+	b2Vec2 corners[6];
+	for ( int i = 0; i < 6; ++i )
+	{
+		corners[i] = (b2Vec2){ 0.6f * cosf( B2_PI * (float)i / 3.0f ), 0.6f * sinf( B2_PI * (float)i / 3.0f ) };
+	}
+	b2Hull hexagonHull = b2ComputeHull( corners, 6 );
+	b2Polygon hexagon = b2MakePolygon( &hexagonHull, 0.0f );
+	b2CreatePolygonShape( AddBody( scene, worldId, b2_dynamicBody, 3.8f, 10.5f ), &shapeDef, &hexagon );
 	return AddLiquid( worldId, def, (b2Vec2){ -4.9f, 3.1f }, (b2Vec2){ 4.9f, 7.5f } );
 }
 
-// A free wheel turned only by water, in a closed room so that splash stays in. A sump under the
-// funnel feeds the stream at a steady rate.
+// A free wheel turned only by water, in a closed room so that splash stays in. The room drains through
+// a gap under its right wall, where the head of water pushes out a jet, and a wide sink below catches
+// the jet and feeds the stream at a steady rate.
 static b2fFluid* CreateWheel( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
-	AddPlank( ground, (b2Vec2){ -9.5f, 2.0f }, (b2Vec2){ -2.5f, 0.0f }, 0.2f );
-	AddPlank( ground, (b2Vec2){ 9.5f, 2.0f }, (b2Vec2){ 2.5f, 0.0f }, 0.2f );
-	AddBox( ground, -9.8f, 6.5f, 0.3f, 13.0f, 0.0f, 0.0f );
-	AddBox( ground, 9.8f, 6.5f, 0.3f, 13.0f, 0.0f, 0.0f );
+	float gap = LAB_WHEEL_GAP;
+	AddBox( ground, 0.0f, -0.3f, 10.1f, 0.3f, 0.0f, 0.0f );
+	AddBox( ground, -9.8f, 5.0f, 0.3f, 11.8f, 0.0f, 0.0f );
+	AddBox( ground, 9.8f, 0.5f * ( gap + 16.8f ), 0.3f, 0.5f * ( 16.8f - gap ), 0.0f, 0.0f );
 	AddBox( ground, 0.0f, 16.5f, 10.1f, 0.3f, 0.0f, 0.0f );
 
-	// Sump, as wide as the room
-	AddBox( ground, 0.0f, -6.5f, 10.1f, 0.3f, 0.0f, 0.0f );
+	// Sink, under the room and out past the jet
+	AddBox( ground, 0.5f * ( LAB_WHEEL_SINK_END - 10.1f ), -7.1f, 0.5f * ( LAB_WHEEL_SINK_END + 10.1f ), 0.3f, 0.0f, 0.0f );
+	AddBox( ground, LAB_WHEEL_SINK_END - 0.3f, -0.7f, 0.3f, 6.7f, 0.0f, 0.0f );
 
-	scene->driven = AddWheel( scene, worldId, ground, (b2Vec2){ 0.0f, 6.5f }, 3.2f, 10, 0.3f, true, 0.0f, 1.0f );
-	return AddLiquid( worldId, def, (b2Vec2){ -9.4f, -6.1f }, (b2Vec2){ 9.4f, -1.5f } );
+	scene->driven = AddWheel( scene, worldId, ground, (b2Vec2){ 0.0f, 7.5f }, 3.2f, 10, 0.3f, true, 0.0f, 1.0f );
+
+	// A shallow layer over the whole sink, since a deep one would surge over the far wall
+	return AddLiquid( worldId, def, (b2Vec2){ -9.4f, -6.7f }, (b2Vec2){ LAB_WHEEL_SINK_END - 0.7f, -4.2f } );
 }
 
 static b2fFluid* CreateWaves( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
@@ -414,7 +436,8 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 	{
 		case lab_hole:
 		{
-			b2AABB sump = { { 3.5f, -4.0f }, { 9.5f, -0.2f } };
+			// Only the bottom of the sump, so the liquid is seen falling through the slot first
+			b2AABB sump = { { 3.8f, -3.4f }, { 9.2f, -2.4f } };
 			b2AABB source = { { -5.0f, 19.0f }, { 5.0f, 20.0f } };
 			b2fFluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -2.0f }, 60 );
 		}
@@ -441,7 +464,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 
 		case lab_wheel:
 		{
-			b2AABB sump = { { -9.5f, -6.2f }, { 9.5f, -1.0f } };
+			b2AABB sump = { { -9.5f, -6.8f }, { LAB_WHEEL_SINK_END - 0.6f, -4.0f } };
 			b2AABB source = { { 1.0f, 13.0f }, { 2.2f, 13.6f } };
 			b2fFluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -4.0f }, (int)scene->control );
 		}

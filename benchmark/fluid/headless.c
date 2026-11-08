@@ -61,6 +61,17 @@ static void PlotBody( b2BodyId body )
 				PlotLine( a, b );
 			}
 		}
+		else if ( type == b2_capsuleShape )
+		{
+			b2Capsule capsule = b2Shape_GetCapsule( shapes[i] );
+			b2Vec2 c1 = b2ToVec2( b2TransformWorldPoint( t, capsule.center1 ) );
+			b2Vec2 c2 = b2ToVec2( b2TransformWorldPoint( t, capsule.center2 ) );
+			b2Vec2 n = b2MulSV( capsule.radius, b2LeftPerp( b2Normalize( b2Sub( c2, c1 ) ) ) );
+			PlotLine( b2Add( c1, n ), b2Add( c2, n ) );
+			PlotLine( b2Sub( c1, n ), b2Sub( c2, n ) );
+			PlotLine( b2Add( c1, n ), b2Sub( c1, n ) );
+			PlotLine( b2Add( c2, n ), b2Sub( c2, n ) );
+		}
 		else if ( type == b2_circleShape )
 		{
 			b2Circle circle = b2Shape_GetCircle( shapes[i] );
@@ -257,7 +268,8 @@ int main( int argc, char** argv )
 				{
 					if ( b2Body_GetType( scene.bodies[k] ) != b2_staticBody )
 					{
-						printf( " | x=%.1f y=%.2f vx=%.2f w=%.2f", (double)b2Body_GetPosition( scene.bodies[k] ).x, (double)b2Body_GetPosition( scene.bodies[k] ).y, (double)b2Body_GetLinearVelocity( scene.bodies[k] ).x, (double)b2Body_GetAngularVelocity( scene.bodies[k] ) );
+						printf( " | x=%.1f y=%.2f a=%.3f vx=%.2f w=%.2f", (double)b2Body_GetPosition( scene.bodies[k] ).x, (double)b2Body_GetPosition( scene.bodies[k] ).y,
+								(double)b2Rot_GetAngle( b2Body_GetRotation( scene.bodies[k] ) ), (double)b2Body_GetLinearVelocity( scene.bodies[k] ).x, (double)b2Body_GetAngularVelocity( scene.bodies[k] ) );
 					}
 				}
 				printf( "\n" );
