@@ -44,7 +44,7 @@ typedef float b2fCoord;
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them
 #define B2F_WORK_FIELDS( X )                                                                                            \
-	X( float, dx ) X( float, dy ) X( float, rho ) X( float, rhoNear ) X( float, wallDensity ) X( float, wallNearDensity ) \
+	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rho ) X( float, rhoNear ) X( float, wallDensity ) X( float, wallNearDensity ) \
 		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
 			X( float, adaptMass ) X( float, adaptTarget ) X( float, adaptPressure ) X( unsigned char, adaptClass )      \
 				X( unsigned char, adaptUsed )
@@ -187,7 +187,6 @@ void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
 
 // solver.c
 void b2fPredict( b2fFluid* f, b2SubStepContext* context );
-void b2fApplyViscosity( b2fFluid* f, b2SubStepContext* context );
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context );
 void b2fUpdateVelocities( b2fFluid* f, b2SubStepContext* context );
 

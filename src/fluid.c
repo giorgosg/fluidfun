@@ -194,9 +194,6 @@ static void Substep( b2SubStepContext* context, int subStepIndex, int subStepCou
 	b2fSortParticles( f, context );
 	f->profile.sort += b2GetMillisecondsAndReset( &ticks );
 
-	b2fApplyViscosity( f, context );
-	f->profile.viscosity += b2GetMillisecondsAndReset( &ticks );
-
 	b2fFindContacts( f, context );
 	b2fRelaxDensity( f, context );
 	f->profile.density += b2GetMillisecondsAndReset( &ticks );

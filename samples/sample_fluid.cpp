@@ -72,7 +72,7 @@ public:
 		ImGui::Text( "Particles %d", b2fFluid_GetParticleCount( m_fluid ) );
 		b2fProfile p = b2fFluid_GetProfile( m_fluid );
 		ImGui::Text( "Fluid %.2f ms", p.total );
-		ImGui::Text( "sort %.2f visc %.2f", p.sort, p.viscosity );
+		ImGui::Text( "sort %.2f", p.sort );
 		ImGui::Text( "density %.2f collide %.2f", p.density, p.collide );
 
 		bool changed = false;

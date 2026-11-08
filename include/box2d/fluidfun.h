@@ -55,7 +55,7 @@ typedef struct b2fProfile
 {
 	float prepare;
 	float sort;
-	float viscosity;
+	/// Density relaxation and viscosity, which share a pass
 	float density;
 	float collide;
 	float total;

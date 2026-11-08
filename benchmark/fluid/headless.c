@@ -235,7 +235,6 @@ int main( int argc, char** argv )
 						coarse, coarse > 0 ? coarseY / coarse : 0.0 );
 			}
 			sum.sort += p.sort;
-			sum.viscosity += p.viscosity;
 			sum.density += p.density;
 			sum.collide += p.collide;
 			sum.total += p.total;
@@ -258,7 +257,7 @@ int main( int argc, char** argv )
 				{
 					if ( b2Body_GetType( scene.bodies[k] ) != b2_staticBody )
 					{
-						printf( " | x=%.1f vx=%.2f w=%.2f", (double)b2Body_GetPosition( scene.bodies[k] ).x, (double)b2Body_GetLinearVelocity( scene.bodies[k] ).x, (double)b2Body_GetAngularVelocity( scene.bodies[k] ) );
+						printf( " | x=%.1f y=%.2f vx=%.2f w=%.2f", (double)b2Body_GetPosition( scene.bodies[k] ).x, (double)b2Body_GetPosition( scene.bodies[k] ).y, (double)b2Body_GetLinearVelocity( scene.bodies[k] ).x, (double)b2Body_GetAngularVelocity( scene.bodies[k] ) );
 					}
 				}
 				printf( "\n" );
@@ -329,8 +328,8 @@ int main( int argc, char** argv )
 		}
 
 		float f = (float)frames;
-		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f visc %.2f density %.2f collide %.2f) top=%.2f hash=%016llx\n",
-				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.viscosity / f, sum.density / f, sum.collide / f, top,
+		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f) top=%.2f hash=%016llx\n",
+				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, top,
 				(unsigned long long)hash );
 		printf( "  leaked %d, measure %.3f ms/frame\n", scene.leaked, measureSum / f );
 		if ( w == ( oneRun ? 2u : 0u ) )

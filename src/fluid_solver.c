@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Double density relaxation (Clavet et al. 2005) with viscosity, run as parallel passes over sorted particles.
+// Double density relaxation (Clavet et al. 2005) with viscosity, run as parallel passes over sorted particles. Viscosity
+// shares the move pass and the pairs the density pass found.
 #include "fluid_internal.h"
 
 // Densities and pressures for one particle use current positions. Also keeps each neighbour within reach for the move pass.
@@ -79,12 +80,15 @@ static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* n
 static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 {
 	float k = f->def.stiffness, kn = f->def.nearStiffness, rest = f->restDensity;
+	float sigma = f->def.linearViscosity, beta = f->def.quadraticViscosity, dt = f->h;
+	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
 		float hi2 = 4.0f * si * si;
 		float pressure = k * hi2 * ( f->rho[i] - rest ), nearPressure = kn * hi2 * f->rhoNear[i];
+		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
 #define B2F_ADAPTIVE_PAIR( j, l )                                                                                    \
 	{                                                                                                                  \
 		float sj = f->size[j], h = si + sj;                                                                            \
@@ -93,6 +97,13 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 		float d = 0.5f * w * ( ( pressure + pj ) * q + ( nearPressure + nj ) * q * q ) / ( h * l );                   \
 		moveX -= d * dx;                                                                                               \
 		moveY -= d * dy;                                                                                               \
+		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
+		if ( viscous && u > 0.0f )                                                                                     \
+		{                                                                                                              \
+			float impulse = 0.5f * w * dt * q * ( sigma * u + beta * u * u ) / l;                                      \
+			dvx -= impulse * dx;                                                                                       \
+			dvy -= impulse * dy;                                                                                       \
+		}                                                                                                              \
 	}
 		int n = f->pairCount[i];
 		if ( n >= 0 )
@@ -123,6 +134,8 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 #undef B2F_ADAPTIVE_PAIR
 		f->dx[i] = moveX;
 		f->dy[i] = moveY;
+		f->viscX[i] = dvx;
+		f->viscY[i] = dvy;
 	}
 }
 
@@ -157,17 +170,27 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
 	float scale = f->def.stiffness * h, nearScale = f->def.nearStiffness * h, rest = 2.0f * f->restDensity;
+	float sigma = f->def.linearViscosity, beta = f->def.quadraticViscosity, dt = f->h;
+	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float moveX = 0.0f, moveY = 0.0f;
 		float rhoI = f->rho[i], nearI = f->rhoNear[i];
+		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
 #define B2F_UNIFORM_PAIR( j, l )                                                                                     \
 	{                                                                                                                  \
 		float q = 1.0f - l * inv;                                                                                      \
 		float d = 0.5f * ( scale * ( rhoI + f->rho[j] - rest ) * q + nearScale * ( nearI + f->rhoNear[j] ) * q * q ) / l; \
 		moveX -= d * dx;                                                                                               \
 		moveY -= d * dy;                                                                                               \
+		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
+		if ( viscous && u > 0.0f )                                                                                     \
+		{                                                                                                              \
+			float impulse = 0.5f * dt * q * ( sigma * u + beta * u * u ) / l;                                          \
+			dvx -= impulse * dx;                                                                                       \
+			dvy -= impulse * dy;                                                                                       \
+		}                                                                                                              \
 	}
 		int n = f->pairCount[i];
 		if ( n >= 0 )
@@ -198,6 +221,8 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 #undef B2F_UNIFORM_PAIR
 		f->dx[i] = moveX;
 		f->dy[i] = moveY;
+		f->viscX[i] = dvx;
+		f->viscY[i] = dvy;
 	}
 }
 
@@ -205,7 +230,7 @@ static void ApplyTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float limit = f->moveLimit * f->radius, limit2 = limit * limit;
+	float limit = f->moveLimit * f->radius, limit2 = limit * limit, dt = f->h;
 	bool adaptive = f->def.adaptiveRatio > 1.0f;
 	for ( int i = start; i < end; ++i )
 	{
@@ -225,8 +250,10 @@ static void ApplyTask( int start, int end, int worker, void* context )
 				f->dy[i] *= scale;
 			}
 		}
-		f->pos[i].x += f->dx[i];
-		f->pos[i].y += f->dy[i];
+		// Viscosity changes velocity, and the position follows it for the rest of the substep. Velocity itself is
+		// derived from the change in position at the end of the substep, so only the position needs the change.
+		f->pos[i].x += f->dx[i] + dt * f->viscX[i];
+		f->pos[i].y += f->dy[i] + dt * f->viscY[i];
 		if ( f->contactCount[i] > 0 )
 		{
 			float h = adaptive ? 2.0f * f->size[i] : f->radius;
@@ -248,62 +275,6 @@ static void PredictTask( int start, int end, int worker, void* context )
 		f->prev[i].y = f->pos[i].y;
 		f->pos[i].x += h * f->vx[i];
 		f->pos[i].y += h * f->vy[i];
-	}
-}
-
-// Writes each particle's own change only, so the result does not depend on how the loop is split.
-static void ViscosityTask( int start, int end, int worker, void* context )
-{
-	(void)worker;
-	b2fFluid* f = context;
-	float radius = f->radius, h2 = radius * radius, inv = 1.0f / radius;
-	float sigma = f->def.linearViscosity, beta = f->def.quadraticViscosity, h = f->h;
-	bool adaptive = f->def.adaptiveRatio > 1.0f;
-	for ( int i = start; i < end; ++i )
-	{
-		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
-		float si = f->size[i];
-		FOR_NEIGHBOURS( f, i, j )
-		{
-			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, w = 1.0f;
-			if ( adaptive )
-			{
-				float sj = f->size[j], mean = 0.5f * ( si + sj );
-				radius = si + sj;
-				h2 = radius * radius;
-				inv = 1.0f / radius;
-				w = sj * sj / ( mean * mean );
-			}
-
-			if ( d2 < h2 && d2 > 1e-12f && j != i )
-			{
-				float l = sqrtf( d2 ), q = 1.0f - l * inv;
-				float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;
-				if ( u > 0.0f )
-				{
-					float impulse = 0.5f * w * h * q * ( sigma * u + beta * u * u ) / l;
-					dvx -= impulse * dx;
-					dvy -= impulse * dy;
-				}
-			}
-		}
-		f->dx[i] = dvx;
-		f->dy[i] = dvy;
-	}
-}
-
-static void ApplyViscosityTask( int start, int end, int worker, void* context )
-{
-	(void)worker;
-	b2fFluid* f = context;
-	float h = f->h;
-	for ( int i = start; i < end; ++i )
-	{
-		f->vx[i] += f->dx[i];
-		f->vy[i] += f->dy[i];
-		f->pos[i].x += h * f->dx[i];
-		f->pos[i].y += h * f->dy[i];
 	}
 }
 
@@ -331,15 +302,6 @@ static void VelocityTask( int start, int end, int worker, void* context )
 void b2fPredict( b2fFluid* f, b2SubStepContext* context )
 {
 	b2SubStep_ParallelFor( context, PredictTask, f->count, 1024, f );
-}
-
-void b2fApplyViscosity( b2fFluid* f, b2SubStepContext* context )
-{
-	if ( f->def.linearViscosity > 0.0f || f->def.quadraticViscosity > 0.0f )
-	{
-		b2SubStep_ParallelFor( context, ViscosityTask, f->count, 512, f );
-		b2SubStep_ParallelFor( context, ApplyViscosityTask, f->count, 2048, f );
-	}
 }
 
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
