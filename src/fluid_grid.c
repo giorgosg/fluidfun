@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Sorts particles into grid cells, so neighbours are found in the 3x3 cells around a particle.
-#include "internal.h"
+#include "fluid_internal.h"
 
 static void BuildGrid( b2fFluid* f )
 {

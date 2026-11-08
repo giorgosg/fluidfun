@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include "fluidfun/fluid.h"
+#include "box2d/fluidfun.h"
 
 #ifdef __cplusplus
 extern "C" {

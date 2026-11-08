@@ -2,7 +2,7 @@
 // Settles a column of liquid and reports how it holds up, one line per run.
 // Usage: fluid_compare stiffness depth [substeps] [seconds] [workers]
 // Near stiffness is 2.5 times stiffness.
-#include "fluidfun/fluid.h"
+#include "box2d/fluidfun.h"
 
 #include <math.h>
 #include <stdio.h>

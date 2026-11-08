@@ -3,8 +3,8 @@ exec_prefix=${prefix}
 libdir=${prefix}/@PKGCONFIG_LIBDIR_REL@
 includedir=${prefix}/@PKGCONFIG_INCLUDEDIR_REL@
 
-Name: @PROJECT_NAME@
-Description: @PROJECT_DESCRIPTION@
+Name: fluidfun
+Description: Box2D with particle liquids
 Version: @PROJECT_VERSION@
 Libs: -L${libdir} -l@PKGCONFIG_LIBNAME@@PKGCONFIG_LIBS@
 Libs.private: @PKGCONFIG_LIBS_PRIVATE@

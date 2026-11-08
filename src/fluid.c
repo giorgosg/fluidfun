@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Creating a liquid, its settings, what it reports, and the order of passes in each substep.
-#include "internal.h"
+#include "fluid_internal.h"
 
 b2fFluidDef b2fDefaultFluidDef( void )
 {

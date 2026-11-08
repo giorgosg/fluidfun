@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Double density relaxation (Clavet et al. 2005) with viscosity, run as parallel passes over sorted particles.
-#include "internal.h"
+#include "fluid_internal.h"
 
 // Densities and pressures for one particle use current positions.
 static inline void Density( const b2fFluid* f, int i, float* density, float* nearDensity )

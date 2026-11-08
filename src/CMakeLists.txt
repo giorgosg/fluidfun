@@ -76,6 +76,17 @@ set(BOX2D_SOURCE_FILES
 	wheel_joint.c
 )
 
+# fluidfun: particle liquids, built into the same library on the sub-step callback
+set(FLUIDFUN_SOURCE_FILES
+	fluid_internal.h
+	fluid.c
+	fluid_adapt.c
+	fluid_boundary.c
+	fluid_grid.c
+	fluid_solver.c
+	fluid_spawn.c
+)
+
 set(BOX2D_API_FILES
 	../include/box2d/base.h
 	../include/box2d/box2d.h
@@ -88,12 +99,16 @@ set(BOX2D_API_FILES
 	../include/box2d/types.h
 )
 
+set(FLUIDFUN_API_FILES
+	../include/box2d/fluidfun.h
+)
+
 # Hide internal functions
 # https://gcc.gnu.org/wiki/Visibility
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN 1)
 
-add_library(box2d ${BOX2D_SOURCE_FILES} ${BOX2D_API_FILES})
+add_library(box2d ${BOX2D_SOURCE_FILES} ${BOX2D_API_FILES} ${FLUIDFUN_SOURCE_FILES} ${FLUIDFUN_API_FILES})
 
 target_include_directories(box2d
   PUBLIC
@@ -114,6 +129,8 @@ set_target_properties(box2d PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
 	DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX}
+	OUTPUT_NAME fluidfun
+	EXPORT_NAME fluidfun
 )
 
 if (BOX2D_COMPILE_WARNING_AS_ERROR)
@@ -204,6 +221,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "src" FILES ${BOX2D_SOURC
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/../include" PREFIX "include" FILES ${BOX2D_API_FILES})
 
 add_library(box2d::box2d ALIAS box2d)
+add_library(fluidfun::fluidfun ALIAS box2d)
 
 # libm is required on many Unix toolchains for sqrtf, etc.
 if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
@@ -212,40 +230,41 @@ endif()
 
 install(
   TARGETS box2d
-  EXPORT box2dConfig
+  EXPORT fluidfunConfig
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 install(
-  EXPORT box2dConfig
-  NAMESPACE box2d::
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/box2d"
+  EXPORT fluidfunConfig
+  NAMESPACE fluidfun::
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fluidfun"
 )
 
+# One folder, apart from a stock Box2D's: #include <fluidfun/fluidfun.h>
 install(
-  FILES ${BOX2D_API_FILES}
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/box2d
+  FILES ${BOX2D_API_FILES} ${FLUIDFUN_API_FILES}
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fluidfun
 )
 
 export(
-  EXPORT box2dConfig
-  NAMESPACE box2d::
-  FILE "${PROJECT_BINARY_DIR}/box2dConfig.cmake"
+  EXPORT fluidfunConfig
+  NAMESPACE fluidfun::
+  FILE "${PROJECT_BINARY_DIR}/fluidfunConfig.cmake"
 )
 
 include(CMakePackageConfigHelpers)
 
 write_basic_package_version_file(
-  "${PROJECT_BINARY_DIR}/box2dConfigVersion.cmake"
+  "${PROJECT_BINARY_DIR}/fluidfunConfigVersion.cmake"
   VERSION ${box2d_VERSION}
   COMPATIBILITY SameMajorVersion
 )
 
 install(
-  FILES "${PROJECT_BINARY_DIR}/box2dConfigVersion.cmake"
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/box2d"
+  FILES "${PROJECT_BINARY_DIR}/fluidfunConfigVersion.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fluidfun"
 )
 
 # Anchor every path to the .pc file itself so the install tree can be relocated,
@@ -268,7 +287,7 @@ if (WIN32 AND BUILD_SHARED_LIBS)
 endif()
 string(APPEND PKGCONFIG_CFLAGS "$<$<CONFIG:RELWITHDEBINFO>: -DB2_ENABLE_ASSERT>")
 
-set(PKGCONFIG_LIBNAME "box2d$<$<CONFIG:Debug>:${CMAKE_DEBUG_POSTFIX}>")
+set(PKGCONFIG_LIBNAME "fluidfun$<$<CONFIG:Debug>:${CMAKE_DEBUG_POSTFIX}>")
 
 # Plain pkg-config --libs skips Libs.private, and Box2D builds static by default, so
 # public link deps belong on the main line unless we are actually building a shared lib
@@ -287,11 +306,11 @@ configure_file(box2d.pc.in box2d.pc.gen @ONLY)
 # The library name and the assert define vary by config, so finish the substitution
 # per config instead of once at configure time
 file(GENERATE
-  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pkgconfig/$<CONFIG>/box2d.pc"
+  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pkgconfig/$<CONFIG>/fluidfun.pc"
   INPUT "${CMAKE_CURRENT_BINARY_DIR}/box2d.pc.gen"
 )
 
 install(
-  FILES "${CMAKE_CURRENT_BINARY_DIR}/pkgconfig/$<CONFIG>/box2d.pc"
+  FILES "${CMAKE_CURRENT_BINARY_DIR}/pkgconfig/$<CONFIG>/fluidfun.pc"
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )

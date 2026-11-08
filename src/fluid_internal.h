@@ -2,7 +2,7 @@
 // Shared by the library's source files. Not part of the public API.
 #pragma once
 
-#include "fluidfun/fluid.h"
+#include "box2d/fluidfun.h"
 
 #include "box2d/math_functions.h"
 

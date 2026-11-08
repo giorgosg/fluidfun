@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Shapes and bodies near the liquid: wall density, contact moves, collision, reactions on bodies and the pressure
 // in contact patches.
-#include "internal.h"
+#include "fluid_internal.h"
 
 // The kernels integrated over a solid half plane at distance d from a particle, at the liquid's
 // number density. Particles settle about half a spacing from a surface, which is where a lattice

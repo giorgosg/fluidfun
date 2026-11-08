@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include "box2d/box2d.h"
+#include "box2d.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -65,41 +65,41 @@ typedef struct b2fProfile
 	float measure;
 } b2fProfile;
 
-b2fFluidDef b2fDefaultFluidDef( void );
+B2_API b2fFluidDef b2fDefaultFluidDef( void );
 
 /// Installs the world's sub-step callback, so a world can have one fluid.
-b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def );
-void b2fDestroyFluid( b2fFluid* fluid );
+B2_API b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def );
+B2_API void b2fDestroyFluid( b2fFluid* fluid );
 
 /// Change settings between steps. The spacing and capacity cannot change.
-void b2fFluid_SetDef( b2fFluid* fluid, const b2fFluidDef* def );
+B2_API void b2fFluid_SetDef( b2fFluid* fluid, const b2fFluidDef* def );
 
 /// Fill a box with particles on a triangular lattice. Returns how many were added. With adaptive sizes
 /// particles start at the size their distance from the edge of the box asks for.
-int b2fFluid_CreateParticlesInBox( b2fFluid* fluid, b2Vec2 lowerBound, b2Vec2 upperBound );
+B2_API int b2fFluid_CreateParticlesInBox( b2fFluid* fluid, b2Vec2 lowerBound, b2Vec2 upperBound );
 
 /// Move up to maxCount particles found in the box from to a lattice in the box to, with this velocity.
 /// Call between steps. This is how a scene recycles liquid into a stream. Returns how many moved.
-int b2fFluid_MoveParticles( b2fFluid* fluid, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount );
+B2_API int b2fFluid_MoveParticles( b2fFluid* fluid, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount );
 
 /// The total mass moved by b2fFluid_MoveParticles so far.
-float b2fFluid_GetMovedMass( const b2fFluid* fluid );
+B2_API float b2fFluid_GetMovedMass( const b2fFluid* fluid );
 
 /// Call before b2World_Step, which then runs the fluid in each sub-step.
-void b2fFluid_Prepare( b2fFluid* fluid );
+B2_API void b2fFluid_Prepare( b2fFluid* fluid );
 
-int b2fFluid_GetParticleCount( const b2fFluid* fluid );
-const float* b2fFluid_GetPositionsX( const b2fFluid* fluid );
-const float* b2fFluid_GetPositionsY( const b2fFluid* fluid );
-const float* b2fFluid_GetVelocitiesX( const b2fFluid* fluid );
-const float* b2fFluid_GetVelocitiesY( const b2fFluid* fluid );
+B2_API int b2fFluid_GetParticleCount( const b2fFluid* fluid );
+B2_API const float* b2fFluid_GetPositionsX( const b2fFluid* fluid );
+B2_API const float* b2fFluid_GetPositionsY( const b2fFluid* fluid );
+B2_API const float* b2fFluid_GetVelocitiesX( const b2fFluid* fluid );
+B2_API const float* b2fFluid_GetVelocitiesY( const b2fFluid* fluid );
 
 /// The spacing of each particle. Mass is proportional to its square.
-const float* b2fFluid_GetSizes( const b2fFluid* fluid );
+B2_API const float* b2fFluid_GetSizes( const b2fFluid* fluid );
 /// Kernel density of each particle from the last substep, in the same units as b2fFluid_GetRestDensity
-const float* b2fFluid_GetDensities( const b2fFluid* fluid );
-float b2fFluid_GetRestDensity( const b2fFluid* fluid );
-b2fProfile b2fFluid_GetProfile( const b2fFluid* fluid );
+B2_API const float* b2fFluid_GetDensities( const b2fFluid* fluid );
+B2_API float b2fFluid_GetRestDensity( const b2fFluid* fluid );
+B2_API b2fProfile b2fFluid_GetProfile( const b2fFluid* fluid );
 
 #ifdef __cplusplus
 }

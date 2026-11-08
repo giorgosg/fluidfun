@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Adaptive particle sizes: density boxes measure depth, and particles split, merge and trade mass toward the size
 // their depth asks for, after Winchenbach et al. 2017.
-#include "internal.h"
+#include "fluid_internal.h"
 
 // Depth at which particles reach the coarsest size
 float b2fAdaptiveReach( const b2fFluid* f, float g, float h )
@@ -245,7 +245,6 @@ void b2fAdaptSizes( b2fFluid* f )
 	// Mass linear in depth, reaching the coarsest size at half the depth that size can hold up by pressure alone
 	float spacing = f->def.particleSpacing, fineMass = f->mass, baseMass = fineMass * ratio * ratio;
 	float g = -f->gravityY;
-	float coarse = ratio * spacing;
 	float reach = b2fAdaptiveReach( f, g, f->h );
 
 	uint64_t ticks = b2GetTicks();

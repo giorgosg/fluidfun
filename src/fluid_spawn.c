@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Adding and moving particles.
-#include "internal.h"
+#include "fluid_internal.h"
 
 // Liquid rests about 9% wider apart than particleSpacing. Anything spawned tighter than that holds pressure,
 // which a free blob releases all at once, tearing open a void in its middle.
