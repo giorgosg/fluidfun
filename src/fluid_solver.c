@@ -5,11 +5,12 @@
 // Densities and pressures for one particle use current positions.
 static inline void Density( const b2fFluid* f, int i, float* density, float* nearDensity )
 {
-	float h = f->radius, h2 = h * h, inv = 1.0f / h, x = f->x[i], y = f->y[i];
+	float h = f->radius, h2 = h * h, inv = 1.0f / h;
+	b2fCoord x = f->x[i], y = f->y[i];
 	float a = 0.0f, b = 0.0f;
 	FOR_NEIGHBOURS( f, i, j )
 	{
-		float dx = f->x[j] - x, dy = f->y[j] - y, d2 = dx * dx + dy * dy;
+		float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy;
 		if ( d2 < h2 && j != i )
 		{
 			float q = 1.0f - sqrtf( d2 ) * inv;
@@ -42,10 +43,11 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 // moves equal and opposite in momentum. Each particle's own pressure scales with its own size squared.
 static inline void AdaptiveDensity( const b2fFluid* f, int i, float* density, float* nearDensity )
 {
-	float x = f->x[i], y = f->y[i], si = f->size[i], a = 0.0f, b = 0.0f;
+	b2fCoord x = f->x[i], y = f->y[i];
+	float si = f->size[i], a = 0.0f, b = 0.0f;
 	FOR_NEIGHBOURS( f, i, j )
 	{
-		float dx = f->x[j] - x, dy = f->y[j] - y, d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+		float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
 		if ( d2 < h * h && j != i )
 		{
 			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
@@ -63,12 +65,13 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 	float k = f->def.stiffness, kn = f->def.nearStiffness, rest = f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		float x = f->x[i], y = f->y[i], si = f->size[i], moveX = 0.0f, moveY = 0.0f;
+		b2fCoord x = f->x[i], y = f->y[i];
+		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
 		float hi2 = 4.0f * si * si;
 		float pressure = k * hi2 * ( f->rho[i] - rest ), nearPressure = kn * hi2 * f->rhoNear[i];
 		FOR_NEIGHBOURS( f, i, j )
 		{
-			float dx = f->x[j] - x, dy = f->y[j] - y, d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
 			if ( d2 < h * h && d2 > 1e-12f && j != i )
 			{
 				float l = sqrtf( d2 ), q = 1.0f - l / h, mean = 0.5f * h, w = sj * sj / ( mean * mean ), hj2 = 4.0f * sj * sj;
@@ -116,11 +119,12 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 	float scale = f->def.stiffness * h, nearScale = f->def.nearStiffness * h, rest = 2.0f * f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		float x = f->x[i], y = f->y[i], moveX = 0.0f, moveY = 0.0f;
+		b2fCoord x = f->x[i], y = f->y[i];
+		float moveX = 0.0f, moveY = 0.0f;
 		float rhoI = f->rho[i], nearI = f->rhoNear[i];
 		FOR_NEIGHBOURS( f, i, j )
 		{
-			float dx = f->x[j] - x, dy = f->y[j] - y, d2 = dx * dx + dy * dy;
+			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy;
 			if ( d2 < h2 && d2 > 1e-12f && j != i )
 			{
 				float l = sqrtf( d2 ), q = 1.0f - l * inv;
@@ -194,11 +198,12 @@ static void ViscosityTask( int start, int end, int worker, void* context )
 	bool adaptive = f->def.adaptiveRatio > 1.0f;
 	for ( int i = start; i < end; ++i )
 	{
-		float x = f->x[i], y = f->y[i], vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
+		b2fCoord x = f->x[i], y = f->y[i];
+		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
 		float si = f->size[i];
 		FOR_NEIGHBOURS( f, i, j )
 		{
-			float dx = f->x[j] - x, dy = f->y[j] - y, d2 = dx * dx + dy * dy, w = 1.0f;
+			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y ), d2 = dx * dx + dy * dy, w = 1.0f;
 			if ( adaptive )
 			{
 				float sj = f->size[j], mean = 0.5f * ( si + sj );
@@ -246,7 +251,7 @@ static void VelocityTask( int start, int end, int worker, void* context )
 	float h = f->h, inv = 1.0f / h, limit = 0.5f * f->radius, limit2 = limit * limit;
 	for ( int i = start; i < end; ++i )
 	{
-		float dx = f->x[i] - f->px[i], dy = f->y[i] - f->py[i], d2 = dx * dx + dy * dy;
+		float dx = (float)( f->x[i] - f->px[i] ), dy = (float)( f->y[i] - f->py[i] ), d2 = dx * dx + dy * dy;
 		if ( d2 > limit2 )
 		{
 			float scale = limit / sqrtf( d2 );

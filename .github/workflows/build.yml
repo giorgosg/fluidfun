@@ -330,7 +330,7 @@ jobs:
       run: |
         set -eux
         cat > consumer.c <<'EOF'
-        #include <box2d/box2d.h>
+        #include <fluidfun/fluidfun.h>
         #include <stdio.h>
 
         int main( void )
@@ -347,38 +347,47 @@ jobs:
         	b2ShapeDef shapeDef = b2DefaultShapeDef();
         	b2CreatePolygonShape( bodyId, &shapeDef, &box );
 
+        	// The liquid's functions have to reach consumers too, shared builds included
+        	b2fFluidDef fluidDef = b2fDefaultFluidDef();
+        	b2fFluid* fluid = b2fCreateFluid( worldId, &fluidDef );
+        	b2fFluid_CreateParticlesInBox( fluid, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 1.0f, 1.0f } );
+
         	for ( int i = 0; i < 60; ++i )
         	{
+        		b2fFluid_Prepare( fluid );
         		b2World_Step( worldId, 1.0f / 60.0f, 4 );
         	}
+
+        	int particleCount = b2fFluid_GetParticleCount( fluid );
+        	b2fDestroyFluid( fluid );
 
         	b2Pos p = b2Body_GetPosition( bodyId );
         	b2DestroyWorld( worldId );
 
-        	printf( "y = %g\n", (double)p.y );
-        	return p.y < 9.0 ? 0 : 1;
+        	printf( "y = %g, %d particles\n", (double)p.y, particleCount );
+        	return p.y < 9.0 && particleCount > 0 ? 0 : 1;
         }
         EOF
 
         export PKG_CONFIG_PATH="$PWD/stage/lib/pkgconfig"
-        pkg-config --validate box2d
-        pkg-config --modversion box2d
-        pkg-config --cflags --libs box2d
+        pkg-config --validate fluidfun
+        pkg-config --modversion fluidfun
+        pkg-config --cflags --libs fluidfun
 
         # The command the README advertises has to be enough on its own
-        cc consumer.c -o consumer $(pkg-config --cflags --libs box2d)
+        cc consumer.c -o consumer $(pkg-config --cflags --libs fluidfun)
         LD_LIBRARY_PATH="$PWD/stage/lib" ./consumer
 
         # Paths are anchored to the .pc file, so the tree survives being moved
         mv stage relocated
         export PKG_CONFIG_PATH="$PWD/relocated/lib/pkgconfig"
-        cc consumer.c -o consumer-moved $(pkg-config --cflags --libs box2d)
+        cc consumer.c -o consumer-moved $(pkg-config --cflags --libs fluidfun)
         LD_LIBRARY_PATH="$PWD/relocated/lib" ./consumer-moved
 
     - name: Check the debug postfix reaches consumers
       if: matrix.name == 'debug'
-      run: PKG_CONFIG_PATH="$PWD/relocated/lib/pkgconfig" pkg-config --libs box2d | grep -e '-lbox2dd'
+      run: PKG_CONFIG_PATH="$PWD/relocated/lib/pkgconfig" pkg-config --libs fluidfun | grep -e '-lfluidfund'
 
     - name: Check the precision mode reaches consumers
       if: matrix.name == 'double'
-      run: PKG_CONFIG_PATH="$PWD/relocated/lib/pkgconfig" pkg-config --cflags box2d | grep -e '-DBOX2D_DOUBLE_PRECISION'
+      run: PKG_CONFIG_PATH="$PWD/relocated/lib/pkgconfig" pkg-config --cflags fluidfun | grep -e '-DBOX2D_DOUBLE_PRECISION'

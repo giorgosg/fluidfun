@@ -4,7 +4,7 @@
 
 static void BuildGrid( b2fFluid* f )
 {
-	float minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0];
+	b2fCoord minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0];
 	for ( int i = 1; i < f->count; ++i )
 	{
 		minX = minX < f->x[i] ? minX : f->x[i];
@@ -29,8 +29,8 @@ static void BuildGrid( b2fFluid* f )
 	float cs = f->cellSize;
 	f->gridX = minX - cs;
 	f->gridY = minY - cs;
-	int width = (int)( ( maxX - minX ) / cs ) + 3;
-	int height = (int)( ( maxY - minY ) / cs ) + 3;
+	int width = (int)( (float)( maxX - minX ) / cs ) + 3;
+	int height = (int)( (float)( maxY - minY ) / cs ) + 3;
 
 	// Stray particles cannot be allowed to blow up the grid. They share the outer cells instead.
 	width = width < 8192 ? width : 8192;
@@ -49,8 +49,8 @@ static void BuildGrid( b2fFluid* f )
 	float inv = 1.0f / cs;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		int cx = (int)( ( f->x[i] - f->gridX ) * inv );
-		int cy = (int)( ( f->y[i] - f->gridY ) * inv );
+		int cx = (int)( (float)( f->x[i] - f->gridX ) * inv );
+		int cy = (int)( (float)( f->y[i] - f->gridY ) * inv );
 		cx = cx < 1 ? 1 : ( cx > width - 2 ? width - 2 : cx );
 		cy = cy < 1 ? 1 : ( cy > height - 2 ? height - 2 : cy );
 		int c = cy * width + cx;

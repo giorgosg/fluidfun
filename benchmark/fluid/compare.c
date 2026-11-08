@@ -77,8 +77,8 @@ int main( int argc, char** argv )
 
 	b2fFluid* fluid = b2fCreateFluid( worldId, &def );
 	float spacing = def.particleSpacing;
-	b2fFluid_CreateParticlesInBox( fluid, (b2Vec2){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
-								   (b2Vec2){ halfWidth - 0.5f * spacing, depth } );
+	b2fFluid_CreateParticlesInBox( fluid, (b2Pos){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
+								   (b2Pos){ halfWidth - 0.5f * spacing, depth } );
 	int n = b2fFluid_GetParticleCount( fluid );
 	double startArea = 0.0;
 	{
@@ -107,7 +107,7 @@ int main( int argc, char** argv )
 			fflush( stdout );
 		}
 
-		const float* y = b2fFluid_GetPositionsY( fluid );
+		const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
 		const float* vx = b2fFluid_GetVelocitiesX( fluid );
 		const float* vy = b2fFluid_GetVelocitiesY( fluid );
 		double sum = 0.0, top = 0.0;
@@ -126,15 +126,15 @@ int main( int argc, char** argv )
 		{
 			double fastest = 0.0;
 			float fastX = 0.0f, fastY = 0.0f;
-			const float* px = b2fFluid_GetPositionsX( fluid );
+			const b2fCoord* px = b2fFluid_GetPositionsX( fluid );
 			for ( int i = 0; i < n; ++i )
 			{
 				double v2 = vx[i] * vx[i] + vy[i] * vy[i];
 				if ( v2 > fastest )
 				{
 					fastest = v2;
-					fastX = px[i];
-					fastY = y[i];
+					fastX = (float)px[i];
+					fastY = (float)y[i];
 				}
 			}
 			printf( "  t=%.1f rms=%.2f fastest %.1f at x=%.1f y=%.1f\n", (double)frame / 60.0, sqrt( sum / n ), sqrt( fastest ), (double)fastX, (double)fastY );
@@ -164,13 +164,13 @@ int main( int argc, char** argv )
 		// Height as the median of the surface across columns of the tank
 		enum { binCount = 48 };
 		float tops[binCount] = { 0 };
-		const float* x = b2fFluid_GetPositionsX( fluid );
-		const float* y = b2fFluid_GetPositionsY( fluid );
+		const b2fCoord* x = b2fFluid_GetPositionsX( fluid );
+		const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
 			int bin = (int)( ( x[i] + halfWidth ) / ( 2.0f * halfWidth ) * binCount );
 			bin = bin < 0 ? 0 : ( bin >= binCount ? binCount - 1 : bin );
-			tops[bin] = tops[bin] > y[i] ? tops[bin] : y[i];
+			tops[bin] = tops[bin] > y[i] ? tops[bin] : (float)y[i];
 		}
 		qsort( tops, binCount, sizeof( float ), CompareFloats );
 		float height = tops[binCount / 2] + 0.43f * spacing;
@@ -202,7 +202,7 @@ int main( int argc, char** argv )
 			float best = 1e9f;
 			for ( int j = 0; j < n; ++j )
 			{
-				float dx = x[j] - x[i], dy = y[j] - y[i], d2 = dx * dx + dy * dy;
+				float dx = (float)( x[j] - x[i] ), dy = (float)( y[j] - y[i] ), d2 = dx * dx + dy * dy;
 				if ( j != i && d2 < best )
 				{
 					best = d2;

@@ -172,10 +172,10 @@ static void FindPatches( b2fFluid* f )
 			patch->normalY = sign * manifold->normal.y;
 			for ( int j = 0; j < 2; ++j )
 			{
-				patch->x[j] = (float)center.x + manifold->points[j].anchorA.x;
-				patch->y[j] = (float)center.y + manifold->points[j].anchorA.y;
+				patch->x[j] = center.x + manifold->points[j].anchorA.x;
+				patch->y[j] = center.y + manifold->points[j].anchorA.y;
 			}
-			float dx = patch->x[1] - patch->x[0], dy = patch->y[1] - patch->y[0];
+			float dx = (float)( patch->x[1] - patch->x[0] ), dy = (float)( patch->y[1] - patch->y[0] );
 			patch->length = sqrtf( dx * dx + dy * dy );
 			f->patchCount += 1;
 			body->patchCount += 1;
@@ -197,7 +197,8 @@ void b2fGatherShapes( b2fFluid* f )
 	f->bodyCount = 0;
 	if ( f->count > 0 )
 	{
-		float minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0], maxSpeed2 = 0.0f;
+		b2fCoord minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0];
+		float maxSpeed2 = 0.0f;
 		for ( int i = 0; i < f->count; ++i )
 		{
 			minX = minX < f->x[i] ? minX : f->x[i];
@@ -210,8 +211,9 @@ void b2fGatherShapes( b2fFluid* f )
 
 		// A generous margin, since bodies and particles both move during the step
 		float grow = f->radius + 0.1f * sqrtf( maxSpeed2 ) + 1.0f;
-		b2AABB aabb = { { minX - grow, minY - grow }, { maxX + grow, maxY + grow } };
-		b2World_OverlapAABB( f->worldId, b2Pos_zero, aabb, b2DefaultQueryFilter(), OverlapShape, f );
+		b2Pos origin = { minX, minY };
+		b2AABB aabb = { { -grow, -grow }, { (float)( maxX - minX ) + grow, (float)( maxY - minY ) + grow } };
+		b2World_OverlapAABB( f->worldId, origin, aabb, b2DefaultQueryFilter(), OverlapShape, f );
 	}
 
 	int needed = f->bodyCount * B2F_CHUNK_COUNT;
@@ -322,7 +324,8 @@ static void ContactTask( int start, int end, int worker, void* context )
 			tableScale = (float)B2F_WALL_TABLE_SIZE / h;
 		}
 
-		float x = f->x[i], y = f->y[i], density = 0.0f, nearDensity = 0.0f;
+		b2fCoord x = f->x[i], y = f->y[i];
+		float density = 0.0f, nearDensity = 0.0f;
 		int count = 0;
 		b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
 		for ( int si = 0; si < f->shapeCount && count < B2F_CONTACTS_PER_PARTICLE; ++si )
@@ -334,7 +337,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 			}
 
 			const b2fBody* body = f->bodies + s->bodyIndex;
-			b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2Sub( ( b2Vec2 ){ x, y }, body->origin ) );
+			b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( ( b2Pos ){ x, y }, body->origin ) );
 			float distance;
 			b2Vec2 normal;
 			if ( b2fShapeDistance( s, local, &distance, &normal ) == false || distance >= h )
@@ -361,7 +364,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 
 // The liquid's push on a body's own faces, close to the ends of its contacts, gives the pressure to use
 // on the part of the body that liquid cannot reach.
-static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, float x, float y, float impulse )
+static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, b2fCoord x, b2fCoord y, float impulse )
 {
 	float window = 2.0f * f->radius, window2 = window * window;
 	float* impulses = f->patchImpulses + 2 * f->patchCount * chunk;
@@ -370,7 +373,7 @@ static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, f
 		const b2fPatch* patch = f->patches + i;
 		for ( int end = 0; end < 2; ++end )
 		{
-			float dx = x - patch->x[end], dy = y - patch->y[end];
+			float dx = (float)( x - patch->x[end] ), dy = (float)( y - patch->y[end] );
 			if ( dx * dx + dy * dy < window2 )
 			{
 				impulses[2 * i + end] += impulse;
@@ -415,7 +418,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 					float impulse = m * contacts[c].move * inv;
 					float impulseX = -impulse * contacts[c].normalX;
 					float impulseY = -impulse * contacts[c].normalY;
-					float rx = f->x[i] - body->motion.center.x, ry = f->y[i] - body->motion.center.y;
+					float rx = (float)( f->x[i] - body->center.x ), ry = (float)( f->y[i] - body->center.y );
 					b2fReaction* reaction = reactions + contacts[c].bodyIndex;
 					reaction->x += impulseX;
 					reaction->y += impulseY;
@@ -427,15 +430,15 @@ static void CollideTask( int start, int end, int worker, void* context )
 			for ( int si = 0; si < f->shapeCount; ++si )
 			{
 				const b2fShape* s = f->shapes + si;
-				float x = f->x[i], y = f->y[i];
+				b2fCoord x = f->x[i], y = f->y[i];
 				if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
 				{
 					continue;
 				}
 
 				const b2fBody* body = f->bodies + s->bodyIndex;
-				b2Vec2 world = { x, y };
-				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2Sub( world, body->origin ) );
+				b2Pos world = { x, y };
+				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( world, body->origin ) );
 				float distance;
 				b2Vec2 normal;
 				if ( b2fShapeDistance( s, local, &distance, &normal ) == false || distance >= margin )
@@ -454,12 +457,12 @@ static void CollideTask( int start, int end, int worker, void* context )
 				float moveX = push * n.x, moveY = push * n.y;
 
 				// Coulomb-limited slip against the surface
-				b2Vec2 r = { x - body->motion.center.x, y - body->motion.center.y };
+				b2Vec2 r = b2SubPos( world, body->center );
 				float w = body->motion.angularVelocity;
 				float bodyVx = body->motion.linearVelocity.x - w * r.y;
 				float bodyVy = body->motion.linearVelocity.y + w * r.x;
-				float relX = ( x + moveX - f->px[i] ) * inv - bodyVx;
-				float relY = ( y + moveY - f->py[i] ) * inv - bodyVy;
+				float relX = (float)( x + moveX - f->px[i] ) * inv - bodyVx;
+				float relY = (float)( y + moveY - f->py[i] ) * inv - bodyVy;
 				float normalSpeed = relX * n.x + relY * n.y;
 				float tangentX = relX - normalSpeed * n.x, tangentY = relY - normalSpeed * n.y;
 				float tangentSpeed = sqrtf( tangentX * tangentX + tangentY * tangentY );
@@ -511,8 +514,8 @@ static void ApplyPatches( b2fFluid* f, b2SubStepContext* context )
 
 		float impulse = f->def.contactPressure * ( sum[0] > sum[1] ? sum[0] : sum[1] ) * patch->length / window;
 		float impulseX = impulse * patch->normalX, impulseY = impulse * patch->normalY;
-		float rx = 0.5f * ( patch->x[0] + patch->x[1] ) - body->motion.center.x;
-		float ry = 0.5f * ( patch->y[0] + patch->y[1] ) - body->motion.center.y;
+		float rx = (float)( 0.5f * ( patch->x[0] + patch->x[1] ) - body->center.x );
+		float ry = (float)( 0.5f * ( patch->y[0] + patch->y[1] ) - body->center.y );
 		b2SubStep_ApplyImpulse( context, body->id, ( b2Vec2 ){ impulseX, impulseY }, rx * impulseY - ry * impulseX );
 	}
 }
@@ -524,19 +527,20 @@ void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
 		b2fBody* body = f->bodies + i;
 		body->awake = b2SubStep_GetBodyMotion( context, body->id, &body->motion );
 		b2Vec2 offset = b2RotateVector( body->motion.rotation, body->motion.localCenter );
-		body->origin = b2Sub( body->motion.center, offset );
+		body->center = body->motion.center;
+		body->origin = b2OffsetPos( body->center, b2Neg( offset ) );
 	}
 
 	for ( int i = 0; i < f->shapeCount; ++i )
 	{
 		b2fShape* s = f->shapes + i;
 		const b2fBody* body = f->bodies + s->bodyIndex;
-		float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+		b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
 		int count = s->type == b2_polygonShape ? s->polygon.count : 2;
 		for ( int j = 0; j < count; ++j )
 		{
 			b2Vec2 local = s->type == b2_polygonShape ? s->polygon.vertices[j] : ( j == 0 ? s->p1 : s->p2 );
-			b2Vec2 p = b2Add( body->origin, b2RotateVector( body->motion.rotation, local ) );
+			b2Pos p = b2OffsetPos( body->origin, b2RotateVector( body->motion.rotation, local ) );
 			minX = minX < p.x ? minX : p.x;
 			minY = minY < p.y ? minY : p.y;
 			maxX = maxX > p.x ? maxX : p.x;

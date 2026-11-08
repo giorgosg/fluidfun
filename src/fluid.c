@@ -126,11 +126,11 @@ int b2fFluid_GetParticleCount( const b2fFluid* f )
 {
 	return f->count;
 }
-const float* b2fFluid_GetPositionsX( const b2fFluid* f )
+const b2fCoord* b2fFluid_GetPositionsX( const b2fFluid* f )
 {
 	return f->x;
 }
-const float* b2fFluid_GetPositionsY( const b2fFluid* f )
+const b2fCoord* b2fFluid_GetPositionsY( const b2fFluid* f )
 {
 	return f->y;
 }

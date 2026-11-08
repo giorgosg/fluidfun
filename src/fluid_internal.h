@@ -28,7 +28,7 @@
 // Fields every particle carries, kept in sort order. Sorting, compaction, splits and spawning all go through
 // this list, so a new field is one entry here.
 #define B2F_PARTICLE_FIELDS( X )                                                                                        \
-	X( float, x ) X( float, y ) X( float, px ) X( float, py ) X( float, vx ) X( float, vy ) X( float, size )            \
+	X( b2fCoord, x ) X( b2fCoord, y ) X( b2fCoord, px ) X( b2fCoord, py ) X( float, vx ) X( float, vy ) X( float, size )            \
 		X( float, speedMemory ) X( int, id )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them
@@ -48,13 +48,13 @@ typedef struct b2fShape
 	float radius;
 	b2Polygon polygon;
 	// World bounds this substep, grown by the particle radius
-	float minX, minY, maxX, maxY;
+	b2fCoord minX, minY, maxX, maxY;
 } b2fShape;
 
 // A flat contact between a body and something else, which shuts liquid out of the gap
 typedef struct b2fPatch
 {
-	float x[2], y[2];
+	b2fCoord x[2], y[2];
 	float normalX, normalY;	 // pushes this body away from what it touches
 	float length;
 	int bodyIndex;
@@ -65,7 +65,8 @@ typedef struct b2fBody
 	b2BodyId id;
 	int firstPatch, patchCount;
 	b2SubStepBody motion;
-	b2Vec2 origin;
+	// World centre of mass and body origin, in double when Box2D is built for large worlds
+	b2Pos center, origin;
 	bool awake;
 } b2fBody;
 
@@ -113,7 +114,7 @@ struct b2fFluid
 	float wallTable[B2F_WALL_TABLE_SIZE + 1][4];
 
 	int gridWidth, gridHeight, gridCapacity;
-	float gridX, gridY;
+	b2fCoord gridX, gridY;
 	int* cellStart;
 
 	b2fShape* shapes;

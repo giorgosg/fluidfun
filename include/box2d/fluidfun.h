@@ -9,6 +9,13 @@ extern "C" {
 
 typedef struct b2fFluid b2fFluid;
 
+/// A particle coordinate. Double when Box2D is built for large worlds, matching b2Pos.
+#if defined( BOX2D_DOUBLE_PRECISION )
+typedef double b2fCoord;
+#else
+typedef float b2fCoord;
+#endif
+
 typedef struct b2fFluidDef
 {
 	/// Rest distance between particles. The interaction radius is twice this.
@@ -76,7 +83,7 @@ B2_API void b2fFluid_SetDef( b2fFluid* fluid, const b2fFluidDef* def );
 
 /// Fill a box with particles on a triangular lattice. Returns how many were added. With adaptive sizes
 /// particles start at the size their distance from the edge of the box asks for.
-B2_API int b2fFluid_CreateParticlesInBox( b2fFluid* fluid, b2Vec2 lowerBound, b2Vec2 upperBound );
+B2_API int b2fFluid_CreateParticlesInBox( b2fFluid* fluid, b2Pos lowerBound, b2Pos upperBound );
 
 /// Move up to maxCount particles found in the box from to a lattice in the box to, with this velocity.
 /// Call between steps. This is how a scene recycles liquid into a stream. Returns how many moved.
@@ -89,8 +96,8 @@ B2_API float b2fFluid_GetMovedMass( const b2fFluid* fluid );
 B2_API void b2fFluid_Prepare( b2fFluid* fluid );
 
 B2_API int b2fFluid_GetParticleCount( const b2fFluid* fluid );
-B2_API const float* b2fFluid_GetPositionsX( const b2fFluid* fluid );
-B2_API const float* b2fFluid_GetPositionsY( const b2fFluid* fluid );
+B2_API const b2fCoord* b2fFluid_GetPositionsX( const b2fFluid* fluid );
+B2_API const b2fCoord* b2fFluid_GetPositionsY( const b2fFluid* fluid );
 B2_API const float* b2fFluid_GetVelocitiesX( const b2fFluid* fluid );
 B2_API const float* b2fFluid_GetVelocitiesY( const b2fFluid* fluid );
 

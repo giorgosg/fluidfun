@@ -13,6 +13,13 @@ add_executable(fluid_compare compare.c)
 target_link_libraries(fluid_compare PRIVATE box2d)
 set_target_properties(fluid_compare PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES)
 
+# getenv and fopen are fine here
+if (MSVC)
+	target_compile_definitions(fluid_scenes PRIVATE _CRT_SECURE_NO_WARNINGS)
+	target_compile_definitions(fluid_headless PRIVATE _CRT_SECURE_NO_WARNINGS)
+	target_compile_definitions(fluid_compare PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 if (BOX2D_COMPILE_WARNING_AS_ERROR)
 	set_target_properties(fluid_scenes fluid_headless fluid_compare PROPERTIES COMPILE_WARNING_AS_ERROR ON)
 endif()

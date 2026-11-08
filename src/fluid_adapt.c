@@ -60,7 +60,8 @@ static double BoxSum( const double* table, int stride, int x0, int y0, int x1, i
 
 static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach )
 {
-	float minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0], largest = 0.0f;
+	b2fCoord minX = f->x[0], maxX = f->x[0], minY = f->y[0], maxY = f->y[0];
+	float largest = 0.0f;
 	for ( int i = 0; i < f->count; ++i )
 	{
 		minX = minX < f->x[i] ? minX : f->x[i];
@@ -71,14 +72,15 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	}
 
 	float spacing = f->def.particleSpacing, cell = B2F_BOX_CELL * spacing;
-	float extent = maxX - minX > maxY - minY ? maxX - minX : maxY - minY;
+	float extentX = (float)( maxX - minX ), extentY = (float)( maxY - minY );
+	float extent = extentX > extentY ? extentX : extentY;
 	while ( extent / cell > 2048.0f )
 	{
 		cell *= 2.0f;
 	}
 
-	int width = (int)( ( maxX - minX ) / cell ) + 1, height = (int)( ( maxY - minY ) / cell ) + 1;
-	float originX = minX, originY = minY;
+	int width = (int)( extentX / cell ) + 1, height = (int)( extentY / cell ) + 1;
+	b2fCoord originX = minX, originY = minY;
 	int stride = width + 1, nodes = stride * ( height + 1 );
 	if ( nodes > f->boxCapacity )
 	{
@@ -101,7 +103,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	float g = -f->gravityY, perMetre = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( f->def.stiffness * spacing * spacing );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		int cx = (int)( ( f->x[i] - originX ) / cell ), cy = (int)( ( f->y[i] - originY ) / cell );
+		int cx = (int)( (float)( f->x[i] - originX ) / cell ), cy = (int)( (float)( f->y[i] - originY ) / cell );
 		int c = ( cy + 1 ) * stride + cx + 1;
 		double m = f->mass * f->size[i] * f->size[i] * inverse;
 		f->boxMass[c] += m;
@@ -217,16 +219,16 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	// Blended between cells, so a target does not step as a particle crosses one
 	for ( int i = 0; i < f->count; ++i )
 	{
-		float u = ( f->x[i] - originX ) / cell - 0.5f, v = ( f->y[i] - originY ) / cell - 0.5f;
+		float u = (float)( f->x[i] - originX ) / cell - 0.5f, v = (float)( f->y[i] - originY ) / cell - 0.5f;
 		int cx = (int)floorf( u ), cy = (int)floorf( v );
 		float fx = u - (float)cx, fy = v - (float)cy;
 		cx = cx < 0 ? 0 : ( cx > width - 2 ? width - 2 : cx );
 		cy = cy < 0 ? 0 : ( cy > height - 2 ? height - 2 : cy );
 		int c = cy * width + cx;
-		float a = ( 1.0f - fx ) * ( 1.0f - fy ), b = fx * ( 1.0f - fy ), e = ( 1.0f - fx ) * fy, g = fx * fy;
-		depth[i] = a * f->boxDepth[c] + b * f->boxDepth[c + 1] + e * f->boxDepth[c + width] + g * f->boxDepth[c + width + 1];
-		flow[i] = a * f->boxFlow[c] + b * f->boxFlow[c + 1] + e * f->boxFlow[c + width] + g * f->boxFlow[c + width + 1];
-		pressureDepth[i] = a * f->boxPressure[c] + b * f->boxPressure[c + 1] + e * f->boxPressure[c + width] + g * f->boxPressure[c + width + 1];
+		float a = ( 1.0f - fx ) * ( 1.0f - fy ), b = fx * ( 1.0f - fy ), e = ( 1.0f - fx ) * fy, d = fx * fy;
+		depth[i] = a * f->boxDepth[c] + b * f->boxDepth[c + 1] + e * f->boxDepth[c + width] + d * f->boxDepth[c + width + 1];
+		flow[i] = a * f->boxFlow[c] + b * f->boxFlow[c + 1] + e * f->boxFlow[c + width] + d * f->boxFlow[c + width + 1];
+		pressureDepth[i] = a * f->boxPressure[c] + b * f->boxPressure[c + 1] + e * f->boxPressure[c + width] + d * f->boxPressure[c + width + 1];
 	}
 }
 
@@ -297,7 +299,8 @@ void b2fAdaptSizes( b2fFluid* f )
 	{
 		int cls = f->adaptClass[i];
 
-		float x = f->x[i], y = f->y[i], reachI = 2.0f * f->size[i], reach2 = reachI * reachI;
+		b2fCoord x = f->x[i], y = f->y[i];
+		float reachI = 2.0f * f->size[i], reach2 = reachI * reachI;
 
 		// Splits happen after this pass, but count as changes here
 		if ( cls == b2f_tooLarge && f->adaptUsed[i] == 0 )
@@ -331,7 +334,7 @@ void b2fAdaptSizes( b2fFluid* f )
 				continue;
 			}
 
-			float dx = f->x[j] - x, dy = f->y[j] - y;
+			float dx = (float)( f->x[j] - x ), dy = (float)( f->y[j] - y );
 			if ( dx * dx + dy * dy < reach2 && f->adaptMass[j] + give / (float)( count + 1 ) < baseMass )
 			{
 				partners[count++] = j;
@@ -405,7 +408,7 @@ void b2fAdaptSizes( b2fFluid* f )
 		int ring = children > 4 ? children - 1 : children;
 		float radius = child * B2F_SPAWN_SPACING * 0.5f / sinf( 3.14159265f / (float)ring );
 		float phase = 2.3999632f * (float)f->id[i];
-		float x = f->x[i], y = f->y[i];
+		b2fCoord x = f->x[i], y = f->y[i];
 
 		// A child inside a shape reads as a deep collision and would kick the body, so stay whole until clear
 		bool clear = true;
@@ -422,8 +425,8 @@ void b2fAdaptSizes( b2fFluid* f )
 			for ( int c = 0; c < ring && clear; ++c )
 			{
 				float angle = phase + 6.2831853f * (float)c / (float)ring;
-				b2Vec2 point = { x + radius * cosf( angle ), y + radius * sinf( angle ) };
-				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2Sub( point, body->origin ) );
+				b2Pos point = { x + radius * cosf( angle ), y + radius * sinf( angle ) };
+				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( point, body->origin ) );
 				float distance;
 				b2Vec2 normal;
 				if ( b2fShapeDistance( shape, local, &distance, &normal ) && distance < 0.5f * child )

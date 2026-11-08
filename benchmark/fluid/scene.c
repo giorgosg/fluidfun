@@ -75,7 +75,7 @@ static b2BodyId AddWheel( LabScene* scene, b2WorldId worldId, b2BodyId anchorBod
 static b2fFluid* AddLiquid( b2WorldId worldId, const b2fFluidDef* def, b2Vec2 lower, b2Vec2 upper )
 {
 	b2fFluid* fluid = b2fCreateFluid( worldId, def );
-	b2fFluid_CreateParticlesInBox( fluid, lower, upper );
+	b2fFluid_CreateParticlesInBox( fluid, b2ToPos( lower ), b2ToPos( upper ) );
 	return fluid;
 }
 
@@ -322,7 +322,7 @@ static b2fFluid* CreateWaves( b2WorldId worldId, LabScene* scene, const b2fFluid
 		float bottom = slope * ( x + column - toe ) + 2.0f * def->particleSpacing;
 		if ( bottom < depth )
 		{
-			b2fFluid_CreateParticlesInBox( fluid, (b2Vec2){ x, bottom }, (b2Vec2){ x + column, depth } );
+			b2fFluid_CreateParticlesInBox( fluid, (b2Pos){ x, bottom }, (b2Pos){ x + column, depth } );
 		}
 	}
 	return fluid;
@@ -342,7 +342,7 @@ static b2fFluid* CreateSplash( b2WorldId worldId, LabScene* scene, const b2fFlui
 	b2CreateCircleShape( scene->driven, &shapeDef, &ball );
 
 	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ -9.9f, 0.05f }, (b2Vec2){ 9.9f, 3.0f } );
-	b2fFluid_CreateParticlesInBox( fluid, (b2Vec2){ -5.5f, 8.5f }, (b2Vec2){ -2.5f, 11.5f } );
+	b2fFluid_CreateParticlesInBox( fluid, (b2Pos){ -5.5f, 8.5f }, (b2Pos){ -2.5f, 11.5f } );
 	return fluid;
 }
 

@@ -49,8 +49,8 @@ public:
 		Sample::Step();
 
 		int n = b2fFluid_GetParticleCount( m_fluid );
-		const float* x = b2fFluid_GetPositionsX( m_fluid );
-		const float* y = b2fFluid_GetPositionsY( m_fluid );
+		const b2fCoord* x = b2fFluid_GetPositionsX( m_fluid );
+		const b2fCoord* y = b2fFluid_GetPositionsY( m_fluid );
 		const float* vx = b2fFluid_GetVelocitiesX( m_fluid );
 		const float* vy = b2fFluid_GetVelocitiesY( m_fluid );
 		const float* size = b2fFluid_GetSizes( m_fluid );

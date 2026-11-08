@@ -47,7 +47,7 @@ static void PlotBody( b2BodyId body )
 {
 	b2ShapeId shapes[32];
 	int count = b2Body_GetShapes( body, shapes, 32 );
-	b2Transform t = b2Body_GetTransform( body );
+	b2WorldTransform t = b2Body_GetTransform( body );
 	for ( int i = 0; i < count; ++i )
 	{
 		b2ShapeType type = b2Shape_GetType( shapes[i] );
@@ -56,15 +56,15 @@ static void PlotBody( b2BodyId body )
 			b2Polygon polygon = b2Shape_GetPolygon( shapes[i] );
 			for ( int j = 0; j < polygon.count; ++j )
 			{
-				b2Vec2 a = b2TransformPoint( t, polygon.vertices[j] );
-				b2Vec2 b = b2TransformPoint( t, polygon.vertices[( j + 1 ) % polygon.count] );
+				b2Vec2 a = b2ToVec2( b2TransformWorldPoint( t, polygon.vertices[j] ) );
+				b2Vec2 b = b2ToVec2( b2TransformWorldPoint( t, polygon.vertices[( j + 1 ) % polygon.count] ) );
 				PlotLine( a, b );
 			}
 		}
 		else if ( type == b2_circleShape )
 		{
 			b2Circle circle = b2Shape_GetCircle( shapes[i] );
-			b2Vec2 c = b2TransformPoint( t, circle.center );
+			b2Vec2 c = b2ToVec2( b2TransformWorldPoint( t, circle.center ) );
 			for ( int j = 0; j < 24; ++j )
 			{
 				float a0 = 2.0f * B2_PI * (float)j / 24.0f, a1 = 2.0f * B2_PI * (float)( j + 1 ) / 24.0f;
@@ -84,8 +84,8 @@ static void WriteFrame( const char* path, b2fFluid* fluid, const LabScene* scene
 	viewCenter = scene->viewCenter;
 
 	int n = b2fFluid_GetParticleCount( fluid );
-	const float* x = b2fFluid_GetPositionsX( fluid );
-	const float* y = b2fFluid_GetPositionsY( fluid );
+	const b2fCoord* x = b2fFluid_GetPositionsX( fluid );
+	const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
 	for ( int i = 0; i < n; ++i )
 	{
 		int px = (int)( 0.5f * imageWidth + ( x[i] - viewCenter.x ) * viewScale );
@@ -211,7 +211,7 @@ int main( int argc, char** argv )
 			{
 				// Mass weighted height of the liquid: lower means it packed tighter or left a gap
 				int n = b2fFluid_GetParticleCount( fluid );
-				const float* py = b2fFluid_GetPositionsY( fluid );
+				const b2fCoord* py = b2fFluid_GetPositionsY( fluid );
 				const float* ps = b2fFluid_GetSizes( fluid );
 				double my = 0.0, m = 0.0, fineY = 0.0, coarseY = 0.0;
 				int fine = 0, coarse = 0;
@@ -267,8 +267,8 @@ int main( int argc, char** argv )
 
 			if ( getenv( "LAB_EVENTS" ) && i % 6 == 0 )
 			{
-				const float* ex = b2fFluid_GetPositionsX( fluid );
-				const float* ey = b2fFluid_GetPositionsY( fluid );
+				const b2fCoord* ex = b2fFluid_GetPositionsX( fluid );
+				const b2fCoord* ey = b2fFluid_GetPositionsY( fluid );
 				const float* evx = b2fFluid_GetVelocitiesX( fluid );
 				const float* evy = b2fFluid_GetVelocitiesY( fluid );
 				int count = b2fFluid_GetParticleCount( fluid );
@@ -289,8 +289,8 @@ int main( int argc, char** argv )
 
 			if ( getenv( "LAB_TRACE" ) && i % 30 == 0 )
 			{
-				const float* tx = b2fFluid_GetPositionsX( fluid );
-				const float* ty = b2fFluid_GetPositionsY( fluid );
+				const b2fCoord* tx = b2fFluid_GetPositionsX( fluid );
+				const b2fCoord* ty = b2fFluid_GetPositionsY( fluid );
 				const float* tvx = b2fFluid_GetVelocitiesX( fluid );
 				const float* tvy = b2fFluid_GetVelocitiesY( fluid );
 				int count = b2fFluid_GetParticleCount( fluid );
@@ -299,10 +299,10 @@ int main( int argc, char** argv )
 				{
 					float v = tvx[k] * tvx[k] + tvy[k] * tvy[k];
 					maxSpeed = maxSpeed > v ? maxSpeed : v;
-					minY = minY < ty[k] ? minY : ty[k];
-					maxY = maxY > ty[k] ? maxY : ty[k];
-					minX = minX < tx[k] ? minX : tx[k];
-					maxX = maxX > tx[k] ? maxX : tx[k];
+					minY = minY < ty[k] ? minY : (float)ty[k];
+					maxY = maxY > ty[k] ? maxY : (float)ty[k];
+					minX = minX < tx[k] ? minX : (float)tx[k];
+					maxX = maxX > tx[k] ? maxX : (float)tx[k];
 				}
 				printf( "  frame %d: %.1f ms x[%.1f %.1f] y[%.2f %.2f] vmax %.1f\n", i, p.total, minX, maxX, minY, maxY, sqrtf( maxSpeed ) );
 				fflush( stdout );
@@ -312,16 +312,16 @@ int main( int argc, char** argv )
 
 		int n = b2fFluid_GetParticleCount( fluid );
 		uint64_t hash = 14695981039346656037ull;
-		hash = HashBytes( hash, b2fFluid_GetPositionsX( fluid ), (size_t)n * sizeof( float ) );
-		hash = HashBytes( hash, b2fFluid_GetPositionsY( fluid ), (size_t)n * sizeof( float ) );
+		hash = HashBytes( hash, b2fFluid_GetPositionsX( fluid ), (size_t)n * sizeof( b2fCoord ) );
+		hash = HashBytes( hash, b2fFluid_GetPositionsY( fluid ), (size_t)n * sizeof( b2fCoord ) );
 		hash = HashBytes( hash, b2fFluid_GetVelocitiesX( fluid ), (size_t)n * sizeof( float ) );
 		hash = HashBytes( hash, b2fFluid_GetVelocitiesY( fluid ), (size_t)n * sizeof( float ) );
 
 		float top = -1e9f;
-		const float* y = b2fFluid_GetPositionsY( fluid );
+		const b2fCoord* y = b2fFluid_GetPositionsY( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
-			top = top > y[i] ? top : y[i];
+			top = top > y[i] ? top : (float)y[i];
 		}
 
 		float f = (float)frames;
@@ -356,14 +356,14 @@ int main( int argc, char** argv )
 		if ( getenv( "LAB_SQUEEZE" ) )
 		{
 			// How far past rest each particle is squeezed, against its depth below the surface, by size
-			const float* py = b2fFluid_GetPositionsY( fluid );
+			const b2fCoord* py = b2fFluid_GetPositionsY( fluid );
 			const float* ps = b2fFluid_GetSizes( fluid );
 			const float* rho = b2fFluid_GetDensities( fluid );
 			float rest = b2fFluid_GetRestDensity( fluid );
 			float surface = -1e9f;
 			for ( int i = 0; i < n; ++i )
 			{
-				surface = surface > py[i] ? surface : py[i];
+				surface = surface > py[i] ? surface : (float)py[i];
 			}
 			enum { bins = 48 };
 			double sum[3][bins] = { { 0 } }, sum2[3][bins] = { { 0 } };
