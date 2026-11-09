@@ -155,7 +155,7 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.viewHalfWidth = 12.0f;
 			s.controlLabel = "Ball density";
 			s.control = 0.7f;
-			s.controlMin = 0.1f;
+			s.controlMin = 0.005f;
 			s.controlMax = 4.0f;
 			break;
 

@@ -49,12 +49,6 @@ enum
 // layers of the Three Liquids scene were still settling after 40 seconds at ratio 10; at 2 they were flat by 20.
 #define B2F_INTERFACE_FILL 2.0
 
-// Squeeze, how far a particle's density is past rest, rises in a line with depth in still water. Measured in
-// pools: it starts below rest at the surface, and its slope goes as g h^2 / ( stiffness spacing^2 size ), with size
-// over the finest. Read backwards it gives depth from the weight of what is above, which walls do not hide.
-#define B2F_SQUEEZE_SURFACE -0.28f
-#define B2F_SQUEEZE_SLOPE 0.11f
-
 // Mass found in a box, compared with a full one. A box that is all liquid says the particle is at least that deep.
 // Going from large to small, the first full box gives the depth. Anything that is not liquid leaves a box short,
 // whether air, a wall or a body, so liquid stays fine around all of them. Summed tables make every box four

@@ -37,8 +37,10 @@ typedef struct b2fLiquidDef
 	/// 1, no slip. It does not grow with how hard the particle is pressed.
 	float friction;
 	float gravityScale;
-	/// Pressure on faces shut off from the liquid by a contact, as a fraction of the pressure beside the contact.
-	/// Particles cannot enter a closed gap, so this stands in for liquid seeping under a resting body.
+	/// Pressure on faces shut off from the liquid by a contact, as a fraction of the hydrostatic pressure at the
+	/// depth of the contact's ends. Particles cannot enter a closed gap, so this stands in for liquid seeping under a
+	/// resting body. At 1 a body lighter than the liquid lifts off the floor and a heavier one stays down, though
+	/// bodies within about a tenth of the liquid's density may do either.
 	float contactPressure;
 	/// Spacing of the coarsest particles over the fluid's particleSpacing, which is the finest. One keeps this liquid
 	/// fine everywhere. Particles are fine at the surface and coarser with depth, and split and merge as they move.

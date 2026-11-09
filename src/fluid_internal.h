@@ -20,6 +20,12 @@ typedef float b2fCoord;
 
 #define B2F_CHUNK_COUNT 64
 #define B2F_CONTACTS_PER_PARTICLE 4
+
+// Squeeze, how far a particle's density is past rest, rises in a line with depth in still water. Measured in
+// pools: it starts below rest at the surface, and its slope goes as g h^2 / ( stiffness spacing^2 size ), with size
+// over the finest. Read backwards it gives depth from the weight of what is above, which walls do not hide.
+#define B2F_SQUEEZE_SURFACE -0.28f
+#define B2F_SQUEEZE_SLOPE 0.11f
 #define B2F_WALL_TABLE_SIZE 128
 
 // Neighbours the density pass keeps per particle for the move pass. A particle with more keeps none, and the
@@ -174,8 +180,11 @@ struct b2fFluid
 	int reactionCapacity;
 	b2fPatch* patches;
 	int patchCount, patchCapacity;
-	float* patchImpulses;
-	int patchImpulseCapacity;
+	// Per patch end and chunk, the mass of liquid sampled near the end and its mass weighted pressure over g
+	float* patchSamples;
+	int patchSampleCapacity;
+	// Squeeze per metre of depth, per liquid, for this substep
+	float squeezePerMetre[B2F_MAX_LIQUIDS];
 
 	// Set per substep. Gravity is liquid 0's, after its gravity scale.
 	float h, gravityX, gravityY;

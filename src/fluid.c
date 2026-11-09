@@ -13,7 +13,7 @@ b2fLiquidDef b2fDefaultLiquidDef( void )
 	def.linearViscosity = 0.5f;
 	def.friction = 0.1f;
 	def.gravityScale = 1.0f;
-	def.contactPressure = 2.0f;
+	def.contactPressure = 1.0f;
 	def.adaptiveRatio = 10.0f;
 	def.adaptiveSpeed = 0.0f;
 	def.adaptiveDepthLimit = false;
@@ -144,7 +144,7 @@ void b2fDestroyFluid( b2fFluid* f )
 	free( f->bodies );
 	free( f->reactions );
 	free( f->patches );
-	free( f->patchImpulses );
+	free( f->patchSamples );
 	free( f->boxMass );
 	free( f->boxPx );
 	free( f->boxPy );

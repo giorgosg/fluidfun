@@ -116,7 +116,10 @@ public:
 		}
 		if ( m_scene->controlLabel != nullptr )
 		{
-			bool moved = ImGui::SliderFloat( m_scene->controlLabel, &m_scene->control, m_scene->controlMin, m_scene->controlMax, "%.2f" );
+			// A range over two decades, such as the ball's density, reads better on a log scale
+			bool wide = m_scene->controlMin > 0.0f && m_scene->controlMax >= 100.0f * m_scene->controlMin;
+			bool moved = ImGui::SliderFloat( m_scene->controlLabel, &m_scene->control, m_scene->controlMin, m_scene->controlMax, wide ? "%.3f" : "%.2f",
+											 wide ? ImGuiSliderFlags_Logarithmic : 0 );
 
 			// The hole and the ball are built into the scene
 			rebuild |= moved && ( m_scene->type == lab_hole || m_scene->type == lab_splash || m_scene->type == lab_drain || m_scene->type == lab_pool );

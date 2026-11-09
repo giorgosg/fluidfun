@@ -182,11 +182,11 @@ static void FindPatches( b2fFluid* f )
 		}
 	}
 
-	int needed = 2 * f->patchCount * B2F_CHUNK_COUNT;
-	if ( needed > f->patchImpulseCapacity )
+	int needed = 4 * f->patchCount * B2F_CHUNK_COUNT;
+	if ( needed > f->patchSampleCapacity )
 	{
-		f->patchImpulseCapacity = 2 * needed;
-		f->patchImpulses = realloc( f->patchImpulses, (size_t)f->patchImpulseCapacity * sizeof( float ) );
+		f->patchSampleCapacity = 2 * needed;
+		f->patchSamples = realloc( f->patchSamples, (size_t)f->patchSampleCapacity * sizeof( float ) );
 	}
 }
 
@@ -362,12 +362,12 @@ static void ContactTask( int start, int end, int worker, void* context )
 	}
 }
 
-// The liquid's push on a body's own faces, close to the ends of its contacts, gives the pressure to use
-// on the part of the body that liquid cannot reach.
-static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, b2fCoord x, b2fCoord y, float impulse )
+// The liquid next to the ends of a body's contacts gives the pressure to use on the part of the body that liquid
+// cannot reach. Each particle within reach of the body adds its mass and its mass times its pressure over g.
+static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, b2fCoord x, b2fCoord y, float mass, float pressure )
 {
 	float window = 2.0f * f->radius, window2 = window * window;
-	float* impulses = f->patchImpulses + 2 * f->patchCount * chunk;
+	float* samples = f->patchSamples + 4 * f->patchCount * chunk;
 	for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
 	{
 		const b2fPatch* patch = f->patches + i;
@@ -376,10 +376,24 @@ static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, b
 			float dx = (float)( x - patch->x[end] ), dy = (float)( y - patch->y[end] );
 			if ( dx * dx + dy * dy < window2 )
 			{
-				impulses[2 * i + end] += impulse;
+				samples[4 * i + 2 * end] += mass;
+				samples[4 * i + 2 * end + 1] += mass * pressure;
 			}
 		}
 	}
+}
+
+// A particle near two shapes of one body samples its patches once
+static inline bool FirstContact( const b2fContact* contacts, int c )
+{
+	for ( int e = 0; e < c; ++e )
+	{
+		if ( contacts[e].bodyIndex == contacts[c].bodyIndex )
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 // Reactions go to a chunk chosen by particle index, and chunks sum in order, so the total does not
@@ -392,14 +406,17 @@ static void CollideTask( int start, int end, int worker, void* context )
 	bool adaptive = f->adaptive, multi = f->liquidCount > 1;
 	float baseMass = f->mass, spacing = f->def.particleSpacing;
 
-	// Patches sum what each particle pushes with, scaled here by its liquid's contact pressure when there are several
-	float patchScale = 1.0f;
+	// Patches take hydrostatic pressure from each particle's depth, read from how squeezed it is
+	const b2fLiquidDef* def = &f->liquids[0].def;
+	float rest = f->restDensity, perMetre = f->squeezePerMetre[0];
+	float patchScale = def->contactPressure * def->massDensity * def->gravityScale;
+	bool patches = f->patchCount > 0;
 
 	for ( int chunk = start; chunk < end; ++chunk )
 	{
 		b2fReaction* reactions = f->reactions + chunk * f->bodyCount;
 		memset( reactions, 0, (size_t)f->bodyCount * sizeof( b2fReaction ) );
-		memset( f->patchImpulses + 2 * f->patchCount * chunk, 0, 2 * (size_t)f->patchCount * sizeof( float ) );
+		memset( f->patchSamples + 4 * f->patchCount * chunk, 0, 4 * (size_t)f->patchCount * sizeof( float ) );
 
 		int first = (int)( (int64_t)f->count * chunk / B2F_CHUNK_COUNT );
 		int last = (int)( (int64_t)f->count * ( chunk + 1 ) / B2F_CHUNK_COUNT );
@@ -411,7 +428,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 				baseMass = liquid->mass;
 				m = baseMass;
 				friction = liquid->def.friction;
-				patchScale = liquid->def.contactPressure;
+				patchScale = liquid->def.contactPressure * liquid->def.massDensity * liquid->def.gravityScale;
+				perMetre = f->squeezePerMetre[f->liquid[i]];
 			}
 			if ( adaptive )
 			{
@@ -434,7 +452,11 @@ static void CollideTask( int start, int end, int worker, void* context )
 					reaction->x += impulseX;
 					reaction->y += impulseY;
 					reaction->angular += rx * impulseY - ry * impulseX;
-					SamplePatches( f, chunk, body, f->pos[i].x, f->pos[i].y, patchScale * impulse );
+					if ( patches && body->patchCount > 0 && FirstContact( contacts, c ) )
+					{
+						float depth = perMetre > 0.0f ? ( f->rho[i] / rest - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / perMetre : 0.0f;
+						SamplePatches( f, chunk, body, f->pos[i].x, f->pos[i].y, m, patchScale * ( depth > 0.0f ? depth : 0.0f ) );
+					}
 				}
 			}
 
@@ -491,39 +513,53 @@ static void CollideTask( int start, int end, int worker, void* context )
 					reaction->x += impulseX;
 					reaction->y += impulseY;
 					reaction->angular += r.x * impulseY - r.y * impulseX;
-					SamplePatches( f, chunk, body, x, y, patchScale * sqrtf( impulseX * impulseX + impulseY * impulseY ) );
 				}
 			}
 		}
 	}
 }
 
-// A wet end is enough to bring the whole gap up to pressure, so the larger end sets the push.
+// Hydrostatic pressure across a closed gap, from the depth of the liquid at its ends. Pressure from depth is what
+// still water has, so a body denser than the liquid stays down and a lighter one lifts off, and waves and impacts
+// near the ends add nothing to it. It runs in a line from one end to the other, as in still water, so an upright gap
+// is pushed apart less near the top. An end with no liquid near it, closed off by another body, takes the other
+// end's pressure, as one wet end is enough to fill the gap.
 static void ApplyPatches( b2fFluid* f, b2SubStepContext* context )
 {
-	float window = 2.0f * f->radius;
-	float scale = f->liquidCount > 1 ? 1.0f : f->liquids[0].def.contactPressure;
+	float impulsePerPressure = b2Length( f->worldGravity ) * f->h;
 	for ( int i = 0; i < f->patchCount; ++i )
 	{
-		float sum[2] = { 0.0f, 0.0f };
+		float sum[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 		for ( int chunk = 0; chunk < B2F_CHUNK_COUNT; ++chunk )
 		{
-			const float* impulses = f->patchImpulses + 2 * f->patchCount * chunk + 2 * i;
-			sum[0] += impulses[0];
-			sum[1] += impulses[1];
+			const float* samples = f->patchSamples + 4 * f->patchCount * chunk + 4 * i;
+			sum[0] += samples[0];
+			sum[1] += samples[1];
+			sum[2] += samples[2];
+			sum[3] += samples[3];
 		}
 
 		const b2fPatch* patch = f->patches + i;
 		const b2fBody* body = f->bodies + patch->bodyIndex;
-		if ( body->awake == false )
+		if ( body->awake == false || ( sum[0] <= 0.0f && sum[2] <= 0.0f ) )
 		{
 			continue;
 		}
 
-		float impulse = scale * ( sum[0] > sum[1] ? sum[0] : sum[1] ) * patch->length / window;
+		float pressure0 = sum[0] > 0.0f ? sum[1] / sum[0] : sum[3] / sum[2];
+		float pressure1 = sum[2] > 0.0f ? sum[3] / sum[2] : pressure0;
+		float both = pressure0 + pressure1;
+		if ( both <= 0.0f )
+		{
+			continue;
+		}
+
+		// The push of a pressure running in a line acts at its centroid, a third of the way from the higher end
+		float impulse = 0.5f * both * patch->length * impulsePerPressure;
+		float t = ( pressure0 + 2.0f * pressure1 ) / ( 3.0f * both );
+		float rx = (float)( patch->x[0] + t * ( patch->x[1] - patch->x[0] ) - body->center.x );
+		float ry = (float)( patch->y[0] + t * ( patch->y[1] - patch->y[0] ) - body->center.y );
 		float impulseX = impulse * patch->normalX, impulseY = impulse * patch->normalY;
-		float rx = (float)( 0.5f * ( patch->x[0] + patch->x[1] ) - body->center.x );
-		float ry = (float)( 0.5f * ( patch->y[0] + patch->y[1] ) - body->center.y );
 		b2SubStep_ApplyImpulse( context, body->id, ( b2Vec2 ){ impulseX, impulseY }, rx * impulseY - ry * impulseX );
 	}
 }
@@ -582,6 +618,13 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 	if ( f->shapeCount == 0 )
 	{
 		return;
+	}
+
+	for ( int l = 0; l < f->liquidCount; ++l )
+	{
+		const b2fLiquidDef* def = &f->liquids[l].def;
+		float g = -def->gravityScale * f->worldGravity.y, spacing = f->def.particleSpacing;
+		f->squeezePerMetre[l] = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( def->stiffness * spacing * spacing );
 	}
 
 	b2SubStep_ParallelFor( context, CollideTask, B2F_CHUNK_COUNT, 1, f );

@@ -10,6 +10,7 @@
 
 #include "box2d/math_functions.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -396,6 +397,43 @@ int main( int argc, char** argv )
 			b2fFluid_CreateLiquid( fluid, &def.liquid );
 		}
 
+		// LAB_BODY_DENSITY: give every moving body this density, to find the lightest body the coupling holds
+		if ( getenv( "LAB_BODY_DENSITY" ) )
+		{
+			float density = (float)atof( getenv( "LAB_BODY_DENSITY" ) );
+			for ( int k = 0; k < scene.bodyCount; ++k )
+			{
+				if ( b2Body_GetType( scene.bodies[k] ) != b2_dynamicBody )
+				{
+					continue;
+				}
+				b2ShapeId shapes[128];
+				int shapeCount = b2Body_GetShapes( scene.bodies[k], shapes, 128 );
+				for ( int s = 0; s < shapeCount; ++s )
+				{
+					b2Shape_SetDensity( shapes[s], density, s == shapeCount - 1 );
+				}
+			}
+		}
+
+		// LAB_BODY_STATS=seconds: per moving body, the peak speed over the run, and the mean and peak speed and spin
+		// after that many seconds, when it should have settled, and the highest it got. A coupling that blows up shows as
+		// large values, and a light body launched out of the liquid as a height well above the surface.
+		float settle = getenv( "LAB_BODY_STATS" ) ? (float)atof( getenv( "LAB_BODY_STATS" ) ) : -1.0f;
+		float peakSpeed[LAB_MAX_BODIES] = { 0 }, lateMean[LAB_MAX_BODIES] = { 0 }, latePeak[LAB_MAX_BODIES] = { 0 };
+		float latePeakSpin[LAB_MAX_BODIES] = { 0 }, peakY[LAB_MAX_BODIES];
+		for ( int k = 0; k < LAB_MAX_BODIES; ++k )
+		{
+			peakY[k] = -FLT_MAX;
+		}
+		float lowBottom[LAB_MAX_BODIES], highBottom[LAB_MAX_BODIES], under[LAB_MAX_BODIES] = { 0 };
+		for ( int k = 0; k < LAB_MAX_BODIES; ++k )
+		{
+			lowBottom[k] = FLT_MAX;
+			highBottom[k] = -FLT_MAX;
+		}
+		int lateFrames = 0;
+
 		uint64_t start = b2GetTicks();
 		b2fProfile sum = { 0 };
 		double measureSum = 0.0;
@@ -406,6 +444,48 @@ int main( int argc, char** argv )
 			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : 4 );
 			b2fProfile p = b2fFluid_GetProfile( fluid );
 			measureSum += p.measure;
+			if ( settle >= 0.0f )
+			{
+				bool late = (float)( i + 1 ) / 60.0f > settle;
+				lateFrames += late ? 1 : 0;
+				for ( int k = 0; k < scene.bodyCount; ++k )
+				{
+					if ( b2Body_GetType( scene.bodies[k] ) != b2_dynamicBody )
+					{
+						continue;
+					}
+					float speed = b2Length( b2Body_GetLinearVelocity( scene.bodies[k] ) );
+					float spin = fabsf( b2Body_GetAngularVelocity( scene.bodies[k] ) );
+					speed = isfinite( speed ) ? speed : 1e9f;
+					peakSpeed[k] = speed > peakSpeed[k] ? speed : peakSpeed[k];
+					float y = (float)b2Body_GetPosition( scene.bodies[k] ).y;
+					peakY[k] = y > peakY[k] ? y : peakY[k];
+					if ( late )
+					{
+						lateMean[k] += speed;
+						latePeak[k] = speed > latePeak[k] ? speed : latePeak[k];
+						latePeakSpin[k] = spin > latePeakSpin[k] ? spin : latePeakSpin[k];
+
+						// How high the body's bottom rode, and how many particles were under it, inside its footprint
+						// and below its bottom, where liquid seeps in under a body resting on the floor
+						b2AABB box = b2Body_ComputeBounds( scene.bodies[k] );
+						lowBottom[k] = box.lowerBound.y < lowBottom[k] ? box.lowerBound.y : lowBottom[k];
+						highBottom[k] = box.lowerBound.y > highBottom[k] ? box.lowerBound.y : highBottom[k];
+						float inset = 2.0f * def.particleSpacing;
+						const b2Pos* ps = b2fFluid_GetPositions( fluid );
+						int n = b2fFluid_GetParticleCount( fluid ), count = 0;
+						for ( int j = 0; j < n; ++j )
+						{
+							float px = (float)ps[j].x, py = (float)ps[j].y;
+							count += px > box.lowerBound.x + inset && px < box.upperBound.x - inset && py < box.lowerBound.y + 0.3f * def.particleSpacing &&
+											 py > box.lowerBound.y - 4.0f * def.particleSpacing
+										 ? 1
+										 : 0;
+						}
+						under[k] += (float)count;
+					}
+				}
+			}
 			if ( getenv( "LAB_HOLES" ) && ( i + 1 ) % atoi( getenv( "LAB_HOLES" ) ) == 0 )
 			{
 				PrintShape( fluid, def.particleSpacing, i + 1 );
@@ -703,6 +783,22 @@ int main( int argc, char** argv )
 			}
 		}
 		fflush( stdout );
+
+		if ( settle >= 0.0f )
+		{
+			for ( int k = 0; k < scene.bodyCount; ++k )
+			{
+				if ( b2Body_GetType( scene.bodies[k] ) != b2_dynamicBody )
+				{
+					continue;
+				}
+				b2Pos p = b2Body_GetPosition( scene.bodies[k] );
+				float settledFrames = lateFrames > 0 ? (float)lateFrames : 1.0f;
+				printf( "body %d mass %.3f: peak %.2f | settled mean %.3f peak %.3f spin %.3f | y %.2f highest %.2f | bottom %.3f-%.3f under %.1f\n", k,
+						(double)b2Body_GetMass( scene.bodies[k] ), (double)peakSpeed[k], (double)( lateMean[k] / settledFrames ), (double)latePeak[k],
+						(double)latePeakSpin[k], (double)p.y, (double)peakY[k], (double)lowBottom[k], (double)highBottom[k], (double)( under[k] / settledFrames ) );
+			}
+		}
 
 		if ( getenv( "LAB_TRACE" ) )
 		{
