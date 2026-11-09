@@ -5,7 +5,7 @@
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_SUBSTEPS,
 // LAB_ONE (6 workers only), LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with LAB_FRAME_EVERY.
+// LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with LAB_FRAME_EVERY.
 #include "scene.h"
 
 #include "box2d/math_functions.h"
@@ -93,17 +93,26 @@ static void WriteFrame( const char* path, b2fFluid* fluid, const LabScene* scene
 	float zoom = getenv( "LAB_ZOOM" ) ? (float)atof( getenv( "LAB_ZOOM" ) ) : 1.0f;
 	viewScale = (float)imageWidth / ( 2.0f * zoom * scene->viewHalfWidth );
 	viewCenter = scene->viewCenter;
+	viewCenter.y = getenv( "LAB_VIEW_Y" ) ? (float)atof( getenv( "LAB_VIEW_Y" ) ) : viewCenter.y;
 
 	int n = b2fFluid_GetParticleCount( fluid );
 	const b2Pos* pos = b2fFluid_GetPositions( fluid );
+	// With LAB_SIZED each particle is a square 0.7 of its size across, as the sample draws them
+	const float* sizes = b2fFluid_GetSizes( fluid );
+	bool sized = getenv( "LAB_SIZED" ) != NULL;
 	for ( int i = 0; i < n; ++i )
 	{
 		int px = (int)( 0.5f * imageWidth + ( pos[i].x - viewCenter.x ) * viewScale );
 		int py = (int)( 0.5f * imageHeight - ( pos[i].y - viewCenter.y ) * viewScale );
-		PlotPixel( px, py, 60, 140, 255 );
-		PlotPixel( px + 1, py, 60, 140, 255 );
-		PlotPixel( px, py + 1, 60, 140, 255 );
-		PlotPixel( px + 1, py + 1, 60, 140, 255 );
+		int side = sized ? (int)( 0.7f * sizes[i] * viewScale + 0.5f ) : 2;
+		side = side > 1 ? side : 1;
+		for ( int y = 0; y < side; ++y )
+		{
+			for ( int x = 0; x < side; ++x )
+			{
+				PlotPixel( px - side / 2 + x, py - side / 2 + y, 60, 140, 255 );
+			}
+		}
 	}
 
 	for ( int i = 0; i < scene->bodyCount; ++i )
@@ -140,6 +149,9 @@ static void ApplySettings( b2fFluidDef* def )
 	} settings[] = {
 		{ "LAB_SPACING", &def->particleSpacing },
 		{ "LAB_CONTACT", &def->contactPressure },
+		{ "LAB_TENSILE", &def->tensilePressure },
+		{ "LAB_COHESION", &def->cohesion },
+		{ "LAB_GRAVITY", &def->gravityScale },
 		{ "LAB_VISCOSITY", &def->linearViscosity },
 		{ "LAB_QUADRATIC", &def->quadraticViscosity },
 		{ "LAB_ADAPTIVE", &def->adaptiveRatio },
@@ -169,6 +181,168 @@ static void ApplySettings( b2fFluidDef* def )
 	{
 		def->adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;
 	}
+}
+
+// LAB_HOLES: the shape of the liquid. Holes are empty cells of two spacings that no path of empty cells joins to
+// the outside, so they are gaps the liquid closes around. Packing is density over the lattice density for particles
+// with at least 5 neighbours, and gap is each such particle's nearest neighbour over the spacing, as percentiles.
+// Sizes are taken as uniform, so run it with LAB_ADAPTIVE=1.
+static void PrintShape( b2fFluid* fluid, float spacing, int frame )
+{
+	int n = b2fFluid_GetParticleCount( fluid );
+	const b2Pos* pos = b2fFluid_GetPositions( fluid );
+	const float* rho = b2fFluid_GetDensities( fluid );
+	const float* vx = b2fFluid_GetVelocitiesX( fluid );
+	const float* vy = b2fFluid_GetVelocitiesY( fluid );
+	float rest = b2fFluid_GetRestDensity( fluid );
+	if ( n == 0 )
+	{
+		return;
+	}
+
+	float cell = 2.0f * spacing;
+	double minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9, speed2 = 0.0;
+	for ( int i = 0; i < n; ++i )
+	{
+		speed2 += (double)vx[i] * vx[i] + (double)vy[i] * vy[i];
+		minX = pos[i].x < minX ? pos[i].x : minX;
+		minY = pos[i].y < minY ? pos[i].y : minY;
+		maxX = pos[i].x > maxX ? pos[i].x : maxX;
+		maxY = pos[i].y > maxY ? pos[i].y : maxY;
+	}
+	int w = (int)( ( maxX - minX ) / cell ) + 3, h = (int)( ( maxY - minY ) / cell ) + 3;
+	if ( (long)w * h > 50000000L )
+	{
+		return;
+	}
+	int* grid = calloc( (size_t)w * h, sizeof( int ) );
+	int* head = malloc( (size_t)w * h * sizeof( int ) );
+	int* next = malloc( (size_t)n * sizeof( int ) );
+	for ( int c = 0; c < w * h; ++c )
+	{
+		head[c] = -1;
+	}
+	for ( int i = 0; i < n; ++i )
+	{
+		int c = (int)( ( pos[i].y - minY ) / cell + 1 ) * w + (int)( ( pos[i].x - minX ) / cell + 1 );
+		grid[c] = 1;
+		next[i] = head[c];
+		head[c] = i;
+	}
+
+	// Flood the empty cells from the border, which is always empty
+	int* stack = malloc( (size_t)w * h * sizeof( int ) );
+	int top = 0;
+	stack[top++] = 0;
+	grid[0] = 2;
+	while ( top > 0 )
+	{
+		int c = stack[--top], cx = c % w, cy = c / w;
+		int around[4] = { cx > 0 ? c - 1 : -1, cx < w - 1 ? c + 1 : -1, cy > 0 ? c - w : -1, cy < h - 1 ? c + w : -1 };
+		for ( int k = 0; k < 4; ++k )
+		{
+			if ( around[k] >= 0 && grid[around[k]] == 0 )
+			{
+				grid[around[k]] = 2;
+				stack[top++] = around[k];
+			}
+		}
+	}
+	// Mass-weighted vertical speed in the strip within 0.4 m of the sides, and in the middle, below the top tenth
+	const float* sizes = b2fFluid_GetSizes( fluid );
+	double wallV = 0.0, wallM = 0.0, midV = 0.0, midM = 0.0, wallRho = 0.0, wallLow = 0.0, midRho = 0.0, midLow = 0.0;
+	for ( int i = 0; i < n; ++i )
+	{
+		if ( pos[i].y > minY + 0.9 * ( maxY - minY ) )
+		{
+			continue;
+		}
+		double m = (double)sizes[i] * sizes[i];
+		bool wall = pos[i].x < minX + 0.4 || pos[i].x > maxX - 0.4;
+		bool middle = fabs( pos[i].x - 0.5 * ( minX + maxX ) ) < 0.25 * ( maxX - minX );
+		wallV += wall ? m * vy[i] : 0.0;
+		wallM += wall ? m : 0.0;
+		midV += middle ? m * vy[i] : 0.0;
+		midM += middle ? m : 0.0;
+
+		// Density over rest in the bottom half, where section 19 found the wall strip denser
+		bool low = pos[i].y < minY + 0.5 * ( maxY - minY );
+		wallRho += wall && low ? m * rho[i] / rest : 0.0;
+		wallLow += wall && low ? m : 0.0;
+		midRho += middle && low ? m * rho[i] / rest : 0.0;
+		midLow += middle && low ? m : 0.0;
+	}
+
+	int holes = 0, full = 0;
+	for ( int c = 0; c < w * h; ++c )
+	{
+		holes += grid[c] == 0;
+		full += grid[c] == 1;
+	}
+
+	// Nearest neighbours and packing of particles inside the liquid
+	enum { binCount = 200 };
+	static int gapBins[binCount], packBins[binCount];
+	memset( gapBins, 0, sizeof( gapBins ) );
+	memset( packBins, 0, sizeof( packBins ) );
+	int inside = 0;
+	for ( int i = 0; i < n; ++i )
+	{
+		int cx = (int)( ( pos[i].x - minX ) / cell + 1 ), cy = (int)( ( pos[i].y - minY ) / cell + 1 );
+		float nearest = 1e9f;
+		int neighbours = 0;
+		for ( int y = cy - 1; y <= cy + 1; ++y )
+		{
+			for ( int x = cx - 1; x <= cx + 1; ++x )
+			{
+				for ( int j = head[y * w + x]; j >= 0; j = next[j] )
+				{
+					float dx = (float)( pos[j].x - pos[i].x ), dy = (float)( pos[j].y - pos[i].y ), d = sqrtf( dx * dx + dy * dy );
+					if ( j != i && d < cell )
+					{
+						neighbours += 1;
+						nearest = d < nearest ? d : nearest;
+					}
+				}
+			}
+		}
+		if ( neighbours >= 5 )
+		{
+			int g = (int)( 100.0f * nearest / spacing ), r = (int)( 100.0f * rho[i] / rest );
+			gapBins[g < binCount ? g : binCount - 1] += 1;
+			packBins[r < binCount ? r : binCount - 1] += 1;
+			inside += 1;
+		}
+	}
+	float gap[3], pack[3], shares[3] = { 0.05f, 0.5f, 0.95f };
+	for ( int k = 0; k < 3; ++k )
+	{
+		int want = (int)( shares[k] * inside ), sumGap = 0, sumPack = 0;
+		gap[k] = pack[k] = 0.0f;
+		for ( int b = 0, gotGap = 0, gotPack = 0; b < binCount; ++b )
+		{
+			sumGap += gapBins[b];
+			sumPack += packBins[b];
+			if ( !gotGap && sumGap > want )
+			{
+				gap[k] = 0.01f * (float)b;
+				gotGap = 1;
+			}
+			if ( !gotPack && sumPack > want )
+			{
+				pack[k] = 0.01f * (float)b;
+				gotPack = 1;
+			}
+		}
+	}
+	printf( "HOLES frame %d holes %d of %d cells, packing %.2f %.2f %.2f, gap %.2f %.2f %.2f, top %.2f, rms %.3f, width %.2f height %.2f, wall vy %.3f middle vy %.3f, low density wall %.3f middle %.3f\n", frame, holes, full,
+			(double)pack[0], (double)pack[1], (double)pack[2], (double)gap[0], (double)gap[1], (double)gap[2], maxY, sqrt( speed2 / n ), maxX - minX, maxY - minY,
+			wallM > 0.0 ? wallV / wallM : 0.0, midM > 0.0 ? midV / midM : 0.0,
+			wallLow > 0.0 ? wallRho / wallLow : 0.0, midLow > 0.0 ? midRho / midLow : 0.0 );
+	free( grid );
+	free( head );
+	free( next );
+	free( stack );
 }
 
 int main( int argc, char** argv )
@@ -217,6 +391,10 @@ int main( int argc, char** argv )
 			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : 4 );
 			b2fProfile p = b2fFluid_GetProfile( fluid );
 			measureSum += p.measure;
+			if ( getenv( "LAB_HOLES" ) && ( i + 1 ) % atoi( getenv( "LAB_HOLES" ) ) == 0 )
+			{
+				PrintShape( fluid, def.particleSpacing, i + 1 );
+			}
 			if ( getenv( "LAB_LEVEL" ) && ( i < 60 ? i % 10 == 0 : i % 120 == 0 ) )
 			{
 				// Mass weighted height of the liquid: lower means it packed tighter or left a gap
@@ -367,6 +545,61 @@ int main( int argc, char** argv )
 			}
 			printf( "  sizes over fine: <1.1 %d%%, 1.1-1.3 %d%%, 1.3-1.6 %d%%, 1.6-2.1 %d%%, 2.1-3 %d%%, >3 %d%%\n", 100 * bins[0] / n, 100 * bins[1] / n,
 					100 * bins[2] / n, 100 * bins[3] / n, 100 * bins[4] / n, 100 * bins[5] / n );
+		}
+		if ( getenv( "LAB_DUMP" ) )
+		{
+			// Every particle as x, y, size over particleSpacing, density over rest
+			FILE* dump = fopen( getenv( "LAB_DUMP" ), "w" );
+			const b2Pos* pos = b2fFluid_GetPositions( fluid );
+			const float* ps = b2fFluid_GetSizes( fluid );
+			const float* rho = b2fFluid_GetDensities( fluid );
+			float rest = b2fFluid_GetRestDensity( fluid );
+			for ( int i = 0; dump != NULL && i < n; ++i )
+			{
+				fprintf( dump, "%.5f %.5f %.4f %.4f\n", (double)pos[i].x, (double)pos[i].y, (double)( ps[i] / def.particleSpacing ), (double)( rho[i] / rest ) );
+			}
+			if ( dump != NULL )
+			{
+				fclose( dump );
+			}
+		}
+		if ( getenv( "LAB_FILL" ) )
+		{
+			// Mass over area against depth below the top particle, in the middle half of the width, as a share of a
+			// lattice at particleSpacing. Spawned liquid stands at 1 / 1.09^2 throughout.
+			const b2Pos* pos = b2fFluid_GetPositions( fluid );
+			const float* ps = b2fFluid_GetSizes( fluid );
+			float surface = -1e9f, left = 1e9f, right = -1e9f;
+			for ( int i = 0; i < n; ++i )
+			{
+				surface = surface > pos[i].y ? surface : (float)pos[i].y;
+				left = left < pos[i].x ? left : (float)pos[i].x;
+				right = right > pos[i].x ? right : (float)pos[i].x;
+			}
+			enum { bins = 200 };
+			double fill[bins] = { 0 }, edge[bins] = { 0 };
+			float binDepth = (float)atof( getenv( "LAB_FILL" ) ), middle = 0.5f * ( left + right ), half = 0.25f * ( right - left ), strip = 0.5f;
+			for ( int i = 0; i < n; ++i )
+			{
+				int b = (int)( ( surface - pos[i].y ) / binDepth );
+				double m = 0.8660254 * ps[i] * ps[i];
+				if ( b >= 0 && b < bins && fabsf( (float)pos[i].x - middle ) < half )
+				{
+					fill[b] += m / ( 2.0 * half * binDepth );
+				}
+				if ( b >= 0 && b < bins && pos[i].x < left + strip )
+				{
+					edge[b] += m / ( strip * binDepth );
+				}
+			}
+			printf( "  fill by depth below %.2f: depth middle wall\n", (double)surface );
+			for ( int b = 0; b < bins; ++b )
+			{
+				if ( fill[b] > 0.0 )
+				{
+					printf( "  FILL %6.3f %.4f %.4f\n", (double)( ( b + 0.5f ) * binDepth ), fill[b], edge[b] );
+				}
+			}
 		}
 		if ( getenv( "LAB_SQUEEZE" ) )
 		{
