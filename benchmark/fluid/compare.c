@@ -126,7 +126,6 @@ int main( int argc, char** argv )
 		{
 			double fastest = 0.0;
 			float fastX = 0.0f, fastY = 0.0f;
-			const b2Pos* pos = b2fFluid_GetPositions( fluid );
 			for ( int i = 0; i < n; ++i )
 			{
 				double v2 = vx[i] * vx[i] + vy[i] * vy[i];
@@ -214,13 +213,11 @@ int main( int argc, char** argv )
 
 		{
 			const float* size = b2fFluid_GetSizes( fluid );
-			double area = 0.0, px = 0.0;
+			double area = 0.0;
 			float smallest = 1e9f, largest = 0.0f;
-			const float* evx = b2fFluid_GetVelocitiesX( fluid );
 			for ( int i = 0; i < n; ++i )
 			{
 				area += (double)size[i] * size[i];
-				px += (double)size[i] * size[i] * evx[i];
 				smallest = smallest < size[i] ? smallest : size[i];
 				largest = largest > size[i] ? largest : size[i];
 			}

@@ -415,9 +415,9 @@ int main( int argc, char** argv )
 				int fine = 0, coarse = 0;
 				for ( int k = 0; k < n; ++k )
 				{
-					double w = (double)ps[k] * ps[k];
-					my += w * pos[k].y;
-					m += w;
+					double weight = (double)ps[k] * ps[k];
+					my += weight * pos[k].y;
+					m += weight;
 					float r = ps[k] / def.particleSpacing;
 					if ( r < 1.5f )
 					{
@@ -460,10 +460,10 @@ int main( int argc, char** argv )
 				double area[B2F_MAX_LIQUIDS] = { 0 }, my[B2F_MAX_LIQUIDS] = { 0 }, myy[B2F_MAX_LIQUIDS] = { 0 };
 				for ( int k = 0; k < n; ++k )
 				{
-					double w = (double)ps[k] * ps[k];
-					area[liquid[k]] += w;
-					my[liquid[k]] += w * pos[k].y;
-					myy[liquid[k]] += w * pos[k].y * pos[k].y;
+					double weight = (double)ps[k] * ps[k];
+					area[liquid[k]] += weight;
+					my[liquid[k]] += weight * pos[k].y;
+					myy[liquid[k]] += weight * pos[k].y * pos[k].y;
 				}
 				printf( "LQ %d", i );
 				for ( int l = 0; l < b2fFluid_GetLiquidCount( fluid ); ++l )
@@ -585,7 +585,6 @@ int main( int argc, char** argv )
 		{
 			// Every particle as x, y, size over particleSpacing, density over rest
 			FILE* dump = fopen( getenv( "LAB_DUMP" ), "w" );
-			const b2Pos* pos = b2fFluid_GetPositions( fluid );
 			const float* ps = b2fFluid_GetSizes( fluid );
 			const float* rho = b2fFluid_GetDensities( fluid );
 			float rest = b2fFluid_GetRestDensity( fluid );
@@ -602,7 +601,6 @@ int main( int argc, char** argv )
 		{
 			// Mass over area against depth below the top particle, in the middle half of the width, as a share of a
 			// lattice at particleSpacing. Spawned liquid stands at 1 / 1.09^2 throughout.
-			const b2Pos* pos = b2fFluid_GetPositions( fluid );
 			const float* ps = b2fFluid_GetSizes( fluid );
 			float surface = -1e9f, left = 1e9f, right = -1e9f;
 			for ( int i = 0; i < n; ++i )
@@ -639,7 +637,6 @@ int main( int argc, char** argv )
 		if ( getenv( "LAB_SQUEEZE" ) )
 		{
 			// How far past rest each particle is squeezed, against its depth below the surface, by size
-			const b2Pos* pos = b2fFluid_GetPositions( fluid );
 			const float* ps = b2fFluid_GetSizes( fluid );
 			const float* rho = b2fFluid_GetDensities( fluid );
 			float rest = b2fFluid_GetRestDensity( fluid );
@@ -649,7 +646,7 @@ int main( int argc, char** argv )
 				surface = surface > pos[i].y ? surface : (float)pos[i].y;
 			}
 			enum { bins = 48 };
-			double sum[3][bins] = { { 0 } }, sum2[3][bins] = { { 0 } };
+			double binSum[3][bins] = { { 0 } }, sum2[3][bins] = { { 0 } };
 			int count[3][bins] = { { 0 } };
 			float binDepth = 0.5f;
 			for ( int i = 0; i < n; ++i )
@@ -660,7 +657,7 @@ int main( int argc, char** argv )
 				if ( b >= 0 && b < bins )
 				{
 					double q = rho[i] / rest - 1.0;
-					sum[c][b] += q;
+					binSum[c][b] += q;
 					sum2[c][b] += q * q;
 					count[c][b] += 1;
 				}
@@ -689,7 +686,7 @@ int main( int argc, char** argv )
 				{
 					if ( count[c][b] > 0 )
 					{
-						double m = sum[c][b] / count[c][b], v = sum2[c][b] / count[c][b] - m * m;
+						double m = binSum[c][b] / count[c][b], v = sum2[c][b] / count[c][b] - m * m;
 						printf( " | %7.4f %6.4f %5d", m, sqrt( v > 0.0 ? v : 0.0 ), count[c][b] );
 					}
 					else

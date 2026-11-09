@@ -133,8 +133,8 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 		{
 			FOR_NEIGHBOURS( f, i, j )
 			{
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
-				if ( d2 < h * h && d2 > 1e-12f && j != i )
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = si + f->size[j];
+				if ( d2 < reach * reach && d2 > 1e-12f && j != i )
 				{
 					float l = sqrtf( d2 );
 					B2F_ADAPTIVE_PAIR( j, l )
@@ -197,8 +197,8 @@ static void MultiAccumulate( b2fFluid* f, int start, int end )
 		{
 			FOR_NEIGHBOURS( f, i, j )
 			{
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
-				if ( d2 < h * h && d2 > 1e-12f && j != i )
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = si + f->size[j];
+				if ( d2 < reach * reach && d2 > 1e-12f && j != i )
 				{
 					float l = sqrtf( d2 );
 					B2F_MULTI_PAIR( j, l )
