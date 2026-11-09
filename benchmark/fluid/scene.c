@@ -420,14 +420,15 @@ static b2fFluid* CreateDrop( b2WorldId worldId, LabScene* scene, const b2fFluidD
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	AddBox( ground, 0.0f, -0.5f, 6.0f, 0.5f, 0.0f, 0.0f );
-	AddBox( ground, -5.5f, 1.5f, 0.5f, 1.5f, 0.0f, 0.0f );
-	AddBox( ground, 5.5f, 1.5f, 0.5f, 1.5f, 0.0f, 0.0f );
+	// Walls 6 m high: at cohesion 0.07 the landing throws droplets over 3 m ones
+	AddBox( ground, -5.5f, 3.0f, 0.5f, 3.0f, 0.0f, 0.0f );
+	AddBox( ground, 5.5f, 3.0f, 0.5f, 3.0f, 0.0f, 0.0f );
 	return AddLiquid( worldId, def, (b2Vec2){ -1.0f, 5.0f }, (b2Vec2){ 1.0f, 7.0f } );
 }
 
 // Three liquids stacked the wrong way up: light oil at the bottom, water, then heavy syrup on top. They turn over,
 // and a crate between oil and water in density comes to rest where they meet. Water is liquid 0 and takes the
-// fluid's settings; the others change only density and viscosity.
+// fluid's settings; the others change density, viscosity and cohesion.
 static b2fFluid* CreateLayers( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	b2BodyId tank = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
@@ -441,6 +442,8 @@ static b2fFluid* CreateLayers( b2WorldId worldId, LabScene* scene, const b2fFlui
 	b2fLiquidDef oil = def->liquid, syrup = def->liquid;
 	oil.massDensity = 0.6f * def->liquid.massDensity;
 	syrup.massDensity = 1.6f * def->liquid.massDensity;
+	oil.cohesion = 0.1f;
+	syrup.cohesion = 0.1f;
 	syrup.linearViscosity = 4.0f;
 	int light = b2fFluid_CreateLiquid( fluid, &oil );
 	int heavy = b2fFluid_CreateLiquid( fluid, &syrup );

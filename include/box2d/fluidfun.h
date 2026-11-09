@@ -33,6 +33,8 @@ typedef struct b2fLiquidDef
 	/// Between two liquids viscosity is the mean of theirs
 	float linearViscosity;
 	float quadraticViscosity;
+	/// Share of a particle's sliding speed along a shape lost in each substep it touches it, from 0, free slip, to
+	/// 1, no slip. It does not grow with how hard the particle is pressed.
 	float friction;
 	float gravityScale;
 	/// Pressure on faces shut off from the liquid by a contact, as a fraction of the pressure beside the contact.

@@ -467,7 +467,9 @@ static void CollideTask( int start, int end, int worker, void* context )
 				}
 				float moveX = push * n.x, moveY = push * n.y;
 
-				// Coulomb-limited slip against the surface
+				// Wet friction, as in Clavet et al. 2005 section 6.1: a fixed share of the sliding speed along the
+				// surface goes, however hard the particle is pressed. Friction that grew with the push held particles
+				// pressed under heavy liquid or a heavy body in place, so a film one particle thick never drained.
 				b2Vec2 r = b2SubPos( world, body->center );
 				float w = body->motion.angularVelocity;
 				float bodyVx = body->motion.linearVelocity.x - w * r.y;
@@ -476,14 +478,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 				float relY = (float)( y + moveY - f->prev[i].y ) * inv - bodyVy;
 				float normalSpeed = relX * n.x + relY * n.y;
 				float tangentX = relX - normalSpeed * n.x, tangentY = relY - normalSpeed * n.y;
-				float tangentSpeed = sqrtf( tangentX * tangentX + tangentY * tangentY );
-				if ( tangentSpeed > 1e-6f )
-				{
-					float slip = friction * push * inv;
-					slip = slip < tangentSpeed ? slip : tangentSpeed;
-					moveX -= h * slip * tangentX / tangentSpeed;
-					moveY -= h * slip * tangentY / tangentSpeed;
-				}
+				moveX -= h * friction * tangentX;
+				moveY -= h * friction * tangentY;
 
 				f->pos[i].x = x + moveX;
 				f->pos[i].y = y + moveY;
