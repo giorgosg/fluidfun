@@ -86,9 +86,10 @@ static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* n
 
 static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 {
-	float k = f->def.stiffness, kn = f->def.nearStiffness, rest = f->restDensity;
-	float tensile = f->def.tensilePressure, cohesion = f->def.cohesion;
-	float sigma = f->def.linearViscosity, beta = f->def.quadraticViscosity, dt = f->h;
+	const b2fLiquidDef* def = &f->liquids[0].def;
+	float k = def->stiffness, kn = def->nearStiffness, rest = f->restDensity;
+	float tensile = def->tensilePressure, cohesion = def->cohesion;
+	float sigma = def->linearViscosity, beta = def->quadraticViscosity, dt = f->h;
 	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
@@ -148,11 +149,89 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 	}
 }
 
+// Several liquids. Pressures were stored by the density pass, each from its own liquid's settings. A pair takes its
+// cohesion, viscosity and mass weight from the table for the two liquids, which keeps the pair's moves equal and
+// opposite in momentum when the liquids differ in density. With one liquid the passes above give the same moves.
+static void MultiAccumulate( b2fFluid* f, int start, int end )
+{
+	float dt = f->h;
+	for ( int i = start; i < end; ++i )
+	{
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
+		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
+		float pressure = f->pressure[i], nearPressure = f->nearPressure[i];
+		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
+		const b2fLiquidPair* row = f->liquidPairs[f->liquid[i]];
+#define B2F_MULTI_PAIR( j, l )                                                                                       \
+	{                                                                                                                  \
+		const b2fLiquidPair* pair = row + f->liquid[j];                                                                \
+		float sj = f->size[j], h = si + sj;                                                                            \
+		float q = 1.0f - l / h, mean = 0.5f * h, w = pair->weight * sj * sj / ( mean * mean );                       \
+		float pull = pair->cohesion * h * h * q * ( 1.0f - 2.0f * q );                                                 \
+		float d = 0.5f * w * ( ( pressure + f->pressure[j] ) * q + ( nearPressure + f->nearPressure[j] ) * q * q - pull ) / ( h * l ); \
+		moveX -= d * dx;                                                                                               \
+		moveY -= d * dy;                                                                                               \
+		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
+		if ( u > 0.0f )                                                                                                \
+		{                                                                                                              \
+			float impulse = 0.5f * w * dt * q * ( pair->linearViscosity * u + pair->quadraticViscosity * u * u ) / l;  \
+			dvx -= impulse * dx;                                                                                       \
+			dvy -= impulse * dy;                                                                                       \
+		}                                                                                                              \
+	}
+		int n = f->pairCount[i];
+		if ( n >= 0 )
+		{
+			const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+			for ( int p = 0; p < n; ++p )
+			{
+				int j = pairs[p].j;
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
+				if ( d2 > 1e-12f )
+				{
+					B2F_MULTI_PAIR( j, l )
+				}
+			}
+		}
+		else
+		{
+			FOR_NEIGHBOURS( f, i, j )
+			{
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+				if ( d2 < h * h && d2 > 1e-12f && j != i )
+				{
+					float l = sqrtf( d2 );
+					B2F_MULTI_PAIR( j, l )
+				}
+			}
+		}
+#undef B2F_MULTI_PAIR
+		f->dx[i] = moveX;
+		f->dy[i] = moveY;
+		f->viscX[i] = dvx;
+		f->viscY[i] = dvy;
+	}
+}
+
 static void DensityTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	if ( f->def.adaptiveRatio > 1.0f )
+	if ( f->liquidCount > 1 )
+	{
+		float rest = f->restDensity;
+		for ( int i = start; i < end; ++i )
+		{
+			AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
+			const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;
+			float hi2 = 4.0f * f->size[i] * f->size[i];
+			f->pressure[i] = def->stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tensilePressure );
+			f->nearPressure[i] = def->nearStiffness * hi2 * f->rhoNear[i];
+		}
+		return;
+	}
+
+	if ( f->adaptive )
 	{
 		for ( int i = start; i < end; ++i )
 		{
@@ -171,17 +250,24 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	if ( f->def.adaptiveRatio > 1.0f )
+	if ( f->liquidCount > 1 )
+	{
+		MultiAccumulate( f, start, end );
+		return;
+	}
+
+	if ( f->adaptive )
 	{
 		AdaptiveAccumulate( f, start, end );
 		return;
 	}
 
+	const b2fLiquidDef* def = &f->liquids[0].def;
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
-	float scale = f->def.stiffness * h, nearScale = f->def.nearStiffness * h, rest = 2.0f * f->restDensity;
-	float tensile = f->def.tensilePressure, single = f->restDensity, pullScale = f->def.cohesion * h;
+	float scale = def->stiffness * h, nearScale = def->nearStiffness * h, rest = 2.0f * f->restDensity;
+	float tensile = def->tensilePressure, single = f->restDensity, pullScale = def->cohesion * h;
 	bool clamped = tensile < 1.0f;
-	float sigma = f->def.linearViscosity, beta = f->def.quadraticViscosity, dt = f->h;
+	float sigma = def->linearViscosity, beta = def->quadraticViscosity, dt = f->h;
 	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
@@ -244,7 +330,7 @@ static void ApplyTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float limit = f->moveLimit * f->radius, limit2 = limit * limit, dt = f->h;
-	bool adaptive = f->def.adaptiveRatio > 1.0f;
+	bool adaptive = f->adaptive;
 	for ( int i = start; i < end; ++i )
 	{
 		if ( adaptive )
@@ -269,9 +355,10 @@ static void ApplyTask( int start, int end, int worker, void* context )
 		f->pos[i].y += f->dy[i] + dt * f->viscY[i];
 		if ( f->contactCount[i] > 0 )
 		{
+			const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;
 			float h = adaptive ? 2.0f * f->size[i] : f->radius;
-			float excess = TensileClamp( f->rho[i] - f->restDensity, f->def.tensilePressure );
-			ApplyWallMoves( f, i, f->def.stiffness * h * excess, f->def.nearStiffness * h * f->rhoNear[i] );
+			float excess = TensileClamp( f->rho[i] - f->restDensity, def->tensilePressure );
+			ApplyWallMoves( f, i, def->stiffness * h * excess, def->nearStiffness * h * f->rhoNear[i] );
 		}
 	}
 }
@@ -281,8 +368,15 @@ static void PredictTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float h = f->h, gx = h * f->gravityX, gy = h * f->gravityY;
+	bool multi = f->liquidCount > 1;
 	for ( int i = start; i < end; ++i )
 	{
+		if ( multi )
+		{
+			float scale = h * f->liquids[f->liquid[i]].def.gravityScale;
+			gx = scale * f->worldGravity.x;
+			gy = scale * f->worldGravity.y;
+		}
 		f->vx[i] += gx;
 		f->vy[i] += gy;
 		f->prev[i].x = f->pos[i].x;

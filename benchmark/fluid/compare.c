@@ -46,19 +46,19 @@ int main( int argc, char** argv )
 	AddWall( tank, halfWidth + 1.0f, wallHeight, 1.0f, wallHeight + 2.0f );
 
 	b2fFluidDef def = b2fDefaultFluidDef();
-	def.stiffness = param;
-	def.nearStiffness = 2.5f * param;
+	def.liquid.stiffness = param;
+	def.liquid.nearStiffness = 2.5f * param;
 	if ( getenv( "LAB_VISCOSITY" ) )
 	{
-		def.linearViscosity = (float)atof( getenv( "LAB_VISCOSITY" ) );
+		def.liquid.linearViscosity = (float)atof( getenv( "LAB_VISCOSITY" ) );
 	}
 	if ( getenv( "LAB_QUADRATIC" ) )
 	{
-		def.quadraticViscosity = (float)atof( getenv( "LAB_QUADRATIC" ) );
+		def.liquid.quadraticViscosity = (float)atof( getenv( "LAB_QUADRATIC" ) );
 	}
 	if ( getenv( "LAB_NEAR" ) )
 	{
-		def.nearStiffness = (float)atof( getenv( "LAB_NEAR" ) );
+		def.liquid.nearStiffness = (float)atof( getenv( "LAB_NEAR" ) );
 	}
 
 	if ( getenv( "LAB_SPACING" ) )
@@ -72,12 +72,12 @@ int main( int argc, char** argv )
 	}
 	if ( getenv( "LAB_ADAPTIVE" ) )
 	{
-		def.adaptiveRatio = (float)atof( getenv( "LAB_ADAPTIVE" ) );
+		def.liquid.adaptiveRatio = (float)atof( getenv( "LAB_ADAPTIVE" ) );
 	}
 
 	b2fFluid* fluid = b2fCreateFluid( worldId, &def );
 	float spacing = def.particleSpacing;
-	b2fFluid_CreateParticlesInBox( fluid, (b2Pos){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
+	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
 								   (b2Pos){ halfWidth - 0.5f * spacing, depth } );
 	int n = b2fFluid_GetParticleCount( fluid );
 	double startArea = 0.0;

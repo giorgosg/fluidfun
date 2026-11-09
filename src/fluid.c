@@ -2,10 +2,9 @@
 // Creating a liquid, its settings, what it reports, and the order of passes in each substep.
 #include "fluid_internal.h"
 
-b2fFluidDef b2fDefaultFluidDef( void )
+b2fLiquidDef b2fDefaultLiquidDef( void )
 {
-	b2fFluidDef def = { 0 };
-	def.particleSpacing = 0.07f;
+	b2fLiquidDef def = { 0 };
 	def.massDensity = 1.0f;
 	def.stiffness = 0.04f;
 	def.nearStiffness = 0.1f;
@@ -16,15 +15,55 @@ b2fFluidDef b2fDefaultFluidDef( void )
 	def.gravityScale = 1.0f;
 	def.contactPressure = 2.0f;
 	def.adaptiveRatio = 10.0f;
-	def.adaptiveDepth = 12.0f;
 	def.adaptiveSpeed = 0.0f;
 	def.adaptiveDepthLimit = false;
-	def.adaptiveFullBox = 0.9f;
 	def.adaptiveTolerance = 0.3f;
 	def.adaptiveLimit = 3.0f;
 	def.adaptiveRate = 0.05f;
-	def.capacity = 100000;
 	return def;
+}
+
+b2fFluidDef b2fDefaultFluidDef( void )
+{
+	b2fFluidDef def = { 0 };
+	def.particleSpacing = 0.07f;
+	def.adaptiveDepth = 12.0f;
+	def.adaptiveFullBox = 0.9f;
+	def.capacity = 100000;
+	def.liquid = b2fDefaultLiquidDef();
+	return def;
+}
+
+// Rebuilds what the passes read from the liquids' settings
+static void UpdateLiquids( b2fFluid* f )
+{
+	float spacing = f->def.particleSpacing;
+	f->adaptive = false;
+	for ( int a = 0; a < f->liquidCount; ++a )
+	{
+		b2fLiquid* liquid = f->liquids + a;
+		liquid->mass = liquid->def.massDensity * 0.8660254f * spacing * spacing;
+		f->adaptive = f->adaptive || liquid->def.adaptiveRatio > 1.0f;
+		f->cohesionBetween[a][a] = liquid->def.cohesion;
+	}
+	f->mass = f->liquids[0].mass;
+	f->def.liquid = f->liquids[0].def;
+
+	for ( int a = 0; a < f->liquidCount; ++a )
+	{
+		const b2fLiquidDef* da = &f->liquids[a].def;
+		for ( int b = 0; b < f->liquidCount; ++b )
+		{
+			const b2fLiquidDef* db = &f->liquids[b].def;
+			float sum = da->massDensity + db->massDensity;
+			f->liquidPairs[a][b] = ( b2fLiquidPair ){
+				.cohesion = f->cohesionBetween[a][b],
+				.weight = sum > 0.0f ? 2.0f * db->massDensity / sum : 1.0f,
+				.linearViscosity = 0.5f * ( da->linearViscosity + db->linearViscosity ),
+				.quadraticViscosity = 0.5f * ( da->quadraticViscosity + db->quadraticViscosity ),
+			};
+		}
+	}
 }
 
 static float LatticeDensity( float spacing, float radius )
@@ -59,7 +98,9 @@ b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def )
 	f->radius = 2.0f * def->particleSpacing;
 	f->cellSize = 1.1f * f->radius;
 	f->margin = 0.5f * def->particleSpacing;
-	f->mass = def->massDensity * 0.8660254f * def->particleSpacing * def->particleSpacing;
+	f->liquids[0].def = def->liquid;
+	f->liquidCount = 1;
+	UpdateLiquids( f );
 	f->restDensity = LatticeDensity( def->particleSpacing, f->radius );
 	f->maxRadius = f->radius;
 	f->moveLimit = B2F_MOVE_LIMIT;
@@ -108,6 +149,8 @@ void b2fDestroyFluid( b2fFluid* f )
 	free( f->boxPx );
 	free( f->boxPy );
 	free( f->boxWeight );
+	free( f->boxMixed );
+	free( f->boxLiquid );
 	free( f->boxPressure );
 	free( f->boxDepth );
 	free( f->boxFlow );
@@ -121,6 +164,44 @@ void b2fFluid_SetDef( b2fFluid* f, const b2fFluidDef* def )
 	f->def = *def;
 	f->def.particleSpacing = spacing;
 	f->def.capacity = capacity;
+	f->liquids[0].def = def->liquid;
+	UpdateLiquids( f );
+}
+
+int b2fFluid_CreateLiquid( b2fFluid* f, const b2fLiquidDef* def )
+{
+	if ( f->liquidCount == B2F_MAX_LIQUIDS )
+	{
+		return -1;
+	}
+	int index = f->liquidCount++;
+	f->liquids[index].def = *def;
+	UpdateLiquids( f );
+	return index;
+}
+
+void b2fFluid_SetLiquid( b2fFluid* f, int liquid, const b2fLiquidDef* def )
+{
+	if ( 0 <= liquid && liquid < f->liquidCount )
+	{
+		f->liquids[liquid].def = *def;
+		UpdateLiquids( f );
+	}
+}
+
+int b2fFluid_GetLiquidCount( const b2fFluid* f )
+{
+	return f->liquidCount;
+}
+
+void b2fFluid_SetCohesionBetween( b2fFluid* f, int a, int b, float cohesion )
+{
+	if ( 0 <= a && a < f->liquidCount && 0 <= b && b < f->liquidCount && a != b )
+	{
+		f->cohesionBetween[a][b] = cohesion;
+		f->cohesionBetween[b][a] = cohesion;
+		UpdateLiquids( f );
+	}
 }
 
 float b2fFluid_GetMovedMass( const b2fFluid* f )
@@ -147,6 +228,10 @@ const float* b2fFluid_GetVelocitiesY( const b2fFluid* f )
 const float* b2fFluid_GetSizes( const b2fFluid* f )
 {
 	return f->size;
+}
+const unsigned char* b2fFluid_GetLiquids( const b2fFluid* f )
+{
+	return f->liquid;
 }
 const float* b2fFluid_GetDensities( const b2fFluid* f )
 {
@@ -190,8 +275,9 @@ static void Substep( b2SubStepContext* context, int subStepIndex, int subStepCou
 
 	b2Vec2 gravity = b2World_GetGravity( f->worldId );
 	f->h = h;
-	f->gravityX = f->def.gravityScale * gravity.x;
-	f->gravityY = f->def.gravityScale * gravity.y;
+	f->worldGravity = gravity;
+	f->gravityX = f->liquids[0].def.gravityScale * gravity.x;
+	f->gravityY = f->liquids[0].def.gravityScale * gravity.y;
 
 	b2fUpdateBodies( f, context );
 	b2fPredict( f, context );

@@ -78,7 +78,7 @@ static b2BodyId AddWheel( LabScene* scene, b2WorldId worldId, b2BodyId anchorBod
 static b2fFluid* AddLiquid( b2WorldId worldId, const b2fFluidDef* def, b2Vec2 lower, b2Vec2 upper )
 {
 	b2fFluid* fluid = b2fCreateFluid( worldId, def );
-	b2fFluid_CreateParticlesInBox( fluid, b2ToPos( lower ), b2ToPos( upper ) );
+	b2fFluid_CreateParticlesInBox( fluid, 0, b2ToPos( lower ), b2ToPos( upper ) );
 	return fluid;
 }
 
@@ -183,6 +183,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.name = "Drop";
 			s.viewCenter = (b2Vec2){ 0.0f, 4.0f };
 			s.viewHalfWidth = 6.0f;
+			break;
+
+		case lab_layers:
+			s.name = "Three Liquids";
+			s.viewCenter = (b2Vec2){ 0.0f, 4.5f };
+			s.viewHalfWidth = 9.0f;
+			s.controlLabel = "Cohesion between";
+			s.control = 0.0f;
+			s.controlMin = 0.0f;
+			s.controlMax = 0.3f;
 			break;
 
 		default:
@@ -350,7 +360,7 @@ static b2fFluid* CreateWaves( b2WorldId worldId, LabScene* scene, const b2fFluid
 		float bottom = slope * ( x + column - toe ) + 2.0f * def->particleSpacing;
 		if ( bottom < depth )
 		{
-			b2fFluid_CreateParticlesInBox( fluid, (b2Pos){ x, bottom }, (b2Pos){ x + column, depth } );
+			b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ x, bottom }, (b2Pos){ x + column, depth } );
 		}
 	}
 	return fluid;
@@ -370,7 +380,7 @@ static b2fFluid* CreateSplash( b2WorldId worldId, LabScene* scene, const b2fFlui
 	b2CreateCircleShape( scene->driven, &shapeDef, &ball );
 
 	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ -9.9f, 0.05f }, (b2Vec2){ 9.9f, 3.0f } );
-	b2fFluid_CreateParticlesInBox( fluid, (b2Pos){ -5.5f, 8.5f }, (b2Pos){ -2.5f, 11.5f } );
+	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -5.5f, 8.5f }, (b2Pos){ -2.5f, 11.5f } );
 	return fluid;
 }
 
@@ -415,6 +425,31 @@ static b2fFluid* CreateDrop( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	return AddLiquid( worldId, def, (b2Vec2){ -1.0f, 5.0f }, (b2Vec2){ 1.0f, 7.0f } );
 }
 
+// Three liquids stacked the wrong way up: light oil at the bottom, water, then heavy syrup on top. They turn over,
+// and a crate between oil and water in density comes to rest where they meet. Water is liquid 0 and takes the
+// fluid's settings; the others change only density and viscosity.
+static b2fFluid* CreateLayers( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId tank = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float w = 4.0f, layer = 1.6f, t = 0.5f, s = def->particleSpacing;
+	AddBox( tank, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( tank, -w - t, 4.0f, t, 4.0f + t, 0.0f, 0.0f );
+	AddBox( tank, w + t, 4.0f, t, 4.0f + t, 0.0f, 0.0f );
+	AddCrate( scene, worldId, 1.5f, 7.0f, 0.4f, 0.8f );
+
+	b2fFluid* fluid = b2fCreateFluid( worldId, def );
+	b2fLiquidDef oil = def->liquid, syrup = def->liquid;
+	oil.massDensity = 0.6f * def->liquid.massDensity;
+	syrup.massDensity = 1.6f * def->liquid.massDensity;
+	syrup.linearViscosity = 4.0f;
+	int light = b2fFluid_CreateLiquid( fluid, &oil );
+	int heavy = b2fFluid_CreateLiquid( fluid, &syrup );
+	b2fFluid_CreateParticlesInBox( fluid, light, (b2Pos){ -w + s, s }, (b2Pos){ w - s, layer } );
+	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -w + s, layer + s }, (b2Pos){ w - s, 2.0f * layer } );
+	b2fFluid_CreateParticlesInBox( fluid, heavy, (b2Pos){ -w + s, 2.0f * layer + s }, (b2Pos){ w - s, 3.0f * layer } );
+	return fluid;
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -441,6 +476,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreatePool( worldId, scene, def );
 		case lab_drop:
 			return CreateDrop( worldId, scene, def );
+		case lab_layers:
+			return CreateLayers( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -494,6 +531,13 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			b2Body_SetLinearVelocity( scene->driven, (b2Vec2){ scene->control * omega * cosf( omega * t ), 0.0f } );
 		}
 		break;
+
+		case lab_layers:
+			for ( int a = 0; a < 3; ++a )
+			{
+				b2fFluid_SetCohesionBetween( fluid, a, ( a + 1 ) % 3, scene->control );
+			}
+			break;
 
 		case lab_splash:
 			if ( fmodf( t, 7.0f ) < timeStep && t > 1.0f )

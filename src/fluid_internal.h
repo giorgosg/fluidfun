@@ -40,11 +40,11 @@ typedef float b2fCoord;
 // this list, so a new field is one entry here.
 #define B2F_PARTICLE_FIELDS( X )                                                                                        \
 	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size )            \
-		X( float, speedMemory ) X( int, id )
+		X( float, speedMemory ) X( int, id ) X( unsigned char, liquid )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them
 #define B2F_WORK_FIELDS( X )                                                                                            \
-	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rho ) X( float, rhoNear ) X( float, wallDensity ) X( float, wallNearDensity ) \
+	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rho ) X( float, rhoNear ) X( float, pressure ) X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) \
 		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, window ) X( int, sortCell ) X( int, sortBlock ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
 			X( float, adaptMass ) X( float, adaptTarget ) X( float, adaptPressure ) X( unsigned char, adaptClass )      \
 				X( unsigned char, adaptUsed )
@@ -104,6 +104,22 @@ typedef struct b2fReaction
 	float x, y, angular;
 } b2fReaction;
 
+typedef struct b2fLiquid
+{
+	b2fLiquidDef def;
+	float mass;	 // of a particle at the finest size
+} b2fLiquid;
+
+// What two liquids use between them, kept for every ordered pair so the move pass makes one lookup per pair
+typedef struct b2fLiquidPair
+{
+	float cohesion;
+	// Share of the pair's move the first liquid takes, over the even share: twice the other's mass density over the
+	// sum of both. Heavier particles move less, which keeps momentum and makes lighter liquid float.
+	float weight;
+	float linearViscosity, quadraticViscosity;
+} b2fLiquidPair;
+
 
 struct b2fFluid
 {
@@ -112,10 +128,16 @@ struct b2fFluid
 	float radius;	 // interaction radius h
 	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
 	float margin;	 // collision radius of a particle
-	float mass;
+	float mass;	 // of a finest particle of liquid 0, the unit adaptive sizes count mass in
 	float restDensity;
 	int capacity;
 	int count;
+
+	b2fLiquid liquids[B2F_MAX_LIQUIDS];
+	int liquidCount;
+	bool adaptive;	 // some liquid has adaptive sizes
+	float cohesionBetween[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
+	b2fLiquidPair liquidPairs[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
 
 	B2F_PARTICLE_FIELDS( B2F_DECLARE_FIELD )
 	// The same fields in the order the next sort writes, swapped in afterwards
@@ -155,13 +177,15 @@ struct b2fFluid
 	float* patchImpulses;
 	int patchImpulseCapacity;
 
-	// Set per substep
+	// Set per substep. Gravity is liquid 0's, after its gravity scale.
 	float h, gravityX, gravityY;
+	b2Vec2 worldGravity;
 	float moveLimit;
 	float movedMass;
 
 	// Density box tables, sized to the liquid's bounds
-	double *boxMass, *boxPx, *boxPy, *boxWeight;
+	double *boxMass, *boxPx, *boxPy, *boxWeight, *boxMixed;
+	unsigned char* boxLiquid;
 	float *boxDepth, *boxFlow, *boxPressure;
 	int boxCapacity;
 
@@ -211,4 +235,4 @@ bool b2fShapeDistance( const b2fShape* s, b2Vec2 p, float* distance, b2Vec2* nor
 
 // adapt.c
 void b2fAdaptSizes( b2fFluid* f );
-float b2fAdaptiveReach( const b2fFluid* f, float g, float h );
+float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h );

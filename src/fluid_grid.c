@@ -42,7 +42,7 @@ static void SpreadBlockSizes( b2fFluid* f, int bw, int bh )
 
 static void BuildGrid( b2fFluid* f )
 {
-	bool adaptive = f->def.adaptiveRatio > 1.0f;
+	bool adaptive = f->adaptive;
 	b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
 	for ( int i = 1; i < f->count; ++i )
 	{

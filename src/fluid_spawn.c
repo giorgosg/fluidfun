@@ -9,7 +9,7 @@ static float SpawnSpacing( const b2fFluid* f )
 	return B2F_SPAWN_SPACING * f->def.particleSpacing;
 }
 
-static bool AddParticle( b2fFluid* f, b2fCoord x, b2fCoord y, float size )
+static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float size )
 {
 	if ( f->count == f->capacity )
 	{
@@ -21,6 +21,7 @@ static bool AddParticle( b2fFluid* f, b2fCoord x, b2fCoord y, float size )
 	f->pos[i].y = y;
 	f->id[i] = f->nextParticleId++;
 	f->size[i] = size;
+	f->liquid[i] = (unsigned char)liquid;
 	return true;
 }
 
@@ -28,11 +29,12 @@ static bool AddParticle( b2fFluid* f, b2fCoord x, b2fCoord y, float size )
 // over. Density boxes read depth as distance to whatever is not liquid, walls and floor included, so this grades
 // by distance to the nearest edge of the box: rectangular rings from the edge inwards, each as coarse as its
 // distance asks, with its particles spread evenly around it.
-static int CreateGradedParticles( b2fFluid* f, b2Pos lower, b2Pos upper )
+static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos upper )
 {
-	float spacing = f->def.particleSpacing, ratio = f->def.adaptiveRatio;
-	float g = -f->def.gravityScale * b2World_GetGravity( f->worldId ).y;
-	float reach = b2fAdaptiveReach( f, g, f->h > 0.0f ? f->h : 1.0f / 240.0f );
+	const b2fLiquidDef* def = &f->liquids[liquid].def;
+	float spacing = f->def.particleSpacing, ratio = def->adaptiveRatio;
+	float g = -def->gravityScale * b2World_GetGravity( f->worldId ).y;
+	float reach = b2fAdaptiveReach( f, liquid, g, f->h > 0.0f ? f->h : 1.0f / 240.0f );
 	b2fCoord cx = 0.5f * ( lower.x + upper.x ), cy = 0.5f * ( lower.y + upper.y );
 	int added = 0, ring = 0;
 	float inset = 0.0f;
@@ -60,7 +62,7 @@ static int CreateGradedParticles( b2fFluid* f, b2Pos lower, b2Pos upper )
 			for ( int i = 0; i < count; ++i )
 			{
 				float u = -0.5f * length + ( (float)i + 0.5f ) * step;
-				if ( AddParticle( f, across ? cx + u : cx, across ? cy : cy + u, size ) == false )
+				if ( AddParticle( f, liquid, across ? cx + u : cx, across ? cy : cy + u, size ) == false )
 				{
 					return added;
 				}
@@ -97,7 +99,7 @@ static int CreateGradedParticles( b2fFluid* f, b2Pos lower, b2Pos upper )
 				x = cx - ha, y = cy + hb - ( u - 2.0f * ( 2.0f * ha + hb ) );
 			}
 
-			if ( AddParticle( f, x, y, size ) == false )
+			if ( AddParticle( f, liquid, x, y, size ) == false )
 			{
 				return added;
 			}
@@ -109,11 +111,16 @@ static int CreateGradedParticles( b2fFluid* f, b2Pos lower, b2Pos upper )
 	return added;
 }
 
-int b2fFluid_CreateParticlesInBox( b2fFluid* f, b2Pos lower, b2Pos upper )
+int b2fFluid_CreateParticlesInBox( b2fFluid* f, int liquid, b2Pos lower, b2Pos upper )
 {
-	if ( f->def.adaptiveRatio > 1.0f )
+	if ( liquid < 0 || liquid >= f->liquidCount )
 	{
-		return CreateGradedParticles( f, lower, upper );
+		return 0;
+	}
+
+	if ( f->liquids[liquid].def.adaptiveRatio > 1.0f )
+	{
+		return CreateGradedParticles( f, liquid, lower, upper );
 	}
 
 	float spacing = SpawnSpacing( f );
@@ -124,7 +131,7 @@ int b2fFluid_CreateParticlesInBox( b2fFluid* f, b2Pos lower, b2Pos upper )
 	{
 		for ( b2fCoord x = lower.x + ( row & 1 ? 0.5f * spacing : 0.0f ); x <= upper.x; x += spacing )
 		{
-			if ( AddParticle( f, x, y, f->def.particleSpacing ) == false )
+			if ( AddParticle( f, liquid, x, y, f->def.particleSpacing ) == false )
 			{
 				return added;
 			}
@@ -151,7 +158,7 @@ int b2fFluid_MoveParticles( b2fFluid* f, b2AABB from, b2AABB to, b2Vec2 velocity
 		f->vx[i] = velocity.x;
 		f->vy[i] = velocity.y;
 		float ratio = f->size[i] / f->def.particleSpacing;
-		f->movedMass += f->mass * ratio * ratio;
+		f->movedMass += f->liquids[f->liquid[i]].mass * ratio * ratio;
 		moved += 1;
 	}
 	return moved;

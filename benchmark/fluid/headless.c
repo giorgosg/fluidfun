@@ -3,9 +3,9 @@
 // runs can be compared across worker counts. Usage: fluid_headless [frames] [liquid scale]
 //
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_SUBSTEPS,
-// LAB_ONE (6 workers only), LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
+// LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with LAB_FRAME_EVERY.
+// LAB_LIQUIDS, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with LAB_FRAME_EVERY.
 #include "scene.h"
 
 #include "box2d/math_functions.h"
@@ -99,9 +99,12 @@ static void WriteFrame( const char* path, b2fFluid* fluid, const LabScene* scene
 	const b2Pos* pos = b2fFluid_GetPositions( fluid );
 	// With LAB_SIZED each particle is a square 0.7 of its size across, as the sample draws them
 	const float* sizes = b2fFluid_GetSizes( fluid );
+	const unsigned char* liquids = b2fFluid_GetLiquids( fluid );
 	bool sized = getenv( "LAB_SIZED" ) != NULL;
+	static const unsigned char tints[3][3] = { { 60, 140, 255 }, { 230, 170, 40 }, { 200, 40, 60 } };
 	for ( int i = 0; i < n; ++i )
 	{
+		const unsigned char* tint = tints[liquids[i] % 3];
 		int px = (int)( 0.5f * imageWidth + ( pos[i].x - viewCenter.x ) * viewScale );
 		int py = (int)( 0.5f * imageHeight - ( pos[i].y - viewCenter.y ) * viewScale );
 		int side = sized ? (int)( 0.7f * sizes[i] * viewScale + 0.5f ) : 2;
@@ -110,7 +113,7 @@ static void WriteFrame( const char* path, b2fFluid* fluid, const LabScene* scene
 		{
 			for ( int x = 0; x < side; ++x )
 			{
-				PlotPixel( px - side / 2 + x, py - side / 2 + y, 60, 140, 255 );
+				PlotPixel( px - side / 2 + x, py - side / 2 + y, tint[0], tint[1], tint[2] );
 			}
 		}
 	}
@@ -148,19 +151,19 @@ static void ApplySettings( b2fFluidDef* def )
 		float* value;
 	} settings[] = {
 		{ "LAB_SPACING", &def->particleSpacing },
-		{ "LAB_CONTACT", &def->contactPressure },
-		{ "LAB_TENSILE", &def->tensilePressure },
-		{ "LAB_COHESION", &def->cohesion },
-		{ "LAB_GRAVITY", &def->gravityScale },
-		{ "LAB_VISCOSITY", &def->linearViscosity },
-		{ "LAB_QUADRATIC", &def->quadraticViscosity },
-		{ "LAB_ADAPTIVE", &def->adaptiveRatio },
+		{ "LAB_CONTACT", &def->liquid.contactPressure },
+		{ "LAB_TENSILE", &def->liquid.tensilePressure },
+		{ "LAB_COHESION", &def->liquid.cohesion },
+		{ "LAB_GRAVITY", &def->liquid.gravityScale },
+		{ "LAB_VISCOSITY", &def->liquid.linearViscosity },
+		{ "LAB_QUADRATIC", &def->liquid.quadraticViscosity },
+		{ "LAB_ADAPTIVE", &def->liquid.adaptiveRatio },
 		{ "LAB_ADAPTIVE_DEPTH", &def->adaptiveDepth },
-		{ "LAB_FAST", &def->adaptiveSpeed },
+		{ "LAB_FAST", &def->liquid.adaptiveSpeed },
 		{ "LAB_FULL", &def->adaptiveFullBox },
-		{ "LAB_TOLERANCE", &def->adaptiveTolerance },
-		{ "LAB_LIMIT", &def->adaptiveLimit },
-		{ "LAB_RATE", &def->adaptiveRate },
+		{ "LAB_TOLERANCE", &def->liquid.adaptiveTolerance },
+		{ "LAB_LIMIT", &def->liquid.adaptiveLimit },
+		{ "LAB_RATE", &def->liquid.adaptiveRate },
 	};
 	for ( size_t i = 0; i < sizeof( settings ) / sizeof( settings[0] ); ++i )
 	{
@@ -174,12 +177,12 @@ static void ApplySettings( b2fFluidDef* def )
 	// Near stiffness follows stiffness, at the usual 2.5 times
 	if ( getenv( "LAB_STIFFNESS" ) )
 	{
-		def->stiffness = (float)atof( getenv( "LAB_STIFFNESS" ) );
-		def->nearStiffness = 2.5f * def->stiffness;
+		def->liquid.stiffness = (float)atof( getenv( "LAB_STIFFNESS" ) );
+		def->liquid.nearStiffness = 2.5f * def->liquid.stiffness;
 	}
 	if ( getenv( "LAB_DEPTH_LIMIT" ) )
 	{
-		def->adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;
+		def->liquid.adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;
 	}
 }
 
@@ -380,6 +383,12 @@ int main( int argc, char** argv )
 		def.capacity = 2000000;
 		ApplySettings( &def );
 		b2fFluid* fluid = LabCreateScene( worldId, &scene, &def );
+		// LAB_SECOND_LIQUID: add a liquid like the first with no particles, which runs the passes for several
+		// liquids on the same physics, to time them
+		if ( getenv( "LAB_SECOND_LIQUID" ) )
+		{
+			b2fFluid_CreateLiquid( fluid, &def.liquid );
+		}
 
 		uint64_t start = b2GetTicks();
 		b2fProfile sum = { 0 };
@@ -439,6 +448,31 @@ int main( int argc, char** argv )
 				printf( "CH %d\n", p.sizeChanges );
 			}
 
+			if ( getenv( "LAB_LIQUIDS" ) && i % 60 == 0 )
+			{
+				// Per liquid: area, area weighted mean height and its spread. Separated layers stack by density,
+				// each with a spread near its thickness over the square root of 12.
+				int n = b2fFluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2fFluid_GetPositions( fluid );
+				const float* ps = b2fFluid_GetSizes( fluid );
+				const unsigned char* liquid = b2fFluid_GetLiquids( fluid );
+				double area[B2F_MAX_LIQUIDS] = { 0 }, my[B2F_MAX_LIQUIDS] = { 0 }, myy[B2F_MAX_LIQUIDS] = { 0 };
+				for ( int k = 0; k < n; ++k )
+				{
+					double w = (double)ps[k] * ps[k];
+					area[liquid[k]] += w;
+					my[liquid[k]] += w * pos[k].y;
+					myy[liquid[k]] += w * pos[k].y * pos[k].y;
+				}
+				printf( "LQ %d", i );
+				for ( int l = 0; l < b2fFluid_GetLiquidCount( fluid ); ++l )
+				{
+					double mean = area[l] > 0.0 ? my[l] / area[l] : 0.0;
+					double spread = area[l] > 0.0 ? sqrt( fmax( myy[l] / area[l] - mean * mean, 0.0 ) ) : 0.0;
+					printf( " | %d: area %.3f y %.3f spread %.3f", l, area[l] * 0.8660254, mean, spread );
+				}
+				printf( "\n" );
+			}
 			if ( getenv( "LAB_BODIES" ) && i % 120 == 0 )
 			{
 				printf( "T %.0f", (double)i / 60.0 );

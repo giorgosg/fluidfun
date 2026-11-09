@@ -28,7 +28,7 @@ endif()
 # Testing is enabled here only, since Box2D's own unit test target is named test, which CTest reserves.
 # Run with: ctest --test-dir build/benchmark/fluid
 enable_testing()
-set(FLUID_SCENES tank hole boat drum wheel waves splash drain pool drop)
+set(FLUID_SCENES tank hole boat drum wheel waves splash drain pool drop layers)
 list(LENGTH FLUID_SCENES FLUID_SCENE_COUNT)
 math(EXPR FLUID_LAST_SCENE "${FLUID_SCENE_COUNT} - 1")
 foreach(index RANGE ${FLUID_LAST_SCENE})
@@ -38,7 +38,7 @@ foreach(index RANGE ${FLUID_LAST_SCENE})
 endforeach()
 
 # The same with uniform sizes, which take their own paths through the solver
-foreach(index 0 2 4)
+foreach(index 0 2 4 10)
 	list(GET FLUID_SCENES ${index} name)
 	add_test(NAME fluid_uniform_${name} COMMAND fluid_headless 300)
 	set_tests_properties(fluid_uniform_${name} PROPERTIES ENVIRONMENT "LAB_SCENE=${index};LAB_ADAPTIVE=1;LAB_CHECK=1")

@@ -315,7 +315,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float h = f->radius, tableScale = (float)B2F_WALL_TABLE_SIZE / h;
-	bool adaptive = f->def.adaptiveRatio > 1.0f;
+	bool adaptive = f->adaptive;
 	for ( int i = start; i < end; ++i )
 	{
 		if ( adaptive )
@@ -388,9 +388,12 @@ static void CollideTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float margin = f->margin, h = f->h, inv = 1.0f / h, friction = f->def.friction, m = f->mass;
-	bool adaptive = f->def.adaptiveRatio > 1.0f;
+	float margin = f->margin, h = f->h, inv = 1.0f / h, friction = f->liquids[0].def.friction, m = f->mass;
+	bool adaptive = f->adaptive, multi = f->liquidCount > 1;
 	float baseMass = f->mass, spacing = f->def.particleSpacing;
+
+	// Patches sum what each particle pushes with, scaled here by its liquid's contact pressure when there are several
+	float patchScale = 1.0f;
 
 	for ( int chunk = start; chunk < end; ++chunk )
 	{
@@ -402,6 +405,14 @@ static void CollideTask( int start, int end, int worker, void* context )
 		int last = (int)( (int64_t)f->count * ( chunk + 1 ) / B2F_CHUNK_COUNT );
 		for ( int i = first; i < last; ++i )
 		{
+			if ( multi )
+			{
+				const b2fLiquid* liquid = f->liquids + f->liquid[i];
+				baseMass = liquid->mass;
+				m = baseMass;
+				friction = liquid->def.friction;
+				patchScale = liquid->def.contactPressure;
+			}
 			if ( adaptive )
 			{
 				float ratio = f->size[i] / spacing;
@@ -423,7 +434,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 					reaction->x += impulseX;
 					reaction->y += impulseY;
 					reaction->angular += rx * impulseY - ry * impulseX;
-					SamplePatches( f, chunk, body, f->pos[i].x, f->pos[i].y, impulse );
+					SamplePatches( f, chunk, body, f->pos[i].x, f->pos[i].y, patchScale * impulse );
 				}
 			}
 
@@ -484,7 +495,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 					reaction->x += impulseX;
 					reaction->y += impulseY;
 					reaction->angular += r.x * impulseY - r.y * impulseX;
-					SamplePatches( f, chunk, body, x, y, sqrtf( impulseX * impulseX + impulseY * impulseY ) );
+					SamplePatches( f, chunk, body, x, y, patchScale * sqrtf( impulseX * impulseX + impulseY * impulseY ) );
 				}
 			}
 		}
@@ -495,6 +506,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 static void ApplyPatches( b2fFluid* f, b2SubStepContext* context )
 {
 	float window = 2.0f * f->radius;
+	float scale = f->liquidCount > 1 ? 1.0f : f->liquids[0].def.contactPressure;
 	for ( int i = 0; i < f->patchCount; ++i )
 	{
 		float sum[2] = { 0.0f, 0.0f };
@@ -512,7 +524,7 @@ static void ApplyPatches( b2fFluid* f, b2SubStepContext* context )
 			continue;
 		}
 
-		float impulse = f->def.contactPressure * ( sum[0] > sum[1] ? sum[0] : sum[1] ) * patch->length / window;
+		float impulse = scale * ( sum[0] > sum[1] ? sum[0] : sum[1] ) * patch->length / window;
 		float impulseX = impulse * patch->normalX, impulseY = impulse * patch->normalY;
 		float rx = (float)( 0.5f * ( patch->x[0] + patch->x[1] ) - body->center.x );
 		float ry = (float)( 0.5f * ( patch->y[0] + patch->y[1] ) - body->center.y );
@@ -589,7 +601,12 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 		}
 	}
 
-	if ( f->def.contactPressure > 0.0f )
+	bool patches = false;
+	for ( int l = 0; l < f->liquidCount; ++l )
+	{
+		patches = patches || f->liquids[l].def.contactPressure > 0.0f;
+	}
+	if ( patches )
 	{
 		ApplyPatches( f, context );
 	}

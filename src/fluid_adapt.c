@@ -3,11 +3,12 @@
 // their depth asks for, after Winchenbach et al. 2017.
 #include "fluid_internal.h"
 
-// Depth at which particles reach the coarsest size
-float b2fAdaptiveReach( const b2fFluid* f, float g, float h )
+// Depth at which particles of a liquid reach its coarsest size
+float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h )
 {
-	float coarse = f->def.adaptiveRatio * f->def.particleSpacing;
-	float reach = g > 0.0f && h > 0.0f ? 0.5f * B2F_DEPTH_LIMIT_SCALE * f->def.stiffness * coarse * coarse / ( g * h * h ) : FLT_MAX;
+	const b2fLiquidDef* def = &f->liquids[liquid].def;
+	float coarse = def->adaptiveRatio * f->def.particleSpacing;
+	float reach = g > 0.0f && h > 0.0f ? 0.5f * B2F_DEPTH_LIMIT_SCALE * def->stiffness * coarse * coarse / ( g * h * h ) : FLT_MAX;
 	return f->def.adaptiveDepth > 0.0f && f->def.adaptiveDepth < reach ? f->def.adaptiveDepth : reach;
 }
 
@@ -43,6 +44,11 @@ enum
 // A box this full sits on a flat surface, so depth below the smallest box runs to zero at this fill
 #define B2F_SURFACE_FILL 0.5
 
+// Fill a cell on an interface between liquids takes from a box, over the cells along the box's width. At 2 a band
+// of such cells across a box leaves it well short of full, so an interface grades sizes as air does. At 1, the
+// layers of the Three Liquids scene were still settling after 40 seconds at ratio 10; at 2 they were flat by 20.
+#define B2F_INTERFACE_FILL 2.0
+
 // Squeeze, how far a particle's density is past rest, rises in a line with depth in still water. Measured in
 // pools: it starts below rest at the surface, and its slope goes as g h^2 / ( stiffness spacing^2 size ), with size
 // over the finest. Read backwards it gives depth from the weight of what is above, which walls do not hide.
@@ -58,7 +64,7 @@ static double BoxSum( const double* table, int stride, int x0, int y0, int x1, i
 	return table[y1 * stride + x1] - table[y0 * stride + x1] - table[y1 * stride + x0] + table[y0 * stride + x0];
 }
 
-static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach )
+static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach, const float* perMetre, bool wantFlow )
 {
 	b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
 	float largest = 0.0f;
@@ -89,6 +95,8 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		f->boxPx = realloc( f->boxPx, (size_t)f->boxCapacity * sizeof( double ) );
 		f->boxPy = realloc( f->boxPy, (size_t)f->boxCapacity * sizeof( double ) );
 		f->boxWeight = realloc( f->boxWeight, (size_t)f->boxCapacity * sizeof( double ) );
+		f->boxMixed = realloc( f->boxMixed, (size_t)f->boxCapacity * sizeof( double ) );
+		f->boxLiquid = realloc( f->boxLiquid, (size_t)f->boxCapacity );
 		f->boxPressure = realloc( f->boxPressure, (size_t)f->boxCapacity * sizeof( float ) );
 		f->boxDepth = realloc( f->boxDepth, (size_t)f->boxCapacity * sizeof( float ) );
 		f->boxFlow = realloc( f->boxFlow, (size_t)f->boxCapacity * sizeof( float ) );
@@ -99,8 +107,9 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	memset( f->boxPy, 0, (size_t)nodes * sizeof( double ) );
 	memset( f->boxWeight, 0, (size_t)nodes * sizeof( double ) );
 
+	// Mass here is liquid 0's for every particle, which makes it a measure of area, so liquids of other densities
+	// fill a box the same
 	float inverse = 1.0f / ( spacing * spacing );
-	float g = -f->gravityY, perMetre = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( f->def.stiffness * spacing * spacing );
 	for ( int i = 0; i < f->count; ++i )
 	{
 		int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
@@ -109,12 +118,32 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		f->boxMass[c] += m;
 		f->boxPx[c] += m * f->vx[i];
 		f->boxPy[c] += m * f->vy[i];
-		float squeezeDepth = ( f->rho[i] / f->restDensity - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / perMetre;
+		float squeezeDepth = ( f->rho[i] / f->restDensity - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / perMetre[f->liquid[i]];
 		f->boxWeight[c] += m * ( squeezeDepth > 0.0f ? squeezeDepth : 0.0f );
 	}
 
-	double* tables[4] = { f->boxMass, f->boxPx, f->boxPy, f->boxWeight };
-	for ( int t = 0; t < 4; ++t )
+	// With several liquids, a cell holding more than one is on an interface. Interfaces count as surface, so particles
+	// stay fine along them as they do at air.
+	bool multi = f->liquidCount > 1;
+	if ( multi )
+	{
+		memset( f->boxLiquid, 0xFF, (size_t)nodes );
+		memset( f->boxMixed, 0, (size_t)nodes * sizeof( double ) );
+		for ( int i = 0; i < f->count; ++i )
+		{
+			int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
+			int c = ( cy + 1 ) * stride + cx + 1;
+			unsigned char seen = f->boxLiquid[c];
+			f->boxLiquid[c] = seen == 0xFF || seen == f->liquid[i] ? f->liquid[i] : 0xFE;
+		}
+		for ( int c = 0; c < nodes; ++c )
+		{
+			f->boxMixed[c] = f->boxLiquid[c] == 0xFE ? 1.0 : 0.0;
+		}
+	}
+
+	double* tables[5] = { f->boxMass, f->boxPx, f->boxPy, f->boxWeight, f->boxMixed };
+	for ( int t = 0; t < ( multi ? 5 : 4 ); ++t )
 	{
 		double* table = tables[t];
 		for ( int y = 1; y <= height; ++y )
@@ -138,8 +167,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	flowSize = flowSize < 1 ? 1 : flowSize;
 
 	// Liquid at rest stands at the spacing it spawns at
-	double fullMass = f->def.massDensity * cell * cell / ( B2F_SPAWN_SPACING * B2F_SPAWN_SPACING );
-	bool wantFlow = f->def.adaptiveSpeed > 0.0f;
+	double fullMass = f->liquids[0].def.massDensity * cell * cell / ( B2F_SPAWN_SPACING * B2F_SPAWN_SPACING );
 	double full = f->def.adaptiveFullBox;
 	for ( int y = 0; y < height; ++y )
 	{
@@ -171,6 +199,13 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 				int x1 = x + k + 1 < width ? x + k + 1 : width, y1 = y + k + 1 < height ? y + k + 1 : height;
 				double area = (double)( ( 2 * k + 1 ) * ( 2 * k + 1 ) );
 				double fill = BoxSum( f->boxMass, stride, x0, y0, x1, y1 ) / ( area * fullMass );
+
+				// Boxes do not reach across an interface, since coarse particles along one hold its shape: cohesion
+				// moves particles in proportion to their size, gravity does not
+				if ( multi )
+				{
+					fill -= BoxSum( f->boxMixed, stride, x0, y0, x1, y1 ) * B2F_INTERFACE_FILL / (double)( 2 * k + 1 );
+				}
 				if ( fill >= full )
 				{
 					best = l == 0 ? half : half + ( lastHalf - half ) * (float)( ( fill - full ) / ( fill - lastFill ) );
@@ -232,11 +267,17 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	}
 }
 
+// What the size pass reads per liquid
+typedef struct b2fLiquidSizes
+{
+	float baseMass, reach, fastSpeed, tolerance, limit, rate, safeScale;
+	bool depthLimit;
+} b2fLiquidSizes;
+
 // Runs between steps on one thread, in particle order, so that the result does not depend on worker count.
 void b2fAdaptSizes( b2fFluid* f )
 {
-	float ratio = f->def.adaptiveRatio;
-	if ( ratio <= 1.0f || f->gridValid == false || f->h <= 0.0f || f->count == 0 )
+	if ( f->adaptive == false || f->gridValid == false || f->h <= 0.0f || f->count == 0 )
 	{
 		return;
 	}
@@ -244,23 +285,48 @@ void b2fAdaptSizes( b2fFluid* f )
 	f->sizeChanges = 0;
 	int n = f->count;
 
-	// Mass linear in depth, reaching the coarsest size at half the depth that size can hold up by pressure alone
-	float spacing = f->def.particleSpacing, fineMass = f->mass, baseMass = fineMass * ratio * ratio;
-	float g = -f->gravityY;
-	float reach = b2fAdaptiveReach( f, g, f->h );
+	// Mass linear in depth, reaching the coarsest size at half the depth that size can hold up by pressure alone.
+	// Masses count in finest particles of liquid 0, whatever the liquid, so they measure area.
+	float spacing = f->def.particleSpacing, fineMass = f->mass;
+	b2fLiquidSizes sizes[B2F_MAX_LIQUIDS];
+	float perMetre[B2F_MAX_LIQUIDS];
+	float deepest = 0.0f;
+	bool wantFlow = false;
+	for ( int l = 0; l < f->liquidCount; ++l )
+	{
+		const b2fLiquidDef* def = &f->liquids[l].def;
+		float ratio = def->adaptiveRatio > 1.0f ? def->adaptiveRatio : 1.0f;
+		float g = -def->gravityScale * f->worldGravity.y;
+		float reach = b2fAdaptiveReach( f, l, g, f->h );
+		sizes[l] = ( b2fLiquidSizes ){
+			.baseMass = fineMass * ratio * ratio,
+			.reach = reach,
+			.fastSpeed = def->adaptiveSpeed,
+			.tolerance = def->adaptiveTolerance,
+			.limit = def->adaptiveLimit,
+			.rate = def->adaptiveRate,
+			.safeScale = fineMass * 2.0f * g * f->h * f->h / ( B2F_DEPTH_LIMIT_SCALE * def->stiffness * spacing * spacing ),
+			.depthLimit = def->adaptiveDepthLimit,
+		};
+		perMetre[l] = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( def->stiffness * spacing * spacing );
+		if ( ratio > 1.0f )
+		{
+			deepest = deepest > reach ? deepest : reach;
+			wantFlow = wantFlow || def->adaptiveSpeed > 0.0f;
+		}
+	}
 
 	uint64_t ticks = b2GetTicks();
-	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach );
+	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, deepest, perMetre, wantFlow );
 	f->measureTime = b2GetMilliseconds( ticks );
 
-	float fastSpeed = f->def.adaptiveSpeed;
-	float tolerance = f->def.adaptiveTolerance, limit = f->def.adaptiveLimit, rate = f->def.adaptiveRate;
 	float memoryDecay = powf( 0.5f, 1.0f / ( 60.0f * B2F_SPEED_MEMORY ) );
-	float safeScale = fineMass * 2.0f * g * f->h * f->h / ( B2F_DEPTH_LIMIT_SCALE * f->def.stiffness * spacing * spacing );
 
 	for ( int i = 0; i < n; ++i )
 	{
-		float t = f->adaptDepth[i] / reach;
+		const b2fLiquidSizes* liquid = sizes + f->liquid[i];
+		float baseMass = liquid->baseMass, fastSpeed = liquid->fastSpeed, limit = liquid->limit, tolerance = liquid->tolerance;
+		float t = f->adaptDepth[i] / liquid->reach;
 		t = t < 1.0f ? t : 1.0f;
 		float target = fineMass + ( baseMass - fineMass ) * t;
 
@@ -276,10 +342,10 @@ void b2fAdaptSizes( b2fFluid* f )
 			target += ( fineMass - target ) * k;
 		}
 
-		if ( f->def.adaptiveDepthLimit )
+		if ( liquid->depthLimit )
 		{
 			// Boxes read walls and floors as air, so the limit goes by squeeze, which feels the weight above
-			float safe = safeScale * f->adaptPressure[i];
+			float safe = liquid->safeScale * f->adaptPressure[i];
 			safe = safe < baseMass ? safe : baseMass;
 			target = target > safe ? target : safe;
 		}
@@ -317,7 +383,8 @@ void b2fAdaptSizes( b2fFluid* f )
 		// A particle moves at most this much mass a frame, so its size and its neighbours' change a little at a
 		// time. One that is merging away is only removed once what is left is that small, or a quarter of the
 		// finest, so it never shrinks to a speck with too short a reach to find neighbours.
-		float cap = rate * f->adaptTarget[i];
+		const b2fLiquidSizes* liquid = sizes + f->liquid[i];
+		float cap = liquid->rate * f->adaptTarget[i], baseMass = liquid->baseMass;
 		float last = cap > B2F_REMOVE_FLOOR * fineMass ? cap : B2F_REMOVE_FLOOR * fineMass;
 		bool removing = cls == b2f_tooSmall && f->adaptMass[i] <= last;
 		float excess = cls == b2f_tooSmall ? f->adaptMass[i] : f->adaptMass[i] - f->adaptTarget[i];
@@ -330,7 +397,7 @@ void b2fAdaptSizes( b2fFluid* f )
 		int partners[B2F_MAX_PARTNERS], count = 0;
 		FOR_NEIGHBOURS_WITHIN( f, i, j, f->window[i] + 1 )
 		{
-			if ( j == i || j >= n || f->adaptUsed[j] || count == B2F_MAX_PARTNERS || f->adaptClass[j] > b2f_small )
+			if ( j == i || j >= n || f->adaptUsed[j] || count == B2F_MAX_PARTNERS || f->adaptClass[j] > b2f_small || f->liquid[j] != f->liquid[i] )
 			{
 				continue;
 			}
