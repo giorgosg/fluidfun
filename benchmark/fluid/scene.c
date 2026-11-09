@@ -185,6 +185,12 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.viewHalfWidth = 6.0f;
 			break;
 
+		case lab_chain:
+			s.name = "Chain Bowl";
+			s.viewCenter = (b2Vec2){ 0.0f, 4.0f };
+			s.viewHalfWidth = 7.5f;
+			break;
+
 		case lab_layers:
 			s.name = "Three Liquids";
 			s.viewCenter = (b2Vec2){ 0.0f, 4.5f };
@@ -453,6 +459,52 @@ static b2fFluid* CreateLayers( b2WorldId worldId, LabScene* scene, const b2fFlui
 	return fluid;
 }
 
+// A bowl made of one static chain loop. Its left half has segments shorter than the interaction radius and its
+// right half long ones, so the two show how the liquid meets the joints between segments. Chains collide on their
+// right side, so the loop runs clockwise to hold the liquid in.
+#define LAB_CHAIN_RADIUS 5.0f
+#define LAB_CHAIN_FINE 60
+#define LAB_CHAIN_COARSE 6
+
+static b2fFluid* CreateChain( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, LAB_CHAIN_RADIUS );
+	b2Vec2 points[LAB_CHAIN_FINE + LAB_CHAIN_COARSE + 4];
+	int count = 0;
+
+	// Clockwise: down the left wall, along the bowl from left to right, up the right wall, back across the top
+	float r = LAB_CHAIN_RADIUS, top = 3.0f;
+	points[count++] = (b2Vec2){ -r, top };
+	for ( int i = 0; i <= LAB_CHAIN_FINE; ++i )
+	{
+		float a = B2_PI + 0.5f * B2_PI * (float)i / (float)LAB_CHAIN_FINE;
+		points[count++] = (b2Vec2){ r * cosf( a ), r * sinf( a ) };
+	}
+	for ( int i = 1; i <= LAB_CHAIN_COARSE; ++i )
+	{
+		float a = 1.5f * B2_PI + 0.5f * B2_PI * (float)i / (float)LAB_CHAIN_COARSE;
+		points[count++] = (b2Vec2){ r * cosf( a ), r * sinf( a ) };
+	}
+	points[count++] = (b2Vec2){ r, top };
+
+	// The loop's points go anticlockwise above, so reverse them
+	for ( int i = 0; i < count / 2; ++i )
+	{
+		b2Vec2 t = points[i];
+		points[i] = points[count - 1 - i];
+		points[count - 1 - i] = t;
+	}
+
+	b2ChainDef chain = b2DefaultChainDef();
+	chain.points = points;
+	chain.pointCount = count;
+	chain.isLoop = true;
+	b2CreateChain( ground, &chain );
+
+	AddCrate( scene, worldId, 1.5f, 6.0f, 0.4f, 0.5f );
+	return AddLiquid( worldId, def, (b2Vec2){ -3.0f, 1.5f }, (b2Vec2){ 3.0f, 3.5f } );
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -481,6 +533,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateDrop( worldId, scene, def );
 		case lab_layers:
 			return CreateLayers( worldId, scene, def );
+		case lab_chain:
+			return CreateChain( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}

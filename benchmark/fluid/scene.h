@@ -21,6 +21,7 @@ typedef enum LabSceneType
 	lab_pool,
 	lab_drop,
 	lab_layers,
+	lab_chain,
 	lab_sceneCount
 } LabSceneType;
 

@@ -45,8 +45,8 @@ static void PlotLine( b2Vec2 a, b2Vec2 b )
 
 static void PlotBody( b2BodyId body )
 {
-	b2ShapeId shapes[32];
-	int count = b2Body_GetShapes( body, shapes, 32 );
+	b2ShapeId shapes[128];
+	int count = b2Body_GetShapes( body, shapes, 128 );
 	b2WorldTransform t = b2Body_GetTransform( body );
 	for ( int i = 0; i < count; ++i )
 	{
@@ -71,6 +71,11 @@ static void PlotBody( b2BodyId body )
 			PlotLine( b2Sub( c1, n ), b2Sub( c2, n ) );
 			PlotLine( b2Add( c1, n ), b2Sub( c1, n ) );
 			PlotLine( b2Add( c2, n ), b2Sub( c2, n ) );
+		}
+		else if ( type == b2_segmentShape || type == b2_chainSegmentShape )
+		{
+			b2Segment segment = type == b2_segmentShape ? b2Shape_GetSegment( shapes[i] ) : b2Shape_GetChainSegment( shapes[i] ).segment;
+			PlotLine( b2ToVec2( b2TransformWorldPoint( t, segment.point1 ) ), b2ToVec2( b2TransformWorldPoint( t, segment.point2 ) ) );
 		}
 		else if ( type == b2_circleShape )
 		{

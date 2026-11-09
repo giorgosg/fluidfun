@@ -153,3 +153,4 @@ static int sampleDrain = RegisterSample( "Fluid", "Deep Drain", SampleFluid::Cre
 static int samplePool = RegisterSample( "Fluid", "Deep Pool", SampleFluid::Create<lab_pool> );
 static int sampleDrop = RegisterSample( "Fluid", "Drop", SampleFluid::Create<lab_drop> );
 static int sampleLayers = RegisterSample( "Fluid", "Three Liquids", SampleFluid::Create<lab_layers> );
+static int sampleChain = RegisterSample( "Fluid", "Chain Bowl", SampleFluid::Create<lab_chain> );
