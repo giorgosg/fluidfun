@@ -97,6 +97,8 @@ void b2fDestroyFluid( b2fFluid* f )
 	free( f->contacts );
 	free( f->pairs );
 	free( f->cellStart );
+	free( f->blockSize );
+	free( f->blockReach );
 	free( f->shapes );
 	free( f->bodies );
 	free( f->reactions );

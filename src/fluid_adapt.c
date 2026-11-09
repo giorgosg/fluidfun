@@ -326,8 +326,9 @@ void b2fAdaptSizes( b2fFluid* f )
 		{
 			give = f->adaptMass[i] - last;
 		}
+		// Particles have moved since the grid was sorted, by under one cell in the last substep, so search one more
 		int partners[B2F_MAX_PARTNERS], count = 0;
-		FOR_NEIGHBOURS( f, i, j )
+		FOR_NEIGHBOURS_WITHIN( f, i, j, f->window[i] + 1 )
 		{
 			if ( j == i || j >= n || f->adaptUsed[j] || count == B2F_MAX_PARTNERS || f->adaptClass[j] > b2f_small )
 			{

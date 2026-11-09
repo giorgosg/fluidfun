@@ -45,7 +45,7 @@ typedef float b2fCoord;
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them
 #define B2F_WORK_FIELDS( X )                                                                                            \
 	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rho ) X( float, rhoNear ) X( float, wallDensity ) X( float, wallNearDensity ) \
-		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
+		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, window ) X( int, sortCell ) X( int, sortBlock ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
 			X( float, adaptMass ) X( float, adaptTarget ) X( float, adaptPressure ) X( unsigned char, adaptClass )      \
 				X( unsigned char, adaptUsed )
 
@@ -110,7 +110,7 @@ struct b2fFluid
 	b2WorldId worldId;
 	b2fFluidDef def;
 	float radius;	 // interaction radius h
-	float cellSize;	 // h plus a skin, since moves within a substep outdate the grid
+	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
 	float margin;	 // collision radius of a particle
 	float mass;
 	float restDensity;
@@ -135,7 +135,14 @@ struct b2fFluid
 
 	int gridWidth, gridHeight, gridCapacity;
 	b2fCoord gridX, gridY;
+	float gridCell;	 // cellSize, doubled as often as it takes to keep the grid small
+	int uniformWindow;	 // cells each side every particle searches when sizes are uniform, otherwise 0
+	int gridBorder;	 // empty cells on each side, as many as the widest search reaches past its own cell
 	int* cellStart;
+
+	// Largest particle in each block of grid cells, and the largest whose reach touches each block
+	float *blockSize, *blockReach;
+	int blockCapacity;
 
 	b2fShape* shapes;
 	int shapeCount, shapeCapacity;
@@ -176,11 +183,15 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 #undef B2F_CLEAR_FIELD
 }
 
-// Every particle in the 3x3 cells around particle i, itself included
-#define FOR_NEIGHBOURS( f, i, j )                                                                                                \
-	for ( int row_ = -1, cell_ = f->cell[i]; row_ <= 1; ++row_ )                                                                 \
-		for ( int j = f->cellStart[cell_ + row_ * f->gridWidth - 1], end_ = f->cellStart[cell_ + row_ * f->gridWidth + 2];       \
+// Every particle in the square of cells within reach cells of particle i's, itself included. Each row of the square is
+// one run of particles, since they are sorted by cell along rows. The grid's border is wide enough that no square
+// runs off it.
+#define FOR_NEIGHBOURS_WITHIN( f, i, j, reach )                                                                                \
+	for ( int r_ = ( reach ), row_ = -r_, cell_ = f->cell[i]; row_ <= r_; ++row_ )                                             \
+		for ( int j = f->cellStart[cell_ + row_ * f->gridWidth - r_], end_ = f->cellStart[cell_ + row_ * f->gridWidth + r_ + 1]; \
 			  j < end_; ++j )
+
+#define FOR_NEIGHBOURS( f, i, j ) FOR_NEIGHBOURS_WITHIN( f, i, j, f->uniformWindow > 0 ? f->uniformWindow : f->window[i] )
 
 // grid.c
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
