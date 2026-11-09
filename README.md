@@ -1,239 +1,91 @@
-# Box2D 
+# fluidfun
 
-Box2D is a 2D physics engine for games.
+Particle liquids for [Box2D](https://github.com/erincatto/box2d) v3, in a fork of Box2D.
 
-![Box2D Logo](https://box2d.org/images/logo.svg)
+Liquids run inside Box2D's solver sub-steps, on its worker threads. Bodies float, sink, push the liquid and get
+pushed and dragged by it.
 
-[![Box2D Version 3.0 Release
-Demo](https://img.youtube.com/vi/dAoM-xjOWtA/0.jpg)](https://www.youtube.com/watch?v=dAoM-xjOWtA)
+**Status: early.** There is no release, the API will still change, and only the CMake build includes the liquids.
+fluidfun is not part of Box2D and is not made by its author.
 
-## Build Status
+## What it does
 
-[![Build
-Status](https://github.com/erincatto/box2d/actions/workflows/build.yml/badge.svg)](https://github.com/erincatto/box2d/actions)
+- **Double density relaxation** (Clavet et al. 2005), with viscosity, cohesion and wet friction at shapes.
+- **Two-way coupling** with Box2D bodies, through a sub-step callback the fork adds.
+- **Adaptive particle sizes** (after Winchenbach et al. 2017): particles are fine at the surface and around bodies,
+  and coarser deep down. A deep pool needs far fewer particles.
+- **Several liquids** that keep apart, each with its own density, stiffness, viscosity and cohesion. Light liquids
+  float on heavy ones.
+- **Deterministic**: the same scene gives the same result bit for bit at any worker count.
+- **Large worlds**: particle positions are `b2Pos`, so they are doubles when Box2D is built with
+  `BOX2D_DOUBLE_PRECISION`.
 
-## Features
+## Changes to Box2D
 
-### Collision
+Besides the liquid code (`src/fluid*.c`, `include/box2d/fluidfun.h`), the fork adds one thing to Box2D: a callback
+that runs at the end of every solver sub-step, with access to the step's workers and to body motion.
 
-- Continuous collision detection
-- Contact events
-- Convex polygons, capsules, circles, rounded polygons, segments, and chains
-- Multiple shapes per body
-- Collision filtering
-- Ray casts, shape casts, and overlap queries
-- Sensor system
-
-### Physics
-
-- Robust _Soft Step_ rigid body solver
-- Continuous physics for fast translations and rotations
-- Island based sleep
-- Revolute, prismatic, distance, motor, weld, and wheel joints
-- Joint limits, motors, springs, and friction
-- Joint and contact forces
-- Body movement events and sleep notification
-
-### Character movement
-
-- Geometric mover with robust plane solver
-- Dynamic mover with custom joint support
-
-### System
-
-- Data-oriented design
-- Written in portable C17
-- Extensive multithreading and SIMD
-- Optimized for large piles of bodies
-- Low cost double-precision support for large worlds
-- Recording and replay
-- Cross platform determinism
-- Snapshot and restore
-
-### Samples
-
-- OpenGL with GLFW
-- Graphical user interface with imgui
-- Many samples to demonstrate features and performance
-
-## Building All Platforms
-
-- Install [CMake](https://cmake.org/)
-- Install [git](https://git-scm.com/)
-- Ensure these run from the command line
-
-## Building with CMake presets
-
-The presets in `CMakePresets.json` give one build flow on every platform and are picked up
-automatically by Visual Studio, VS Code, and CLion (open the folder and choose a preset). From the
-command line:
-
-- Windows: `cmake --preset windows` then `cmake --build --preset windows-release`
-- Linux: `cmake --preset linux-release` then `cmake --build --preset linux-release`
-- macOS: `cmake --preset macos` then `cmake --build --preset macos-release`
-
-Use the `*-debug` build presets for a debug build (not recommended for the replay viewer). The
-presets use the default native toolchain (the installed Visual Studio on Windows, Make on Linux,
-Xcode on macOS), so no specific compiler version is required.
-
-## Building for Visual Studio
-
-- Install [Visual Studio](https://visualstudio.microsoft.com/)
-- Run `build_vs2026.bat` for Visual Studio 2026, or use the `windows` preset above for other
-  versions
-- Open and build the generated solution in the `build` folder
-
-## Building for Linux
-
-- Run `build.sh` from a bash shell
-- Results are in the build sub-folder
-
-## Building for Xcode
-
-- mkdir build
-- cd build
-- cmake -G Xcode ..
-- Open `box2d.xcodeproj`
-- Select the samples scheme
-- Build and run the samples
-
-## Building and installing
-
-- mkdir build
-- cd build
-- cmake ..
-- cmake --build . --config Release
-- cmake --install . (might need sudo)
-
-Installing also provides a pkg-config file, so `pkg-config --modversion box2d` reports the installed
-version and `pkg-config --cflags --libs box2d` gives the build flags.
-
-## Building with zig
-
-Fetch and link Box2D from a Zig project:
-
-- `zig fetch --save git+https://github.com/erincatto/box2d`
-
-In `build.zig`:
-
-```zig
-const box2d_dep = b.dependency("box2d", .{});
-exe.root_module.addImport("box2d", box2d_dep.module("box2d"));
+```c
+b2World_SetSubStepCallback( worldId, fcn, context );
+b2SubStep_ParallelFor( context, task, itemCount, minRange, taskContext );
+b2SubStep_GetBodyMotion( context, bodyId, &body );
+b2SubStep_ApplyImpulse( context, bodyId, impulse, angularImpulse );
 ```
 
-In Zig code, start using box2d
+The rest is upstream Box2D. The library builds and installs as `fluidfun`, so it can sit next to a stock Box2D:
+`#include <fluidfun/fluidfun.h>` and link `fluidfun::fluidfun`.
 
-```zig
-const box2d = @import("box2d");
+## Building
 
-pub fn main() void {
-    var world_def = box2d.b2DefaultWorldDef();
-    world_def.gravity.y = -10.0;
-    const world_id = box2d.b2CreateWorld(&world_def);
-    defer box2d.b2DestroyWorld(world_id);
-
-    box2d.b2World_Step(world_id, 1.0 / 60.0, 4);
-}
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
 ```
 
-## Building with Swift Package Manager
+Run the samples from the build folder, and pick a scene under **Fluid**:
 
-Add box2d as a dependency in your `Package.swift`:
-
-```swift
-.package(url: "https://github.com/erincatto/box2d.git", branch: "main")
+```bash
+cd build && bin/samples
 ```
 
-And add the product to your target:
+`benchmark/fluid/run.sh "Paddle Boat"` opens one scene directly.
 
-```swift
-.target(
-    name: "MyGame",
-    dependencies: [.product(name: "box2d", package: "box2d")]
-),
+The scenes also run without a window, and the tests check that every scene gives the same result at 1, 3, 6 and 12
+workers and loses no liquid:
+
+```bash
+ctest --test-dir build/benchmark/fluid
 ```
 
-In Swift code, the C API is imported directly:
+## Using it
 
-```swift
-import box2d
+```c
+#include "box2d/fluidfun.h"
 
-var worldDef = b2DefaultWorldDef()
-let worldId = b2CreateWorld(&worldDef)
+b2fFluidDef def = b2fDefaultFluidDef();
+def.particleSpacing = 0.07f;
+b2fFluid* fluid = b2fCreateFluid( worldId, &def );
+b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f } );
+
+// A second liquid, lighter than the first
+b2fLiquidDef oil = b2fDefaultLiquidDef();
+oil.massDensity = 0.6f;
+int oilIndex = b2fFluid_CreateLiquid( fluid, &oil );
+b2fFluid_CreateParticlesInBox( fluid, oilIndex, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f } );
+
+// Each frame
+b2fFluid_Prepare( fluid );
+b2World_Step( worldId, 1.0f / 60.0f, 4 );
+
+int count = b2fFluid_GetParticleCount( fluid );
+const b2Pos* positions = b2fFluid_GetPositions( fluid );
+const float* sizes = b2fFluid_GetSizes( fluid );
+
+b2fDestroyFluid( fluid );
 ```
 
-C structs are passed as `inout` arguments using `&`.
-
-## Replay viewer
-
-The samples app doubles as a viewer for Box2D recordings (`.b2rec` files). Any preset above builds
-it. Pass a recording on the command line to open it directly:
-
-- Windows: `build\bin\Release\samples.exe path\to\session.b2rec`
-- Linux: `build/bin/samples path/to/session.b2rec`
-- macOS: `build/bin/Release/samples path/to/session.b2rec`
-
-On Windows you can also drag a `.b2rec` file onto `samples.exe`. The viewer runs from any directory.
-Without an argument, open a recording from the **Replay** menu. See
-[docs/recording.md](docs/recording.md) for how to make a recording.
-
-## Compatibility
-
-The Box2D library and samples build and run on Windows, Linux, and Mac.
-
-You will need a compiler that supports C17 to build the Box2D library.
-
-You will need a compiler that supports C++20 to build the samples.
-
-Box2D uses SSE2, AVX2, and Neon (AArch64) SIMD math to improve performance. This can be disabled by
-defining `BOX2D_DISABLE_SIMD`. SSE2 is automatically used as a fallback when the CPU doesn't support
-AVX2.
-
-## Documentation
-
-- [Manual](https://box2d.org/documentation/)
-
-## Community
-
-- [Discord](https://discord.gg/NKYgCBP)
-
-## Contributing
-
-Please do not submit pull requests. Instead, please file an issue for bugs or feature requests. For
-support, please visit the Discord server.
-
-## Giving feedback
-
-Please file an issue or start a chat on discord. You can also use [GitHub
-Discussions](https://github.com/erincatto/box2d/discussions).
+One fluid holds all of a world's liquids, up to 16 of them. Every setting is described in `include/box2d/fluidfun.h`.
 
 ## License
 
-Box2D is developed by Erin Catto and uses the [MIT
-license](https://en.wikipedia.org/wiki/MIT_License).
-
-## Sponsorship
-
-Support development of Box2D through [Github Sponsors](https://github.com/sponsors/erincatto).
-
-Please consider starring this repository and subscribing to my [YouTube
-channel](https://www.youtube.com/@erin_catto).
-
-## LLM Usage
-
-LLMs are used in the following areas:
-
-- unit tests
-- samples app
-- migrating code between Box2D and Box3D
-- build configuration
-- code reviews
-- benchmarking
-
-Elsewhere all code is developed and written by me.
-
-## External ports, wrappers, and bindings (unsupported)
-
-- Beef bindings - https://github.com/EnokViking/Box2DBeef
-- C++ bindings - https://github.com/HolyBlackCat/box2cpp
-- WASM - https://github.com/Birch-san/box2d3-wasm
+MIT, as Box2D. Box2D is by Erin Catto; see [LICENSE](LICENSE).
