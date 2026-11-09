@@ -179,6 +179,12 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 100.0f;
 			break;
 
+		case lab_drop:
+			s.name = "Drop";
+			s.viewCenter = (b2Vec2){ 0.0f, 4.0f };
+			s.viewHalfWidth = 6.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -399,6 +405,16 @@ static b2fFluid* CreatePool( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	return AddLiquid( worldId, def, (b2Vec2){ -width + def->particleSpacing, def->particleSpacing }, (b2Vec2){ width - def->particleSpacing, depth } );
 }
 
+// A square of liquid over a low tray. Tension rounds it as it falls, and without gravity it should become a disc.
+static b2fFluid* CreateDrop( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	AddBox( ground, 0.0f, -0.5f, 6.0f, 0.5f, 0.0f, 0.0f );
+	AddBox( ground, -5.5f, 1.5f, 0.5f, 1.5f, 0.0f, 0.0f );
+	AddBox( ground, 5.5f, 1.5f, 0.5f, 1.5f, 0.0f, 0.0f );
+	return AddLiquid( worldId, def, (b2Vec2){ -1.0f, 5.0f }, (b2Vec2){ 1.0f, 7.0f } );
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -423,6 +439,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateDrain( worldId, scene, def );
 		case lab_pool:
 			return CreatePool( worldId, scene, def );
+		case lab_drop:
+			return CreateDrop( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}

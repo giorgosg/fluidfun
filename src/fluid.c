@@ -9,6 +9,8 @@ b2fFluidDef b2fDefaultFluidDef( void )
 	def.massDensity = 1.0f;
 	def.stiffness = 0.04f;
 	def.nearStiffness = 0.1f;
+	def.tensilePressure = 0.0f;
+	def.cohesion = 0.1f;
 	def.linearViscosity = 0.5f;
 	def.friction = 0.1f;
 	def.gravityScale = 1.0f;

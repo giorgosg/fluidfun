@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Double density relaxation (Clavet et al. 2005) with viscosity, run as parallel passes over sorted particles. Viscosity
-// shares the move pass and the pairs the density pass found.
+// shares the move pass and the pairs the density pass found. Pressure can be kept from pulling, with cohesion as a
+// separate pull.
 #include "fluid_internal.h"
+
+// The density excess that pressure acts on. Below rest density only the tensile share of it pulls.
+static inline float TensileClamp( float excess, float tensile )
+{
+	return excess > 0.0f ? excess : tensile * excess;
+}
 
 // Densities and pressures for one particle use current positions. Also keeps each neighbour within reach for the move pass.
 static inline void Density( b2fFluid* f, int i, float* density, float* nearDensity )
@@ -80,6 +87,7 @@ static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* n
 static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 {
 	float k = f->def.stiffness, kn = f->def.nearStiffness, rest = f->restDensity;
+	float tensile = f->def.tensilePressure, cohesion = f->def.cohesion;
 	float sigma = f->def.linearViscosity, beta = f->def.quadraticViscosity, dt = f->h;
 	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
@@ -87,14 +95,15 @@ static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
 		float hi2 = 4.0f * si * si;
-		float pressure = k * hi2 * ( f->rho[i] - rest ), nearPressure = kn * hi2 * f->rhoNear[i];
+		float pressure = k * hi2 * TensileClamp( f->rho[i] - rest, tensile ), nearPressure = kn * hi2 * f->rhoNear[i];
 		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
 #define B2F_ADAPTIVE_PAIR( j, l )                                                                                    \
 	{                                                                                                                  \
 		float sj = f->size[j], h = si + sj;                                                                            \
 		float q = 1.0f - l / h, mean = 0.5f * h, w = sj * sj / ( mean * mean ), hj2 = 4.0f * sj * sj;                \
-		float pj = k * hj2 * ( f->rho[j] - rest ), nj = kn * hj2 * f->rhoNear[j];                                     \
-		float d = 0.5f * w * ( ( pressure + pj ) * q + ( nearPressure + nj ) * q * q ) / ( h * l );                   \
+		float pj = k * hj2 * TensileClamp( f->rho[j] - rest, tensile ), nj = kn * hj2 * f->rhoNear[j];                \
+		float pull = cohesion * h * h * q * ( 1.0f - 2.0f * q );                                                       \
+		float d = 0.5f * w * ( ( pressure + pj ) * q + ( nearPressure + nj ) * q * q - pull ) / ( h * l );            \
 		moveX -= d * dx;                                                                                               \
 		moveY -= d * dy;                                                                                               \
 		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
@@ -170,18 +179,22 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
 	float scale = f->def.stiffness * h, nearScale = f->def.nearStiffness * h, rest = 2.0f * f->restDensity;
+	float tensile = f->def.tensilePressure, single = f->restDensity, pullScale = f->def.cohesion * h;
+	bool clamped = tensile < 1.0f;
 	float sigma = f->def.linearViscosity, beta = f->def.quadraticViscosity, dt = f->h;
 	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float moveX = 0.0f, moveY = 0.0f;
-		float rhoI = f->rho[i], nearI = f->rhoNear[i];
+		float rhoI = f->rho[i], nearI = f->rhoNear[i], pressureI = TensileClamp( rhoI - single, tensile );
 		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
 #define B2F_UNIFORM_PAIR( j, l )                                                                                     \
 	{                                                                                                                  \
 		float q = 1.0f - l * inv;                                                                                      \
-		float d = 0.5f * ( scale * ( rhoI + f->rho[j] - rest ) * q + nearScale * ( nearI + f->rhoNear[j] ) * q * q ) / l; \
+		float excess = clamped ? pressureI + TensileClamp( f->rho[j] - single, tensile ) : rhoI + f->rho[j] - rest;   \
+		float pull = pullScale * q * ( 1.0f - 2.0f * q );                                                              \
+		float d = 0.5f * ( scale * excess * q + nearScale * ( nearI + f->rhoNear[j] ) * q * q - pull ) / l;            \
 		moveX -= d * dx;                                                                                               \
 		moveY -= d * dy;                                                                                               \
 		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
@@ -257,7 +270,8 @@ static void ApplyTask( int start, int end, int worker, void* context )
 		if ( f->contactCount[i] > 0 )
 		{
 			float h = adaptive ? 2.0f * f->size[i] : f->radius;
-			ApplyWallMoves( f, i, f->def.stiffness * h * ( f->rho[i] - f->restDensity ), f->def.nearStiffness * h * f->rhoNear[i] );
+			float excess = TensileClamp( f->rho[i] - f->restDensity, f->def.tensilePressure );
+			ApplyWallMoves( f, i, f->def.stiffness * h * excess, f->def.nearStiffness * h * f->rhoNear[i] );
 		}
 	}
 }

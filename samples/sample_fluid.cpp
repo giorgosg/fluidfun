@@ -78,6 +78,8 @@ public:
 		bool changed = false;
 		changed |= ImGui::SliderFloat( "Stiffness", &s_def.stiffness, 0.0f, 0.2f, "%.3f" );
 		changed |= ImGui::SliderFloat( "Near", &s_def.nearStiffness, 0.0f, 0.5f, "%.3f" );
+		changed |= ImGui::SliderFloat( "Tensile pressure", &s_def.tensilePressure, 0.0f, 1.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Cohesion", &s_def.cohesion, 0.0f, 0.5f, "%.3f" );
 		changed |= ImGui::SliderFloat( "Viscosity", &s_def.linearViscosity, 0.0f, 20.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Quad viscosity", &s_def.quadraticViscosity, 0.0f, 5.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Adaptive ratio", &s_def.adaptiveRatio, 1.0f, 30.0f, "%.1f" );
@@ -143,3 +145,4 @@ static int sampleWaves = RegisterSample( "Fluid", "Wave Maker", SampleFluid::Cre
 static int sampleSplash = RegisterSample( "Fluid", "Splash", SampleFluid::Create<lab_splash> );
 static int sampleDrain = RegisterSample( "Fluid", "Deep Drain", SampleFluid::Create<lab_drain> );
 static int samplePool = RegisterSample( "Fluid", "Deep Pool", SampleFluid::Create<lab_pool> );
+static int sampleDrop = RegisterSample( "Fluid", "Drop", SampleFluid::Create<lab_drop> );

@@ -18,6 +18,13 @@ typedef struct b2fFluidDef
 	/// Displacement per substep per unit of density error, as a fraction of the interaction radius
 	float stiffness;
 	float nearStiffness;
+	/// Share of the pull that pressure gives below rest density, from 0, where pressure only pushes, to 1, where it
+	/// pulls as hard as it pushes. At 1 the pull is the liquid's only tension, as in Clavet's double density, and it
+	/// can tear the bulk into holes. Lower values need cohesion to hold the liquid together.
+	float tensilePressure;
+	/// Pull between neighbours more than one spacing apart, and a push closer in, as its own term so that tension is
+	/// set apart from stiffness. In the same units as stiffness.
+	float cohesion;
 	float linearViscosity;
 	float quadraticViscosity;
 	float friction;
