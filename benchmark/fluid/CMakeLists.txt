@@ -28,7 +28,7 @@ endif()
 # Testing is enabled here only, since Box2D's own unit test target is named test, which CTest reserves.
 # Run with: ctest --test-dir build/benchmark/fluid
 enable_testing()
-set(FLUID_SCENES tank hole boat drum wheel waves splash drain pool drop layers chain tap honey lava space plunge mercury slime)
+set(FLUID_SCENES tank hole boat drum wheel waves splash drain pool drop layers chain tap honey lava space plunge mercury slime jelly)
 list(LENGTH FLUID_SCENES FLUID_SCENE_COUNT)
 math(EXPR FLUID_LAST_SCENE "${FLUID_SCENE_COUNT} - 1")
 foreach(index RANGE ${FLUID_LAST_SCENE})

@@ -273,6 +273,12 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.color[2] = 70.0f;
 			break;
 
+		case lab_jelly:
+			s.name = "Jelly And Dough";
+			s.viewCenter = (b2Vec2){ 0.0f, 3.5f };
+			s.viewHalfWidth = 4.5f;
+			break;
+
 		default:
 			break;
 	}
@@ -286,6 +292,12 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 		case lab_tap:
 			// Thick enough that the stream breaks into drops. From about 0.15 the liquid holds in the nozzle like a gel.
 			def->liquid.cohesion = 0.1f;
+			break;
+
+		case lab_jelly:
+			// Liquid 0 is the jelly: springs that keep their rest length, so it springs back
+			def->liquid.springStiffness = 10000.0f;
+			def->liquid.plasticity = 0.0f;
 			break;
 
 		case lab_slime:
@@ -845,6 +857,30 @@ static b2fFluid* CreateSlime( b2WorldId worldId, LabScene* scene, const b2fFluid
 	return AddLiquid( worldId, def, (b2Vec2){ -6.0f + s, top + s }, (b2Vec2){ -4.6f, top + 1.2f } );
 }
 
+// Two blocks with springs, after Clavet et al. 2005: jelly on the left, whose springs keep their rest length, and dough
+// on the right, whose springs give way past a 10% stretch. A crate lands on each a second later.
+static b2fFluid* CreateJelly( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	AddBox( ground, 0.0f, -0.25f, 8.25f, 0.25f, 0.0f, 0.0f );
+	AddBox( ground, -8.0f, 4.0f, 0.25f, 4.0f, 0.0f, 0.0f );
+	AddBox( ground, 8.0f, 4.0f, 0.25f, 4.0f, 0.0f, 0.0f );
+
+	AddCrate( scene, worldId, -3.5f, 8.0f, 0.5f, 2.0f );
+	AddCrate( scene, worldId, 3.5f, 8.0f, 0.5f, 2.0f );
+
+	b2fFluid* fluid = b2fCreateFluid( worldId, def );
+	b2fLiquidDef dough = def->liquid;
+	dough.springStiffness = 10000.0f;
+	dough.plasticity = 1.0f;
+	dough.yieldRatio = 0.1f;
+	int doughLiquid = b2fFluid_CreateLiquid( fluid, &dough );
+
+	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -4.5f, 2.0f }, (b2Pos){ -2.5f, 4.0f } );
+	b2fFluid_CreateParticlesInBox( fluid, doughLiquid, (b2Pos){ 2.5f, 2.0f }, (b2Pos){ 4.5f, 4.0f } );
+	return fluid;
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -889,6 +925,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateMercury( worldId, scene, def );
 		case lab_slime:
 			return CreateSlime( worldId, scene, def );
+		case lab_jelly:
+			return CreateJelly( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}

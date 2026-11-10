@@ -173,3 +173,4 @@ static int sampleSpace = RegisterSample( "Fluid", "Zero-G Drops", SampleFluid::C
 static int samplePlunge = RegisterSample( "Fluid", "Drop Into Pool", SampleFluid::Create<lab_plunge> );
 static int sampleMercury = RegisterSample( "Fluid", "Quicksilver", SampleFluid::Create<lab_mercury> );
 static int sampleSlime = RegisterSample( "Fluid", "Slime Stairs", SampleFluid::Create<lab_slime> );
+static int sampleJelly = RegisterSample( "Fluid", "Jelly And Dough", SampleFluid::Create<lab_jelly> );
