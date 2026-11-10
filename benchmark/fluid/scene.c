@@ -687,10 +687,10 @@ static b2fFluid* CreateHoney( b2WorldId worldId, LabScene* scene, const b2fFluid
 
 	b2fLiquidDef honey = def->liquid;
 	honey.massDensity = 1.4f * def->liquid.massDensity;
-	// Viscosity here only damps neighbours closing in, not shear, so on its own it does not slow honey down. Full grip
-	// on the ramp and high cohesion make it hold together as a dome and creep, where water spreads and runs.
+	// Viscosity here only damps neighbours closing in, not shear, so on its own it does not slow honey down. Grip on
+	// the ramp and high cohesion make it hold together as a dome, where water spreads and runs.
 	honey.cohesion = 0.2f;
-	honey.friction = 1.0f;
+	honey.friction = 0.3f;
 	honey.linearViscosity = scene->control;
 	scene->second = honey;
 	int liquid = b2fFluid_CreateLiquid( fluid, &honey );
