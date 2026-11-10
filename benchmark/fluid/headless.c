@@ -390,6 +390,7 @@ int main( int argc, char** argv )
 		scene.tankHeight *= scale;
 		b2fFluidDef def = b2fDefaultFluidDef();
 		def.capacity = 2000000;
+		LabSceneSettings( scene.type, &def );
 		ApplySettings( &def );
 		b2fFluid* fluid = LabCreateScene( worldId, &scene, &def );
 		// LAB_SECOND_LIQUID: add a liquid like the first with no particles, which runs the passes for several

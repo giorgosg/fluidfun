@@ -207,6 +207,16 @@ LabScene LabDefaultScene( LabSceneType type )
 	return s;
 }
 
+void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
+{
+	switch ( type )
+	{
+		default:
+			break;
+	}
+	(void)def;
+}
+
 static b2fFluid* CreateTank( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	static const float densities[] = { 0.5f, 0.25f, 0.75f, 0.1f, 2.0f };
