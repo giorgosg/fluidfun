@@ -164,3 +164,4 @@ static int sampleDrop = RegisterSample( "Fluid", "Drop", SampleFluid::Create<lab
 static int sampleLayers = RegisterSample( "Fluid", "Three Liquids", SampleFluid::Create<lab_layers> );
 static int sampleChain = RegisterSample( "Fluid Tests", "Chain Bowl", SampleFluid::Create<lab_chain> );
 static int sampleTap = RegisterSample( "Fluid", "Dripping Tap", SampleFluid::Create<lab_tap> );
+static int sampleHoney = RegisterSample( "Fluid", "Honey Race", SampleFluid::Create<lab_honey> );

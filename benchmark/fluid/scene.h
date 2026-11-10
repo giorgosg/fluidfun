@@ -23,6 +23,7 @@ typedef enum LabSceneType
 	lab_layers,
 	lab_chain,
 	lab_tap,
+	lab_honey,
 	lab_sceneCount
 } LabSceneType;
 
@@ -57,6 +58,9 @@ typedef struct LabScene
 	int leaked;
 	int pumped;
 	int stall, longestStall;
+
+	// A second liquid's settings, for scenes whose slider changes it
+	b2fLiquidDef second;
 
 	// Liquid a scene keeps where it put it, such as a basin's water, as area in particle sizes squared, so that it
 	// can move the rest back
