@@ -761,8 +761,8 @@ static b2fFluid* CreateSpace( b2WorldId worldId, LabScene* scene, const b2fFluid
 	return fluid;
 }
 
-// A pool, and every few seconds a square of it taken from the floor and dropped back in from above, to watch how it
-// splashes at different cohesions
+// A pool with a square of liquid falling into it, and every few seconds another square taken from its floor and
+// dropped back in from above, to watch how it splashes at different cohesions
 #define LAB_PLUNGE_EVERY 6.0f
 
 static b2fFluid* CreatePlunge( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
@@ -772,7 +772,12 @@ static b2fFluid* CreatePlunge( b2WorldId worldId, LabScene* scene, const b2fFlui
 	AddBox( ground, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
 	AddBox( ground, -w - t, 3.5f, t, 3.5f, 0.0f, 0.0f );
 	AddBox( ground, w + t, 3.5f, t, 3.5f, 0.0f, 0.0f );
-	return AddLiquid( worldId, def, (b2Vec2){ -w + def->particleSpacing, def->particleSpacing }, (b2Vec2){ w - def->particleSpacing, 1.8f } );
+	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ -w + def->particleSpacing, def->particleSpacing }, (b2Vec2){ w - def->particleSpacing, 1.8f } );
+
+	// The first drop starts in the air, and later ones come from the pool
+	float half = 0.5f * scene->control;
+	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -half, 5.0f }, (b2Pos){ half, 5.0f + scene->control } );
+	return fluid;
 }
 
 // A tray of mercury with metal blocks dropped in: steel, brass and lead float on it, gold sinks
