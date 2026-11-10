@@ -229,6 +229,9 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.name = "Lava Lamp";
 			s.viewCenter = (b2Vec2){ 0.0f, 4.0f };
 			s.viewHalfWidth = 4.5f;
+			// At 4 the wax on the floor carries about 6 m of liquid, three times what fine particles hold there, and
+			// shakes once it turns light
+			s.subSteps = 8;
 			s.controlLabel = "Swap every (s)";
 			s.control = 8.0f;
 			s.controlMin = 2.0f;
