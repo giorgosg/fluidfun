@@ -49,6 +49,18 @@ typedef struct b2fLiquidDef
 	/// it. The body and that liquid share each change of the body's motion as one lump, which keeps momentum, and a
 	/// body floating or resting at a steady speed is not affected.
 	float addedMass;
+	/// Springs between neighbouring particles, which make the liquid elastic, after Clavet et al. 2005. Stiffness per
+	/// unit mass in 1/s^2, so the square of the angular frequency of a spring holding one particle; zero turns springs
+	/// off. A spring forms between two particles of this liquid closer than the interaction radius, at their distance
+	/// then, and is written so that it acts the same whatever the substep count. It weakens as its rest length grows
+	/// towards the interaction radius, and goes once it gets there.
+	float springStiffness;
+	/// How fast a spring's rest length follows its length once stretched or squeezed past the yield ratio, per second.
+	/// Zero keeps every spring's rest length, which makes an elastic solid; higher values let the liquid flow and
+	/// keep its new shape, as dough or clay does.
+	float plasticity;
+	/// Stretch or squeeze a spring takes, as a share of its rest length, before plasticity changes its rest length
+	float yieldRatio;
 	/// Spacing of the coarsest particles over the fluid's particleSpacing, which is the finest. One keeps this liquid
 	/// fine everywhere. Particles are fine at the surface and coarser with depth, and split and merge as they move.
 	/// Merges only join particles of the same liquid.

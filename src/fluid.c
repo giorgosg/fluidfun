@@ -15,6 +15,9 @@ b2fLiquidDef b2fDefaultLiquidDef( void )
 	def.gravityScale = 1.0f;
 	def.contactPressure = 1.0f;
 	def.addedMass = 1.0f;
+	def.springStiffness = 0.0f;
+	def.plasticity = 0.5f;
+	def.yieldRatio = 0.1f;
 	def.adaptiveRatio = 10.0f;
 	def.adaptiveSpeed = 0.0f;
 	def.adaptiveDepthLimit = false;
@@ -48,6 +51,24 @@ static void UpdateLiquids( b2fFluid* f )
 		f->cohesionBetween[a][a] = liquid->def.cohesion;
 	}
 	f->mass = f->liquids[0].mass;
+
+	f->springy = false;
+	for ( int a = 0; a < f->liquidCount; ++a )
+	{
+		f->springy = f->springy || f->liquids[a].def.springStiffness > 0.0f;
+	}
+	if ( f->springy && f->springs == NULL )
+	{
+		size_t n = (size_t)f->capacity + 1, slots = 1;
+		while ( slots < 2 * n )
+		{
+			slots *= 2;
+		}
+		f->springs = calloc( n, sizeof( b2fSprings ) );
+		f->sortedSprings = calloc( n, sizeof( b2fSprings ) );
+		f->idMap = malloc( slots * sizeof( b2fIdSlot ) );
+		f->newIndex = calloc( n, sizeof( int ) );
+	}
 	f->def.liquid = f->liquids[0].def;
 
 	for ( int a = 0; a < f->liquidCount; ++a )
@@ -138,6 +159,10 @@ void b2fDestroyFluid( b2fFluid* f )
 #undef B2F_FREE_SORTED
 	free( f->contacts );
 	free( f->pairs );
+	free( f->springs );
+	free( f->sortedSprings );
+	free( f->idMap );
+	free( f->newIndex );
 	free( f->cellStart );
 	free( f->blockSize );
 	free( f->blockReach );
@@ -263,9 +288,9 @@ void b2fFluid_Prepare( b2fFluid* f )
 
 static void Substep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, void* userContext )
 {
-	(void)subStepIndex;
 	(void)subStepCount;
 	b2fFluid* f = userContext;
+	f->checkSprings = subStepIndex == 0;
 	if ( f->count == 0 )
 	{
 		return;
@@ -286,6 +311,10 @@ static void Substep( b2SubStepContext* context, int subStepIndex, int subStepCou
 	f->profile.sort += b2GetMillisecondsAndReset( &ticks );
 
 	b2fFindContacts( f, context );
+	if ( f->springy )
+	{
+		b2fRelaxSprings( f, context );
+	}
 	b2fRelaxDensity( f, context );
 	f->profile.density += b2GetMillisecondsAndReset( &ticks );
 

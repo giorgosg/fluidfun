@@ -57,6 +57,26 @@ typedef float b2fCoord;
 
 #define B2F_DECLARE_FIELD( type, name ) type* name;
 
+// Springs a particle holds, each to a partner by id, since indices change with every sort. Both ends hold the same
+// spring, and work it out the same way, so it stays the same at both.
+#define B2F_SPRINGS_PER_PARTICLE 16
+
+typedef struct b2fSprings
+{
+	int id[B2F_SPRINGS_PER_PARTICLE];
+	// Where the partner was last seen, which the sort's newIndex maps on; the id check catches it when merges and
+	// splits have moved it since
+	int index[B2F_SPRINGS_PER_PARTICLE];
+	float rest[B2F_SPRINGS_PER_PARTICLE];
+	int count;
+} b2fSprings;
+
+// Where a particle id is this substep, for finding spring partners
+typedef struct b2fIdSlot
+{
+	int id, index;
+} b2fIdSlot;
+
 typedef struct b2fShape
 {
 	b2ShapeType type;
@@ -170,6 +190,16 @@ struct b2fFluid
 	b2fContact* contacts;
 	b2fPair* pairs;
 
+	// Only made once some liquid has springs, and then sorted, copied and cleared with the particle fields
+	b2fSprings* springs;
+	b2fSprings* sortedSprings;
+	b2fIdSlot* idMap;
+	int idMapMask;
+	// Each particle's index after the last sort, by its index before it
+	int* newIndex;
+	bool springy;	 // some liquid has springs
+	bool checkSprings;	 // the first substep of a step, which checks both ends hold each spring
+
 	int sizeChanges;
 	float maxRadius;
 	bool gridValid;
@@ -222,6 +252,10 @@ static inline void b2fCopyParticle( b2fFluid* f, int to, int from )
 #define B2F_COPY_FIELD( type, name ) f->name[to] = f->name[from];
 	B2F_PARTICLE_FIELDS( B2F_COPY_FIELD )
 #undef B2F_COPY_FIELD
+	if ( f->springs != NULL )
+	{
+		f->springs[to] = f->springs[from];
+	}
 }
 
 static inline void b2fClearParticle( b2fFluid* f, int i )
@@ -229,6 +263,10 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 #define B2F_CLEAR_FIELD( type, name ) f->name[i] = ( type ){ 0 };
 	B2F_PARTICLE_FIELDS( B2F_CLEAR_FIELD )
 #undef B2F_CLEAR_FIELD
+	if ( f->springs != NULL )
+	{
+		f->springs[i].count = 0;
+	}
 }
 
 // Every particle in the square of cells within reach cells of particle i's, itself included. Each row of the square is
@@ -248,6 +286,7 @@ void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
 void b2fPredict( b2fFluid* f, b2SubStepContext* context );
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context );
 void b2fUpdateVelocities( b2fFluid* f, b2SubStepContext* context );
+void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context );
 
 // boundary.c
 void b2fBuildWallTable( b2fFluid* f );

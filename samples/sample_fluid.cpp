@@ -104,6 +104,9 @@ public:
 		changed |= ImGui::SliderFloat( "Contact pressure", &m_def->liquid.contactPressure, 0.0f, 2.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Friction", &m_def->liquid.friction, 0.0f, 1.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Added mass", &m_def->liquid.addedMass, 0.0f, 1.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Spring stiffness", &m_def->liquid.springStiffness, 0.0f, 100000.0f, "%.0f", ImGuiSliderFlags_Logarithmic );
+		changed |= ImGui::SliderFloat( "Plasticity", &m_def->liquid.plasticity, 0.0f, 5.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Yield ratio", &m_def->liquid.yieldRatio, 0.0f, 0.5f, "%.2f" );
 		if ( changed )
 		{
 			b2fFluid_SetDef( m_fluid, m_def );
