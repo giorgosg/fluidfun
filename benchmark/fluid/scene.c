@@ -800,27 +800,45 @@ static b2fFluid* CreateMercury( b2WorldId worldId, LabScene* scene, const b2fFlu
 	return AddLiquid( worldId, def, (b2Vec2){ -w + s, s }, (b2Vec2){ w - s, 1.0f } );
 }
 
-// A blob of slime oozes down a staircase, and goes back to the top every so often
+// A blob of slime oozes down a staircase made of one chain shape, and goes back to the top every so often
 #define LAB_SLIME_EVERY 15.0f
 #define LAB_SLIME_STEPS 7
 
 static b2fFluid* CreateSlime( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
-	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
-	AddBox( ground, 0.0f, -0.25f, 6.5f, 0.25f, 0.0f, 0.0f );
-	AddBox( ground, -6.25f, 2.75f, 0.25f, 2.75f, 0.0f, 0.0f );
-	AddBox( ground, 6.25f, 1.5f, 0.25f, 1.5f, 0.0f, 0.0f );
-
-	// A landing at the top, then steps 0.8 m deep and 0.5 m high down to the floor
-	float x = -6.0f, top = 4.0f;
-	AddBox( ground, x + 0.75f, 0.5f * top, 0.75f, 0.5f * top, 0.0f, 0.0f );
-	x += 1.5f;
+	// The room is one chain loop: down the left wall, a landing at the top, steps 0.8 m deep and 0.5 m high down to the
+	// floor, up the right wall and back across the top. Chains collide on their right side, so it is reversed below to
+	// run clockwise.
+	b2Vec2 points[2 * LAB_SLIME_STEPS + 8];
+	int count = 0;
+	float x = -4.5f, top = 4.0f;
+	points[count++] = (b2Vec2){ -6.0f, 7.0f };
+	points[count++] = (b2Vec2){ -6.0f, top };
+	points[count++] = (b2Vec2){ x, top };
 	for ( int i = 1; i <= LAB_SLIME_STEPS; ++i )
 	{
 		float y = top - 0.5f * (float)i;
-		AddBox( ground, x + 0.4f, 0.5f * y, 0.4f, 0.5f * y, 0.0f, 0.0f );
+		points[count++] = (b2Vec2){ x, y };
 		x += 0.8f;
+		points[count++] = (b2Vec2){ x, y };
 	}
+	points[count++] = (b2Vec2){ x, 0.0f };
+	points[count++] = (b2Vec2){ 6.0f, 0.0f };
+	points[count++] = (b2Vec2){ 6.0f, 7.0f };
+
+	for ( int i = 0; i < count / 2; ++i )
+	{
+		b2Vec2 t = points[i];
+		points[i] = points[count - 1 - i];
+		points[count - 1 - i] = t;
+	}
+
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	b2ChainDef chain = b2DefaultChainDef();
+	chain.points = points;
+	chain.pointCount = count;
+	chain.isLoop = true;
+	b2CreateChain( ground, &chain );
 
 	float s = def->particleSpacing;
 	return AddLiquid( worldId, def, (b2Vec2){ -6.0f + s, top + s }, (b2Vec2){ -4.6f, top + 1.2f } );
