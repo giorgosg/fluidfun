@@ -261,6 +261,15 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.viewHalfWidth = 4.5f;
 			break;
 
+		case lab_mercury:
+			s.name = "Quicksilver";
+			s.viewCenter = (b2Vec2){ 0.0f, 2.0f };
+			s.viewHalfWidth = 3.5f;
+			s.color[0] = 175.0f;
+			s.color[1] = 180.0f;
+			s.color[2] = 190.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -273,6 +282,13 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 	{
 		case lab_tap:
 			// Thick enough that the stream breaks into drops. From about 0.15 the liquid holds in the nozzle like a gel.
+			def->liquid.cohesion = 0.1f;
+			break;
+
+		case lab_mercury:
+			// Mercury is 13.6 times as dense as water. Higher cohesion leaves its surface in lumps, and the sunk block
+			// jitters on the floor.
+			def->liquid.massDensity = 13.6f;
 			def->liquid.cohesion = 0.1f;
 			break;
 
@@ -772,6 +788,26 @@ static b2fFluid* CreateCup( b2WorldId worldId, LabScene* scene, const b2fFluidDe
 	return AddLiquid( worldId, def, (b2Vec2){ -4.8f + s, 0.1f + s }, (b2Vec2){ -3.2f - s, 1.2f } );
 }
 
+// A tray of mercury with metal blocks dropped in: steel, brass and lead float on it, gold sinks
+static b2fFluid* CreateMercury( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float w = 4.5f, t = 0.25f;
+	AddBox( ground, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( ground, -w - t, 1.5f, t, 1.5f, 0.0f, 0.0f );
+	AddBox( ground, w + t, 1.5f, t, 1.5f, 0.0f, 0.0f );
+
+	// Densities relative to water, as the liquid's is
+	static const float metals[] = { 7.8f, 8.5f, 11.3f, 19.3f };
+	for ( int i = 0; i < 4; ++i )
+	{
+		AddCrate( scene, worldId, -3.0f + 2.0f * (float)i, 3.0f + 0.4f * (float)i, 0.3f, metals[i] * def->liquid.massDensity / 13.6f );
+	}
+
+	float s = def->particleSpacing;
+	return AddLiquid( worldId, def, (b2Vec2){ -w + s, s }, (b2Vec2){ w - s, 1.0f } );
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -814,6 +850,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreatePlunge( worldId, scene, def );
 		case lab_cup:
 			return CreateCup( worldId, scene, def );
+		case lab_mercury:
+			return CreateMercury( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}

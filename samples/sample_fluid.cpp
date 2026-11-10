@@ -64,7 +64,7 @@ public:
 		{
 			float scale = size[i] / m_def->particleSpacing;
 			float speed = b2MinFloat( b2Length( { vx[i], vy[i] } ) / 8.0f, 1.0f );
-			const float* tint = tints[liquid[i] % 3];
+			const float* tint = liquid[i] == 0 && m_scene->color[0] + m_scene->color[1] + m_scene->color[2] > 0.0f ? m_scene->color : tints[liquid[i] % 3];
 			uint32_t red = (uint32_t)( tint[0] + ( 255.0f - tint[0] ) * speed );
 			uint32_t green = (uint32_t)( tint[1] + ( 255.0f - tint[1] ) * speed );
 			uint32_t blue = (uint32_t)( tint[2] + ( 255.0f - tint[2] ) * speed );
@@ -169,3 +169,4 @@ static int sampleLava = RegisterSample( "Fluid", "Lava Lamp", SampleFluid::Creat
 static int sampleSpace = RegisterSample( "Fluid", "Zero-G Drops", SampleFluid::Create<lab_space> );
 static int samplePlunge = RegisterSample( "Fluid", "Drop Into Pool", SampleFluid::Create<lab_plunge> );
 static int sampleCup = RegisterSample( "Fluid", "Carry A Cup", SampleFluid::Create<lab_cup> );
+static int sampleMercury = RegisterSample( "Fluid", "Quicksilver", SampleFluid::Create<lab_mercury> );
