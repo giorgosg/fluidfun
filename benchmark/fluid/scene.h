@@ -54,6 +54,10 @@ typedef struct LabScene
 	// Colour of liquid 0 in the sample, red, green and blue from 0 to 255, or all zero for the usual blue
 	float color[3];
 
+	// Substeps a scene asks for, or 0 for the usual 4. The sample sets it on opening the scene, and the headless runner
+	// uses it unless LAB_SUBSTEPS says otherwise.
+	int subSteps;
+
 	// One setting a scene can be driven by, or a null label if it has none
 	const char* controlLabel;
 	float control, controlMin, controlMax;
