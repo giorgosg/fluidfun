@@ -245,6 +245,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 4.0f;
 			break;
 
+		case lab_plunge:
+			s.name = "Drop Into Pool";
+			s.viewCenter = (b2Vec2){ 0.0f, 3.5f };
+			s.viewHalfWidth = 4.5f;
+			s.controlLabel = "Drop size";
+			s.control = 1.2f;
+			s.controlMin = 0.4f;
+			s.controlMax = 2.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -258,6 +268,11 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 		case lab_tap:
 			// Thick enough that the stream breaks into drops. From about 0.15 the liquid holds in the nozzle like a gel.
 			def->liquid.cohesion = 0.1f;
+			break;
+
+		case lab_plunge:
+			// All one size, since each drop is laid out at the finest size
+			def->liquid.adaptiveRatio = 1.0f;
 			break;
 
 		case lab_space:
@@ -714,6 +729,20 @@ static b2fFluid* CreateSpace( b2WorldId worldId, LabScene* scene, const b2fFluid
 	return fluid;
 }
 
+// A pool, and every few seconds a square of it taken from the floor and dropped back in from above, to watch how it
+// splashes at different cohesions
+#define LAB_PLUNGE_EVERY 6.0f
+
+static b2fFluid* CreatePlunge( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float w = 5.0f, t = 0.3f;
+	AddBox( ground, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( ground, -w - t, 3.5f, t, 3.5f, 0.0f, 0.0f );
+	AddBox( ground, w + t, 3.5f, t, 3.5f, 0.0f, 0.0f );
+	return AddLiquid( worldId, def, (b2Vec2){ -w + def->particleSpacing, def->particleSpacing }, (b2Vec2){ w - def->particleSpacing, 1.8f } );
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -752,6 +781,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateLava( worldId, scene, def );
 		case lab_space:
 			return CreateSpace( worldId, scene, def );
+		case lab_plunge:
+			return CreatePlunge( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -863,6 +894,18 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 					b2AABB box = { { c.x - LAB_SPACE_HALF - 0.1f, c.y - LAB_SPACE_HALF - 0.1f }, { c.x + LAB_SPACE_HALF + 0.1f, c.y + LAB_SPACE_HALF + 0.1f } };
 					b2fFluid_MoveParticles( fluid, box, box, v, 100000 );
 				}
+			}
+			break;
+
+		case lab_plunge:
+			if ( fmodf( t, LAB_PLUNGE_EVERY ) < timeStep && t > 1.0f )
+			{
+				// A square drop, so as many rows as fit across it
+				float half = 0.5f * scene->control, spacing = 1.09f * b2fFluid_GetSizes( fluid )[0];
+				int perRow = (int)( scene->control / spacing ) + 1;
+				b2AABB floor = { { -4.9f, 0.0f }, { 4.9f, 0.3f } };
+				b2AABB drop = { { -half, 5.0f }, { half, 5.0f + scene->control } };
+				b2fFluid_MoveParticles( fluid, floor, drop, b2Vec2_zero, perRow * perRow );
 			}
 			break;
 
