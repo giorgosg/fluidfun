@@ -233,7 +233,7 @@ LabScene LabDefaultScene( LabSceneType type )
 			// shakes once it turns light
 			s.subSteps = 8;
 			s.controlLabel = "Swap every (s)";
-			s.control = 8.0f;
+			s.control = 10.0f;
 			s.controlMin = 2.0f;
 			s.controlMax = 20.0f;
 			break;
