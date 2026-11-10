@@ -225,6 +225,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 40.0f;
 			break;
 
+		case lab_lava:
+			s.name = "Lava Lamp";
+			s.viewCenter = (b2Vec2){ 0.0f, 4.0f };
+			s.viewHalfWidth = 4.5f;
+			s.controlLabel = "Swap every (s)";
+			s.control = 8.0f;
+			s.controlMin = 2.0f;
+			s.controlMax = 20.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -626,6 +636,37 @@ static b2fFluid* CreateHoney( b2WorldId worldId, LabScene* scene, const b2fFluid
 	return fluid;
 }
 
+// A closed glass of water with a light, thick liquid at the bottom and a heavy one at the top. They swap densities
+// every so often, so blobs keep rising and sinking past each other, as wax does in a lava lamp.
+#define LAB_LAVA_LIGHT 0.4f
+#define LAB_LAVA_HEAVY 1.6f
+
+static b2fFluid* CreateLava( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float w = 1.5f, h = 8.0f, t = 0.3f, s = def->particleSpacing;
+	AddBox( ground, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( ground, 0.0f, h + t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( ground, -w - t, 0.5f * h, t, 0.5f * h, 0.0f, 0.0f );
+	AddBox( ground, w + t, 0.5f * h, t, 0.5f * h, 0.0f, 0.0f );
+
+	b2fFluid* fluid = b2fCreateFluid( worldId, def );
+	b2fLiquidDef wax = def->liquid;
+	wax.cohesion = 0.15f;
+	wax.linearViscosity = 2.0f;
+	wax.massDensity = LAB_LAVA_LIGHT * def->liquid.massDensity;
+	int rising = b2fFluid_CreateLiquid( fluid, &wax );
+	scene->second = wax;
+	wax.massDensity = LAB_LAVA_HEAVY * def->liquid.massDensity;
+	int sinking = b2fFluid_CreateLiquid( fluid, &wax );
+	scene->keep = def->liquid.massDensity;
+
+	b2fFluid_CreateParticlesInBox( fluid, rising, (b2Pos){ -w + s, s }, (b2Pos){ w - s, 0.8f } );
+	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -w + s, 0.8f + s }, (b2Pos){ w - s, h - 1.2f } );
+	b2fFluid_CreateParticlesInBox( fluid, sinking, (b2Pos){ -w + s, h - 1.2f + s }, (b2Pos){ w - s, h - 0.4f } );
+	return fluid;
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -660,6 +701,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateTap( worldId, scene, def );
 		case lab_honey:
 			return CreateHoney( worldId, scene, def );
+		case lab_lava:
+			return CreateLava( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -742,6 +785,22 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 				b2fFluid_SetLiquid( fluid, 1, &scene->second );
 			}
 			break;
+
+		case lab_lava:
+		{
+			// Liquid 1 starts light and liquid 2 heavy, and they trade every period
+			bool swapped = (int)( t / scene->control ) % 2 == 1;
+			float light = LAB_LAVA_LIGHT * scene->keep, heavy = LAB_LAVA_HEAVY * scene->keep;
+			if ( scene->second.massDensity != ( swapped ? heavy : light ) )
+			{
+				scene->second.massDensity = swapped ? heavy : light;
+				b2fFluid_SetLiquid( fluid, 1, &scene->second );
+				b2fLiquidDef other = scene->second;
+				other.massDensity = swapped ? light : heavy;
+				b2fFluid_SetLiquid( fluid, 2, &other );
+			}
+		}
+		break;
 
 		case lab_drop:
 			b2World_SetGravity( b2Body_GetWorld( scene->bodies[0] ), (b2Vec2){ 0.0f, -10.0f * scene->control } );
