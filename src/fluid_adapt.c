@@ -510,6 +510,11 @@ void b2fAdaptSizes( b2fFluid* f )
 			{
 				b2fCopyParticle( f, index, i );
 				f->id[index] = f->nextParticleId++;
+				// A new particle holds no springs. Its parent's partners hold theirs to the parent's id.
+				if ( f->springs != NULL )
+				{
+					f->springs[index].count = 0;
+				}
 			}
 			bool centre = children > 4 && c == children - 1;
 			float angle = phase + 6.2831853f * (float)c / (float)ring;

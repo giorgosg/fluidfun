@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Double density relaxation (Clavet et al. 2005) with viscosity, run as parallel passes over sorted particles. Viscosity
 // shares the move pass and the pairs the density pass found. Pressure can be kept from pulling, with cohesion as a
-// separate pull.
+// separate pull. Liquids with springs get Clavet's springs and plasticity in a pass of their own before it.
 #include "fluid_internal.h"
 
 // The density excess that pressure acts on. Below rest density only the tensile share of it pulls.
@@ -213,10 +213,62 @@ static void MultiAccumulate( b2fFluid* f, int start, int end )
 	}
 }
 
+// After the density pass found a particle's neighbours, drops the springs the spring pass marked as gone, and adds one
+// at the current distance to each neighbour of the same liquid it has none to. The neighbour does the same from its
+// side. Clavet's Algorithm 4 starts a spring at the interaction radius, where it has no force until plasticity
+// shortens it; starting at the distance instead lets an elastic liquid, with no plasticity, hold the shape it had.
+static void AddSprings( b2fFluid* f, int i )
+{
+	b2fSprings* sp = f->springs + i;
+	if ( f->liquids[f->liquid[i]].def.springStiffness <= 0.0f )
+	{
+		sp->count = 0;
+		return;
+	}
+
+	int kept = 0;
+	for ( int s = 0; s < sp->count; ++s )
+	{
+		if ( sp->rest[s] >= 0.0f )
+		{
+			sp->id[kept] = sp->id[s];
+			sp->index[kept] = sp->index[s];
+			sp->rest[kept] = sp->rest[s];
+			kept += 1;
+		}
+	}
+	sp->count = kept;
+
+	int n = f->pairCount[i];
+	const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+	for ( int p = 0; p < n && sp->count < B2F_SPRINGS_PER_PARTICLE; ++p )
+	{
+		int j = pairs[p].j, id = f->id[j];
+		if ( f->liquid[j] != f->liquid[i] )
+		{
+			continue;
+		}
+
+		bool found = false;
+		for ( int s = 0; s < sp->count && found == false; ++s )
+		{
+			found = sp->id[s] == id;
+		}
+		if ( found == false )
+		{
+			sp->id[sp->count] = id;
+			sp->index[sp->count] = j;
+			sp->rest[sp->count] = pairs[p].l;
+			sp->count += 1;
+		}
+	}
+}
+
 static void DensityTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
+	bool springy = f->springy;
 	if ( f->liquidCount > 1 )
 	{
 		float rest = f->restDensity;
@@ -227,6 +279,10 @@ static void DensityTask( int start, int end, int worker, void* context )
 			float hi2 = 4.0f * f->size[i] * f->size[i];
 			f->pressure[i] = def->stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tensilePressure );
 			f->nearPressure[i] = def->nearStiffness * hi2 * f->rhoNear[i];
+			if ( springy )
+			{
+				AddSprings( f, i );
+			}
 		}
 		return;
 	}
@@ -236,6 +292,10 @@ static void DensityTask( int start, int end, int worker, void* context )
 		for ( int i = start; i < end; ++i )
 		{
 			AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
+			if ( springy )
+			{
+				AddSprings( f, i );
+			}
 		}
 		return;
 	}
@@ -243,6 +303,10 @@ static void DensityTask( int start, int end, int worker, void* context )
 	for ( int i = start; i < end; ++i )
 	{
 		Density( f, i, f->rho + i, f->rhoNear + i );
+		if ( springy )
+		{
+			AddSprings( f, i );
+		}
 	}
 }
 
@@ -405,6 +469,141 @@ static void VelocityTask( int start, int end, int worker, void* context )
 		f->vx[i] = dx * inv;
 		f->vy[i] = dy * inv;
 	}
+}
+
+// Springs, Clavet et al. 2005 sections 5.1 and 5.2. Each particle moves by its share of each spring's stretch,
+// w_i / (w_i + w_j + 1 / (k dt^2)) as in one iteration of XPBD (Macklin et al. 2016), so a spring is as stiff at any
+// substep count. w is the inverse of a particle's mass in finest particles, and k the liquid's spring stiffness
+// times Clavet's 1 - L / h, which weakens springs as their rest length L nears the interaction radius h. Then the
+// rest length follows the length by Clavet's equation 8, past the yield ratio, and a spring whose rest length
+// reaches h is marked gone, as is one whose partner has gone, holds no spring back, or is now another liquid.
+// Both ends read the same positions and rest length, so they work a spring out the same way.
+static inline int FindParticle( const b2fFluid* f, int id )
+{
+	unsigned int slot = ( (unsigned int)id * 2654435761u ) & (unsigned int)f->idMapMask;
+	while ( f->idMap[slot].id != -1 )
+	{
+		if ( f->idMap[slot].id == id )
+		{
+			return f->idMap[slot].index;
+		}
+		slot = ( slot + 1 ) & (unsigned int)f->idMapMask;
+	}
+	return -1;
+}
+
+static void SpringTask( int start, int end, int worker, void* context )
+{
+	(void)worker;
+	b2fFluid* f = context;
+	float dt = f->h, spacing = f->def.particleSpacing;
+	bool adaptive = f->adaptive;
+	int count = f->count;
+	bool check = f->checkSprings;
+	for ( int i = start; i < end; ++i )
+	{
+		float moveX = 0.0f, moveY = 0.0f;
+		b2fSprings* sp = f->springs + i;
+		const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;
+		if ( def->springStiffness > 0.0f )
+		{
+			b2fCoord x = f->pos[i].x, y = f->pos[i].y;
+			float si = f->size[i], wi = spacing * spacing / ( si * si );
+			int self = f->id[i];
+			for ( int s = 0; s < sp->count; ++s )
+			{
+				float L = sp->rest[s];
+				int j = -1;
+				if ( L >= 0.0f )
+				{
+					int last = sp->index[s];
+					j = last >= 0 && last < count ? f->newIndex[last] : -1;
+					j = j >= 0 && j < count && f->id[j] == sp->id[s] ? j : FindParticle( f, sp->id[s] );
+					sp->index[s] = j;
+				}
+				// Only the first substep of a step checks the partner holds the spring too, which costs as much as
+				// the rest. A spring held at one end comes from a partner with no free slot, and lasts one step.
+				bool mutual = j >= 0 && f->liquid[j] == f->liquid[i] && check == false;
+				if ( j >= 0 && f->liquid[j] == f->liquid[i] && check )
+				{
+					const b2fSprings* other = f->springs + j;
+					for ( int t = 0; t < other->count && mutual == false; ++t )
+					{
+						mutual = other->id[t] == self;
+					}
+				}
+				if ( mutual == false )
+				{
+					sp->rest[s] = -1.0f;
+					continue;
+				}
+
+				float sj = f->size[j], h = adaptive ? si + sj : f->radius;
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), r = sqrtf( dx * dx + dy * dy );
+				float k = def->springStiffness * ( 1.0f - L / h );
+				if ( k > 0.0f && r > 1e-6f )
+				{
+					float wj = spacing * spacing / ( sj * sj );
+					float share = wi / ( wi + wj + 1.0f / ( k * dt * dt ) );
+					float move = share * ( r - L ) / r;
+					moveX += move * dx;
+					moveY += move * dy;
+				}
+
+				float yield = def->yieldRatio * L;
+				if ( r > L + yield )
+				{
+					L += dt * def->plasticity * ( r - L - yield );
+				}
+				else if ( r < L - yield )
+				{
+					L -= dt * def->plasticity * ( L - yield - r );
+				}
+				sp->rest[s] = L < h ? L : -1.0f;
+			}
+		}
+		f->dx[i] = moveX;
+		f->dy[i] = moveY;
+	}
+}
+
+static void SpringApplyTask( int start, int end, int worker, void* context )
+{
+	(void)worker;
+	b2fFluid* f = context;
+	bool adaptive = f->adaptive;
+	float limit = f->moveLimit * f->radius;
+	for ( int i = start; i < end; ++i )
+	{
+		float cap = adaptive ? f->moveLimit * 2.0f * f->size[i] : limit;
+		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i], scale = d2 > cap * cap ? cap / sqrtf( d2 ) : 1.0f;
+		f->pos[i].x += scale * f->dx[i];
+		f->pos[i].y += scale * f->dy[i];
+	}
+}
+
+void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
+{
+	// Where each id is now, in a table at least twice the particle count, filled in index order
+	int slots = 1;
+	while ( slots < 2 * f->count )
+	{
+		slots *= 2;
+	}
+	f->idMapMask = slots - 1;
+	memset( f->idMap, 0xFF, (size_t)slots * sizeof( b2fIdSlot ) );
+	for ( int i = 0; i < f->count; ++i )
+	{
+		unsigned int slot = ( (unsigned int)f->id[i] * 2654435761u ) & (unsigned int)f->idMapMask;
+		while ( f->idMap[slot].id != -1 )
+		{
+			slot = ( slot + 1 ) & (unsigned int)f->idMapMask;
+		}
+		f->idMap[slot] = ( b2fIdSlot ){ f->id[i], i };
+	}
+
+	b2SubStep_ParallelFor( context, SpringTask, f->count, 512, f );
+	b2SubStep_ParallelFor( context, SpringApplyTask, f->count, 2048, f );
 }
 
 void b2fPredict( b2fFluid* f, b2SubStepContext* context )

@@ -159,6 +159,11 @@ static void ReorderTask( int start, int end, int worker, void* context )
 #define B2F_REORDER_FIELD( type, name ) f->sorted.name[i] = f->name[p];
 		B2F_PARTICLE_FIELDS( B2F_REORDER_FIELD )
 #undef B2F_REORDER_FIELD
+		if ( f->springs != NULL )
+		{
+			f->sortedSprings[i] = f->springs[p];
+			f->newIndex[p] = i;
+		}
 
 		f->cell[i] = f->sortCell[p];
 		if ( f->uniformWindow == 0 )
@@ -180,6 +185,12 @@ static void SwapArrays( b2fFluid* f )
 	}
 	B2F_PARTICLE_FIELDS( B2F_SWAP_FIELD )
 #undef B2F_SWAP_FIELD
+	if ( f->springs != NULL )
+	{
+		b2fSprings* t = f->springs;
+		f->springs = f->sortedSprings;
+		f->sortedSprings = t;
+	}
 }
 
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context )
