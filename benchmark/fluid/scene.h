@@ -28,6 +28,7 @@ typedef enum LabSceneType
 	lab_space,
 	lab_plunge,
 	lab_cup,
+	lab_mercury,
 	lab_sceneCount
 } LabSceneType;
 
@@ -48,6 +49,9 @@ typedef struct LabScene
 	float liquidWidth;
 	float liquidHeight;
 	int crateCount;
+
+	// Colour of liquid 0 in the sample, red, green and blue from 0 to 255, or all zero for the usual blue
+	float color[3];
 
 	// One setting a scene can be driven by, or a null label if it has none
 	const char* controlLabel;
