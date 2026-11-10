@@ -5,7 +5,7 @@
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_SUBSTEPS,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_LIQUIDS, LAB_CALM, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
+// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
 // LAB_FRAME_EVERY.
 #include "scene.h"
 
@@ -446,6 +446,38 @@ int main( int argc, char** argv )
 		for ( int i = 0; i < frames; ++i )
 		{
 			LabStepScene( &scene, fluid, 1.0f / 60.0f );
+			// LAB_SINK=start,end: between those seconds drive every moving body down at 4 m/s, as dragging it to the
+			// floor with the mouse does, then let go. SINK lines give each body's height every half second.
+			if ( getenv( "LAB_SINK" ) )
+			{
+				float sinkStart = 0.0f, sinkEnd = 0.0f, t = (float)i / 60.0f;
+				sscanf( getenv( "LAB_SINK" ), "%f,%f", &sinkStart, &sinkEnd );
+				if ( i % 30 == 0 )
+				{
+					printf( "SINK %.1f", (double)t );
+				}
+				for ( int k = 0; k < scene.bodyCount; ++k )
+				{
+					if ( b2Body_GetType( scene.bodies[k] ) != b2_dynamicBody )
+					{
+						continue;
+					}
+					if ( t >= sinkStart && t < sinkEnd )
+					{
+						b2Body_SetLinearVelocity( scene.bodies[k], (b2Vec2){ 0.0f, -4.0f } );
+						b2Body_SetAngularVelocity( scene.bodies[k], 0.0f );
+					}
+					if ( i % 30 == 0 )
+					{
+						printf( " %.2f", (double)b2Body_GetPosition( scene.bodies[k] ).y );
+					}
+				}
+				if ( i % 30 == 0 )
+				{
+					printf( "\n" );
+				}
+			}
+
 			b2fFluid_Prepare( fluid );
 			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : ( scene.subSteps > 0 ? scene.subSteps : 4 ) );
 			b2fProfile p = b2fFluid_GetProfile( fluid );
