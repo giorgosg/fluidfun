@@ -704,6 +704,7 @@ static b2fFluid* CreateHoney( b2WorldId worldId, LabScene* scene, const b2fFluid
 // every so often, so blobs keep rising and sinking past each other, as wax does in a lava lamp.
 #define LAB_LAVA_LIGHT 0.4f
 #define LAB_LAVA_HEAVY 1.6f
+#define LAB_LAVA_RAMP 2.0f
 
 static b2fFluid* CreateLava( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
@@ -973,15 +974,20 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 
 		case lab_lava:
 		{
-			// Liquid 1 starts light and liquid 2 heavy, and they trade every period
+			// Liquid 1 starts light and liquid 2 heavy, and they trade every period, moving there over LAB_LAVA_RAMP
+			// seconds. A light liquid on the floor under a heavier one still shakes once it is light enough; the ramp
+			// only puts that off.
 			bool swapped = (int)( t / scene->control ) % 2 == 1;
 			float light = LAB_LAVA_LIGHT * scene->keep, heavy = LAB_LAVA_HEAVY * scene->keep;
-			if ( scene->second.massDensity != ( swapped ? heavy : light ) )
+			float target = swapped ? heavy : light, now = scene->second.massDensity;
+			if ( now != target )
 			{
-				scene->second.massDensity = swapped ? heavy : light;
+				float step = ( heavy - light ) * timeStep / LAB_LAVA_RAMP;
+				now = target > now ? b2MinFloat( now + step, target ) : b2MaxFloat( now - step, target );
+				scene->second.massDensity = now;
 				b2fFluid_SetLiquid( fluid, 1, &scene->second );
 				b2fLiquidDef other = scene->second;
-				other.massDensity = swapped ? light : heavy;
+				other.massDensity = light + heavy - now;
 				b2fFluid_SetLiquid( fluid, 2, &other );
 			}
 		}
