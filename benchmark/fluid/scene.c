@@ -144,7 +144,7 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.viewCenter = (b2Vec2){ 0.0f, 3.0f };
 			s.viewHalfWidth = 24.0f;
 			s.controlLabel = "Piston travel";
-			s.control = 1.5f;
+			s.control = 3.0f;
 			s.controlMin = 0.0f;
 			s.controlMax = 3.0f;
 			break;
