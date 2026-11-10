@@ -442,6 +442,67 @@ int main( int argc, char** argv )
 		for ( int i = 0; i < frames; ++i )
 		{
 			LabStepScene( &scene, fluid, 1.0f / 60.0f );
+
+			// LAB_SINK=start,end: push every moving body down onto the floor between those seconds, as a drag with the
+			// mouse does, then let go, printing each one's height every half second to see whether it comes back up
+			float sinkStart = -1.0f, sink = -1.0f;
+			if ( getenv( "LAB_SINK" ) )
+			{
+				sscanf( getenv( "LAB_SINK" ), "%f,%f", &sinkStart, &sink );
+			}
+			if ( sink > 0.0f )
+			{
+				float t = (float)i / 60.0f;
+				for ( int k = 0; k < scene.bodyCount; ++k )
+				{
+					if ( b2Body_GetType( scene.bodies[k] ) == b2_dynamicBody && t >= sinkStart && t < sink )
+					{
+						b2Body_SetLinearVelocity( scene.bodies[k], (b2Vec2){ 0.0f, -4.0f } );
+						b2Body_SetAngularVelocity( scene.bodies[k], 0.0f );
+					}
+				}
+				if ( i % 30 == 0 )
+				{
+					printf( "SINK %.1f", (double)t );
+					for ( int k = 0; k < scene.bodyCount; ++k )
+					{
+						if ( b2Body_GetType( scene.bodies[k] ) == b2_dynamicBody )
+						{
+							printf( " %.2f", (double)b2Body_GetPosition( scene.bodies[k] ).y );
+						}
+					}
+					printf( "\n" );
+				}
+			}
+			// LAB_HOLD=x,y[,end]: from 10 s on, hold every moving body still at that point, upright, to measure the
+			// liquid's push, until the end in seconds if given, then let go
+			float holdX = 0.0f, holdY = 0.0f, holdEnd = 1e9f;
+			if ( getenv( "LAB_HOLD" ) )
+			{
+				sscanf( getenv( "LAB_HOLD" ), "%f,%f,%f", &holdX, &holdY, &holdEnd );
+			}
+			if ( getenv( "LAB_HOLD" ) && i >= 600 && (float)i / 60.0f < holdEnd )
+			{
+				for ( int k = 0; k < scene.bodyCount; ++k )
+				{
+					if ( b2Body_GetType( scene.bodies[k] ) == b2_dynamicBody )
+					{
+						b2Body_SetTransform( scene.bodies[k], (b2Pos){ holdX, holdY }, b2Rot_identity );
+						b2Body_SetLinearVelocity( scene.bodies[k], b2Vec2_zero );
+						b2Body_SetAngularVelocity( scene.bodies[k], 0.0f );
+					}
+				}
+			}
+			if ( getenv( "LAB_HOLD" ) && (float)i / 60.0f >= holdEnd && i % 15 == 0 )
+			{
+				for ( int k = 0; k < scene.bodyCount; ++k )
+				{
+					if ( b2Body_GetType( scene.bodies[k] ) == b2_dynamicBody )
+					{
+						printf( "RISE %.2f y=%.3f vy=%.3f\n", (double)i / 60.0 - holdEnd, (double)b2Body_GetPosition( scene.bodies[k] ).y, (double)b2Body_GetLinearVelocity( scene.bodies[k] ).y );
+					}
+				}
+			}
 			b2fFluid_Prepare( fluid );
 			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : 4 );
 			b2fProfile p = b2fFluid_GetProfile( fluid );

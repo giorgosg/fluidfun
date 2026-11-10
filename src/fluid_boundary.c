@@ -133,12 +133,93 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 	return true;
 }
 
-// Contacts come from the last step, since the world is locked during the substeps.
+// A shape with flat sides as a polygon, grown by a radius. Circles touch at a point and make no patch.
+static bool FlatShape( b2ShapeId shapeId, float grow, b2Polygon* polygon )
+{
+	b2Vec2 p1, p2;
+	float radius;
+	switch ( b2Shape_GetType( shapeId ) )
+	{
+		case b2_polygonShape:
+			*polygon = b2Shape_GetPolygon( shapeId );
+			polygon->radius += grow;
+			return true;
+
+		case b2_capsuleShape:
+		{
+			b2Capsule c = b2Shape_GetCapsule( shapeId );
+			p1 = c.center1;
+			p2 = c.center2;
+			radius = c.radius;
+		}
+		break;
+
+		case b2_segmentShape:
+		{
+			b2Segment c = b2Shape_GetSegment( shapeId );
+			p1 = c.point1;
+			p2 = c.point2;
+			radius = 0.0f;
+		}
+		break;
+
+		case b2_chainSegmentShape:
+		{
+			b2ChainSegment c = b2Shape_GetChainSegment( shapeId );
+			p1 = c.segment.point1;
+			p2 = c.segment.point2;
+			radius = 0.0f;
+		}
+		break;
+
+		default:
+			return false;
+	}
+
+	b2Vec2 d = b2Sub( p2, p1 );
+	if ( b2LengthSquared( d ) <= FLT_EPSILON )
+	{
+		return false;
+	}
+	*polygon = (b2Polygon){ 0 };
+	polygon->vertices[0] = p1;
+	polygon->vertices[1] = p2;
+	polygon->centroid = b2Lerp( p1, p2, 0.5f );
+	polygon->normals[0] = b2RightPerp( b2Normalize( d ) );
+	polygon->normals[1] = b2Neg( polygon->normals[0] );
+	polygon->count = 2;
+	polygon->radius = radius + grow;
+	return true;
+}
+
+typedef struct b2fNearShapes
+{
+	b2BodyId body;
+	b2ShapeId shapes[64];
+	int count;
+} b2fNearShapes;
+
+static bool OverlapNear( b2ShapeId shapeId, void* context )
+{
+	b2fNearShapes* nearby = context;
+	if ( b2Shape_IsSensor( shapeId ) || B2_ID_EQUALS( b2Shape_GetBody( shapeId ), nearby->body ) )
+	{
+		return true;
+	}
+	nearby->shapes[nearby->count++] = shapeId;
+	return nearby->count < 64;
+}
+
+// Flat sides that a gap too thin for the liquid keeps it from. Particles stay half a spacing from every surface, so
+// no liquid gets into a gap under a spacing wide. Up to about two spacings only a single row fits, under its rest
+// density, so it pushes on the sides less than the liquid outside does. Box2D reports contact points
+// only within its speculative distance, about 2 cm, and a patch from those left a band above it where nothing pushed
+// up from below, so a body pushed onto the floor stayed down. So the gaps are found here, by growing the body's
+// shapes and colliding them with the shapes nearby, and the patch fades out over the band where one row fits.
 static void FindPatches( b2fFluid* f )
 {
-	enum { contactCapacity = 32 };
-	b2ContactData contacts[contactCapacity];
-
+	// A second row fits once the gap is a spacing and a row's height in the lattice wider than that
+	float closed = 2.0f * f->margin, reach = closed + 0.8660254f * closed;
 	f->patchCount = 0;
 	for ( int bodyIndex = 0; bodyIndex < f->bodyCount; ++bodyIndex )
 	{
@@ -150,39 +231,85 @@ static void FindPatches( b2fFluid* f )
 			continue;
 		}
 
-		int count = b2Body_GetContactData( body->id, contacts, contactCapacity );
-		for ( int i = 0; i < count; ++i )
+		b2fNearShapes nearby = { .body = body->id };
+		b2WorldTransform xfA = b2Body_GetTransform( body->id );
+		b2AABB bounds = b2Body_ComputeBounds( body->id );
+		b2AABB box = {
+			{ (float)( bounds.lowerBound.x - xfA.p.x ) - reach, (float)( bounds.lowerBound.y - xfA.p.y ) - reach },
+			{ (float)( bounds.upperBound.x - xfA.p.x ) + reach, (float)( bounds.upperBound.y - xfA.p.y ) + reach },
+		};
+		b2World_OverlapAABB( f->worldId, xfA.p, box, b2DefaultQueryFilter(), OverlapNear, &nearby );
+		if ( nearby.count == 0 )
 		{
-			const b2Manifold* manifold = &contacts[i].manifold;
-			// The manifold outlives the touch by a little. A gap this thin still has no liquid in it.
-			float maxGap = 2.0f * f->margin;
-			if ( manifold->pointCount != 2 || manifold->points[0].separation > maxGap || manifold->points[1].separation > maxGap )
+			continue;
+		}
+
+		b2ShapeId own[16];
+		int ownCount = b2Body_GetShapes( body->id, own, 16 );
+		for ( int i = 0; i < ownCount; ++i )
+		{
+			b2Polygon polygonA;
+			if ( b2Shape_IsSensor( own[i] ) || FlatShape( own[i], reach, &polygonA ) == false )
 			{
 				continue;
 			}
+			b2Filter filterA = b2Shape_GetFilter( own[i] );
 
-			if ( f->patchCount == f->patchCapacity )
+			for ( int j = 0; j < nearby.count; ++j )
 			{
-				f->patchCapacity = f->patchCapacity == 0 ? 32 : 2 * f->patchCapacity;
-				f->patches = realloc( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
-			}
+				b2Filter filterB = b2Shape_GetFilter( nearby.shapes[j] );
+				bool group = filterA.groupIndex == filterB.groupIndex && filterA.groupIndex != 0;
+				bool collide = group ? filterA.groupIndex > 0
+									 : ( filterA.maskBits & filterB.categoryBits ) != 0 && ( filterA.categoryBits & filterB.maskBits ) != 0;
+				b2Polygon polygonB;
+				if ( collide == false || FlatShape( nearby.shapes[j], 0.0f, &polygonB ) == false )
+				{
+					continue;
+				}
 
-			b2BodyId bodyA = b2Shape_GetBody( contacts[i].shapeIdA );
-			b2Pos center = b2Body_GetWorldCenter( bodyA );
-			float sign = B2_ID_EQUALS( bodyA, body->id ) ? -1.0f : 1.0f;
-			b2fPatch* patch = f->patches + f->patchCount;
-			patch->bodyIndex = bodyIndex;
-			patch->normalX = sign * manifold->normal.x;
-			patch->normalY = sign * manifold->normal.y;
-			for ( int j = 0; j < 2; ++j )
-			{
-				patch->x[j] = center.x + manifold->points[j].anchorA.x;
-				patch->y[j] = center.y + manifold->points[j].anchorA.y;
+				// The grown shape's points sit half the growth too far towards the other shape, and its separations
+				// are short by the growth, so they are zero where the patch fades out
+				b2WorldTransform xfB = b2Body_GetTransform( b2Shape_GetBody( nearby.shapes[j] ) );
+				b2LocalManifold manifold = b2CollidePolygons( &polygonA, &polygonB, b2InvMulWorldTransforms( xfA, xfB ) );
+				// A side at a slant is cut where its gap is wide enough for the liquid
+				float s0 = manifold.points[0].separation, s1 = manifold.points[1].separation;
+				if ( manifold.pointCount != 2 || ( s0 > 0.0f && s1 > 0.0f ) )
+				{
+					continue;
+				}
+				b2Vec2 ends[2] = { manifold.points[0].point, manifold.points[1].point };
+				if ( s0 > 0.0f || s1 > 0.0f )
+				{
+					// The separation runs linearly along the side
+					ends[s0 > 0.0f ? 0 : 1] = b2Lerp( ends[0], ends[1], s0 / ( s0 - s1 ) );
+				}
+				float fade = 1.0f / ( reach - closed );
+				float weight0 = b2ClampFloat( -s0 * fade, 0.0f, 1.0f ), weight1 = b2ClampFloat( -s1 * fade, 0.0f, 1.0f );
+
+				if ( f->patchCount == f->patchCapacity )
+				{
+					f->patchCapacity = f->patchCapacity == 0 ? 32 : 2 * f->patchCapacity;
+					f->patches = realloc( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
+				}
+
+				b2Vec2 normal = b2RotateVector( xfA.q, manifold.normal );
+				b2fPatch* patch = f->patches + f->patchCount;
+				patch->bodyIndex = bodyIndex;
+				patch->normalX = -normal.x;
+				patch->normalY = -normal.y;
+				for ( int k = 0; k < 2; ++k )
+				{
+					b2Pos point = b2TransformWorldPoint( xfA, b2MulSub( ends[k], 0.5f * reach, manifold.normal ) );
+					patch->x[k] = point.x;
+					patch->y[k] = point.y;
+				}
+				float dx = (float)( patch->x[1] - patch->x[0] ), dy = (float)( patch->y[1] - patch->y[0] );
+				patch->length = sqrtf( dx * dx + dy * dy );
+				patch->weight[0] = weight0;
+				patch->weight[1] = weight1;
+				f->patchCount += 1;
+				body->patchCount += 1;
 			}
-			float dx = (float)( patch->x[1] - patch->x[0] ), dy = (float)( patch->y[1] - patch->y[0] );
-			patch->length = sqrtf( dx * dx + dy * dy );
-			f->patchCount += 1;
-			body->patchCount += 1;
 		}
 	}
 
@@ -576,6 +703,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 
 		float pressure0 = sum[0] > 0.0f ? sum[1] / sum[0] : sum[3] / sum[2];
 		float pressure1 = sum[2] > 0.0f ? sum[3] / sum[2] : pressure0;
+		pressure0 *= patch->weight[0];
+		pressure1 *= patch->weight[1];
 		float both = pressure0 + pressure1;
 		if ( both <= 0.0f )
 		{

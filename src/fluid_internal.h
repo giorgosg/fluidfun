@@ -74,6 +74,8 @@ typedef struct b2fPatch
 	b2fCoord x[2], y[2];
 	float normalX, normalY;	 // pushes this body away from what it touches
 	float length;
+	// How much of the pressure each end takes, one where the gap is too thin for a particle, fading to zero
+	float weight[2];
 	int bodyIndex;
 } b2fPatch;
 
