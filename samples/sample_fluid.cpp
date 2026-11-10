@@ -150,6 +150,7 @@ public:
 	float m_pointSize = 4.0f;
 };
 
+// Scenes that show the liquid off are under Fluid. Fluid Tests holds the ones built to stress or measure it.
 static int sampleTank = RegisterSample( "Fluid", "Tank", SampleFluid::Create<lab_tank> );
 static int sampleHole = RegisterSample( "Fluid", "Hole And Slopes", SampleFluid::Create<lab_hole> );
 static int sampleBoat = RegisterSample( "Fluid", "Paddle Boat", SampleFluid::Create<lab_boat> );
@@ -157,8 +158,8 @@ static int sampleDrum = RegisterSample( "Fluid", "Rotating Tank", SampleFluid::C
 static int sampleWheel = RegisterSample( "Fluid", "Water Wheel", SampleFluid::Create<lab_wheel> );
 static int sampleWaves = RegisterSample( "Fluid", "Wave Maker", SampleFluid::Create<lab_waves> );
 static int sampleSplash = RegisterSample( "Fluid", "Splash", SampleFluid::Create<lab_splash> );
-static int sampleDrain = RegisterSample( "Fluid", "Deep Drain", SampleFluid::Create<lab_drain> );
-static int samplePool = RegisterSample( "Fluid", "Deep Pool", SampleFluid::Create<lab_pool> );
+static int sampleDrain = RegisterSample( "Fluid Tests", "Deep Drain", SampleFluid::Create<lab_drain> );
+static int samplePool = RegisterSample( "Fluid Tests", "Deep Pool", SampleFluid::Create<lab_pool> );
 static int sampleDrop = RegisterSample( "Fluid", "Drop", SampleFluid::Create<lab_drop> );
 static int sampleLayers = RegisterSample( "Fluid", "Three Liquids", SampleFluid::Create<lab_layers> );
-static int sampleChain = RegisterSample( "Fluid", "Chain Bowl", SampleFluid::Create<lab_chain> );
+static int sampleChain = RegisterSample( "Fluid Tests", "Chain Bowl", SampleFluid::Create<lab_chain> );
