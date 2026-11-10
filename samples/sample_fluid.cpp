@@ -168,3 +168,4 @@ static int sampleHoney = RegisterSample( "Fluid", "Honey Race", SampleFluid::Cre
 static int sampleLava = RegisterSample( "Fluid", "Lava Lamp", SampleFluid::Create<lab_lava> );
 static int sampleSpace = RegisterSample( "Fluid", "Zero-G Drops", SampleFluid::Create<lab_space> );
 static int samplePlunge = RegisterSample( "Fluid", "Drop Into Pool", SampleFluid::Create<lab_plunge> );
+static int sampleCup = RegisterSample( "Fluid", "Carry A Cup", SampleFluid::Create<lab_cup> );
