@@ -22,6 +22,7 @@ typedef enum LabSceneType
 	lab_drop,
 	lab_layers,
 	lab_chain,
+	lab_tap,
 	lab_sceneCount
 } LabSceneType;
 
@@ -56,6 +57,10 @@ typedef struct LabScene
 	int leaked;
 	int pumped;
 	int stall, longestStall;
+
+	// Liquid a scene keeps where it put it, such as a basin's water, as area in particle sizes squared, so that it
+	// can move the rest back
+	float keep;
 } LabScene;
 
 LabScene LabDefaultScene( LabSceneType type );

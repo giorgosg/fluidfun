@@ -205,6 +205,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 0.3f;
 			break;
 
+		case lab_tap:
+			s.name = "Dripping Tap";
+			s.viewCenter = (b2Vec2){ 0.0f, 4.8f };
+			s.viewHalfWidth = 5.0f;
+			s.controlLabel = "Nozzle width";
+			s.control = 0.4f;
+			s.controlMin = 0.2f;
+			s.controlMax = 0.8f;
+			break;
+
 		default:
 			break;
 	}
@@ -215,6 +225,11 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 {
 	switch ( type )
 	{
+		case lab_tap:
+			// Thick enough that the stream breaks into drops. From about 0.15 the liquid holds in the nozzle like a gel.
+			def->liquid.cohesion = 0.1f;
+			break;
+
 		case lab_drop:
 			// Thicker than water, so the drop holds together and shows its tension
 			def->liquid.cohesion = 0.2f;
@@ -524,6 +539,49 @@ static b2fFluid* CreateChain( b2WorldId worldId, LabScene* scene, const b2fFluid
 	return AddLiquid( worldId, def, (b2Vec2){ -3.0f, 1.5f }, (b2Vec2){ 3.0f, 3.5f } );
 }
 
+// A small tank drains through a nozzle into a basin. With a thick liquid it hangs from the nozzle until a drop
+// breaks off. Whatever the basin gains over its first fill goes back into the tank.
+#define LAB_TAP_BASIN 1.2f
+
+// Particles merge and split, so liquid is counted by area
+static float BasinArea( b2fFluid* fluid )
+{
+	int n = b2fFluid_GetParticleCount( fluid );
+	const b2Pos* pos = b2fFluid_GetPositions( fluid );
+	const float* size = b2fFluid_GetSizes( fluid );
+	float area = 0.0f;
+	for ( int i = 0; i < n; ++i )
+	{
+		area += pos[i].y < LAB_TAP_BASIN + 1.0f ? size[i] * size[i] : 0.0f;
+	}
+	return area;
+}
+
+static b2fFluid* CreateTap( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+
+	// Basin
+	AddBox( ground, 0.0f, -0.25f, 4.5f, 0.25f, 0.0f, 0.0f );
+	// Walls up past the tank, since drops landing throw the odd droplet as high as 7 m
+	AddBox( ground, -4.25f, 4.75f, 0.25f, 5.0f, 0.0f, 0.0f );
+	AddBox( ground, 4.25f, 4.75f, 0.25f, 5.0f, 0.0f, 0.0f );
+
+	// Tank, with the nozzle a short tube under a hole in its floor
+	float half = 0.5f * scene->control, floor = 7.0f, wall = 0.1f;
+	AddBox( ground, -1.0f - 0.5f * half, floor, 1.0f - 0.5f * half, 0.1f, 0.0f, 0.0f );
+	AddBox( ground, 1.0f + 0.5f * half, floor, 1.0f - 0.5f * half, 0.1f, 0.0f, 0.0f );
+	AddBox( ground, -2.1f, floor + 1.2f, 0.1f, 1.3f, 0.0f, 0.0f );
+	AddBox( ground, 2.1f, floor + 1.2f, 0.1f, 1.3f, 0.0f, 0.0f );
+	AddBox( ground, -half - wall, floor - 0.35f, wall, 0.3f, 0.0f, 0.0f );
+	AddBox( ground, half + wall, floor - 0.35f, wall, 0.3f, 0.0f, 0.0f );
+
+	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ -3.9f, 0.05f }, (b2Vec2){ 3.9f, LAB_TAP_BASIN } );
+	scene->keep = BasinArea( fluid );
+	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -1.9f, floor + 0.15f }, (b2Pos){ 1.9f, floor + 1.5f } );
+	return fluid;
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -554,6 +612,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateLayers( worldId, scene, def );
 		case lab_chain:
 			return CreateChain( worldId, scene, def );
+		case lab_tap:
+			return CreateTap( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -612,6 +672,20 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			for ( int a = 0; a < 3; ++a )
 			{
 				b2fFluid_SetCohesionBetween( fluid, a, ( a + 1 ) % 3, scene->control );
+			}
+			break;
+
+		case lab_tap:
+			// Every fourth frame, so that what was put in the tank last time has fallen clear
+			if ( (int)( t / timeStep + 0.5f ) % 4 == 0 )
+			{
+				float extra = BasinArea( fluid ) - scene->keep;
+				if ( extra > 0.0f )
+				{
+					b2AABB bottom = { { -4.0f, 0.0f }, { 4.0f, 0.3f } };
+					b2AABB top = { { -1.8f, 8.6f }, { 1.8f, 8.8f } };
+					b2fFluid_MoveParticles( fluid, bottom, top, (b2Vec2){ 0.0f, -1.0f }, 10 );
+				}
 			}
 			break;
 
