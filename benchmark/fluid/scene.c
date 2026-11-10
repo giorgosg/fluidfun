@@ -295,9 +295,11 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 			break;
 
 		case lab_jelly:
-			// Liquid 0 is the jelly: springs that keep their rest length, so it springs back
+			// Liquid 0 is the jelly: springs that keep their rest length, so it springs back. All one size, which shows
+			// the springs best; the dough copies it.
 			def->liquid.springStiffness = 10000.0f;
 			def->liquid.plasticity = 0.0f;
+			def->liquid.adaptiveRatio = 1.0f;
 			break;
 
 		case lab_slime:
