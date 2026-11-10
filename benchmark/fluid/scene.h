@@ -59,6 +59,10 @@ typedef struct LabScene
 } LabScene;
 
 LabScene LabDefaultScene( LabSceneType type );
+
+/// Changes the fluid settings a scene starts from, for scenes that show a liquid other than water. Call it on
+/// b2fDefaultFluidDef before creating the scene.
+void LabSceneSettings( LabSceneType type, b2fFluidDef* def );
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def );
 
 /// Call once per frame before b2fFluid_Prepare. Drives whatever the scene moves.
