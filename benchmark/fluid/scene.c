@@ -255,6 +255,12 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 2.0f;
 			break;
 
+		case lab_cup:
+			s.name = "Carry A Cup";
+			s.viewCenter = (b2Vec2){ 0.0f, 2.5f };
+			s.viewHalfWidth = 4.5f;
+			break;
+
 		default:
 			break;
 	}
@@ -743,6 +749,29 @@ static b2fFluid* CreatePlunge( b2WorldId worldId, LabScene* scene, const b2fFlui
 	return AddLiquid( worldId, def, (b2Vec2){ -w + def->particleSpacing, def->particleSpacing }, (b2Vec2){ w - def->particleSpacing, 1.8f } );
 }
 
+// A cup of liquid to pick up with the mouse, slosh about and pour into the bowl. Try it with the Viscosity and
+// Cohesion sliders up.
+static b2fFluid* CreateCup( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	AddBox( ground, 0.0f, -0.3f, 8.8f, 0.3f, 0.0f, 0.0f );
+	AddBox( ground, -8.5f, 2.0f, 0.3f, 2.3f, 0.0f, 0.0f );
+	AddBox( ground, 8.5f, 2.0f, 0.3f, 2.3f, 0.0f, 0.0f );
+
+	// The bowl
+	AddBox( ground, 2.8f, 0.6f, 0.15f, 0.6f, 0.0f, 0.0f );
+	AddBox( ground, 7.0f, 0.6f, 0.15f, 0.6f, 0.0f, 0.0f );
+
+	b2BodyId cup = AddBody( scene, worldId, b2_dynamicBody, -4.0f, 0.1f );
+	AddBox( cup, 0.0f, 0.0f, 1.0f, 0.1f, 0.0f, 1.0f );
+	AddBox( cup, -0.9f, 0.85f, 0.1f, 0.75f, 0.0f, 1.0f );
+	AddBox( cup, 0.9f, 0.85f, 0.1f, 0.75f, 0.0f, 1.0f );
+	scene->driven = cup;
+
+	float s = def->particleSpacing;
+	return AddLiquid( worldId, def, (b2Vec2){ -4.8f + s, 0.1f + s }, (b2Vec2){ -3.2f - s, 1.2f } );
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -783,6 +812,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateSpace( worldId, scene, def );
 		case lab_plunge:
 			return CreatePlunge( worldId, scene, def );
+		case lab_cup:
+			return CreateCup( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
