@@ -270,6 +270,15 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.color[2] = 190.0f;
 			break;
 
+		case lab_slime:
+			s.name = "Slime Stairs";
+			s.viewCenter = (b2Vec2){ 0.0f, 2.5f };
+			s.viewHalfWidth = 3.5f;
+			s.color[0] = 90.0f;
+			s.color[1] = 200.0f;
+			s.color[2] = 70.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -283,6 +292,14 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 		case lab_tap:
 			// Thick enough that the stream breaks into drops. From about 0.15 the liquid holds in the nozzle like a gel.
 			def->liquid.cohesion = 0.1f;
+			break;
+
+		case lab_slime:
+			// Thick, sticky and slow. All one size, since it goes back to the top by being laid out again.
+			def->liquid.cohesion = 0.25f;
+			def->liquid.linearViscosity = 10.0f;
+			def->liquid.friction = 0.5f;
+			def->liquid.adaptiveRatio = 1.0f;
 			break;
 
 		case lab_mercury:
@@ -808,6 +825,32 @@ static b2fFluid* CreateMercury( b2WorldId worldId, LabScene* scene, const b2fFlu
 	return AddLiquid( worldId, def, (b2Vec2){ -w + s, s }, (b2Vec2){ w - s, 1.0f } );
 }
 
+// A blob of slime oozes down a staircase, and goes back to the top every so often
+#define LAB_SLIME_EVERY 15.0f
+#define LAB_SLIME_STEPS 7
+
+static b2fFluid* CreateSlime( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	AddBox( ground, 0.0f, -0.25f, 6.5f, 0.25f, 0.0f, 0.0f );
+	AddBox( ground, -6.25f, 2.75f, 0.25f, 2.75f, 0.0f, 0.0f );
+	AddBox( ground, 6.25f, 1.5f, 0.25f, 1.5f, 0.0f, 0.0f );
+
+	// A landing at the top, then steps 0.8 m deep and 0.5 m high down to the floor
+	float x = -6.0f, top = 4.0f;
+	AddBox( ground, x + 0.75f, 0.5f * top, 0.75f, 0.5f * top, 0.0f, 0.0f );
+	x += 1.5f;
+	for ( int i = 1; i <= LAB_SLIME_STEPS; ++i )
+	{
+		float y = top - 0.5f * (float)i;
+		AddBox( ground, x + 0.4f, 0.5f * y, 0.4f, 0.5f * y, 0.0f, 0.0f );
+		x += 0.8f;
+	}
+
+	float s = def->particleSpacing;
+	return AddLiquid( worldId, def, (b2Vec2){ -6.0f + s, top + s }, (b2Vec2){ -4.6f, top + 1.2f } );
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -852,6 +895,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateCup( worldId, scene, def );
 		case lab_mercury:
 			return CreateMercury( worldId, scene, def );
+		case lab_slime:
+			return CreateSlime( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -975,6 +1020,15 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 				b2AABB floor = { { -4.9f, 0.0f }, { 4.9f, 0.3f } };
 				b2AABB drop = { { -half, 5.0f }, { half, 5.0f + scene->control } };
 				b2fFluid_MoveParticles( fluid, floor, drop, b2Vec2_zero, perRow * perRow );
+			}
+			break;
+
+		case lab_slime:
+			if ( fmodf( t, LAB_SLIME_EVERY ) < timeStep && t > 1.0f )
+			{
+				b2AABB all = { { -6.0f, 0.0f }, { 6.0f, 6.0f } };
+				b2AABB start = { { -5.9f, 4.1f }, { -4.6f, 6.0f } };
+				b2fFluid_MoveParticles( fluid, all, start, b2Vec2_zero, b2fFluid_GetParticleCount( fluid ) );
 			}
 			break;
 
