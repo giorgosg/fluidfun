@@ -31,6 +31,11 @@ public:
 		{
 			m_context->camera.center = { m_scene->viewCenter.x, m_scene->viewCenter.y };
 			m_context->camera.zoom = m_scene->viewHalfWidth;
+			// Only on opening the scene, so the Sub-steps slider still holds across restarts
+			if ( m_scene->subSteps > 0 )
+			{
+				m_context->subStepCount = m_scene->subSteps;
+			}
 		}
 
 		m_fluid = LabCreateScene( m_worldId, m_scene, m_def );

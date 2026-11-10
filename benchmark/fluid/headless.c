@@ -447,7 +447,7 @@ int main( int argc, char** argv )
 		{
 			LabStepScene( &scene, fluid, 1.0f / 60.0f );
 			b2fFluid_Prepare( fluid );
-			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : 4 );
+			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : ( scene.subSteps > 0 ? scene.subSteps : 4 ) );
 			b2fProfile p = b2fFluid_GetProfile( fluid );
 			measureSum += p.measure;
 			if ( settle >= 0.0f )
