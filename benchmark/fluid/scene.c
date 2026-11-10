@@ -215,6 +215,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 0.8f;
 			break;
 
+		case lab_honey:
+			s.name = "Honey Race";
+			s.viewCenter = (b2Vec2){ 0.0f, 2.5f };
+			s.viewHalfWidth = 7.0f;
+			s.controlLabel = "Honey viscosity";
+			s.control = 20.0f;
+			s.controlMin = 1.0f;
+			s.controlMax = 40.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -582,6 +592,40 @@ static b2fFluid* CreateTap( b2WorldId worldId, LabScene* scene, const b2fFluidDe
 	return fluid;
 }
 
+// One lane of the race: a shelf with a block of liquid on it, a ramp of about 12 degrees, and a floor with a wall at
+// the end
+static void AddLane( b2fFluid* fluid, b2BodyId ground, int liquid, float x0 )
+{
+	float top = 1.7f;
+	AddBox( ground, x0 + 5.7f, -0.2f, 5.9f, 0.2f, 0.0f, 0.0f );
+	AddBox( ground, x0 + 11.4f, 1.4f, 0.2f, 1.6f, 0.0f, 0.0f );
+	AddBox( ground, x0 - 0.2f, 0.5f * ( top + 3.0f ), 0.2f, 0.5f * ( top + 3.0f ), 0.0f, 0.0f );
+	AddBox( ground, x0 + 1.0f, top, 1.0f, 0.2f, 0.0f, 0.0f );
+	AddPlank( ground, (b2Vec2){ x0 + 1.9f, top + 0.05f }, (b2Vec2){ x0 + 10.0f, -0.1f }, 0.2f );
+	b2fFluid_CreateParticlesInBox( fluid, liquid, (b2Pos){ x0 + 0.05f, top + 0.25f }, (b2Pos){ x0 + 1.95f, top + 1.7f } );
+}
+
+// Water and honey run down two lanes from the same start. The Honey viscosity slider changes the honey as it runs.
+static b2fFluid* CreateHoney( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	b2fFluid* fluid = b2fCreateFluid( worldId, def );
+
+	b2fLiquidDef honey = def->liquid;
+	honey.massDensity = 1.4f * def->liquid.massDensity;
+	// Viscosity here only damps neighbours closing in, not shear, so on its own it does not slow honey down. Full grip
+	// on the ramp and high cohesion make it hold together as a dome and creep, where water spreads and runs.
+	honey.cohesion = 0.2f;
+	honey.friction = 1.0f;
+	honey.linearViscosity = scene->control;
+	scene->second = honey;
+	int liquid = b2fFluid_CreateLiquid( fluid, &honey );
+
+	AddLane( fluid, ground, 0, -12.0f );
+	AddLane( fluid, ground, liquid, 0.5f );
+	return fluid;
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -614,6 +658,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateChain( worldId, scene, def );
 		case lab_tap:
 			return CreateTap( worldId, scene, def );
+		case lab_honey:
+			return CreateHoney( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -686,6 +732,14 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 					b2AABB top = { { -1.8f, 8.6f }, { 1.8f, 8.8f } };
 					b2fFluid_MoveParticles( fluid, bottom, top, (b2Vec2){ 0.0f, -1.0f }, 10 );
 				}
+			}
+			break;
+
+		case lab_honey:
+			if ( scene->second.linearViscosity != scene->control )
+			{
+				scene->second.linearViscosity = scene->control;
+				b2fFluid_SetLiquid( fluid, 1, &scene->second );
 			}
 			break;
 
