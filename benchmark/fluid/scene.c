@@ -183,6 +183,10 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.name = "Drop";
 			s.viewCenter = (b2Vec2){ 0.0f, 4.0f };
 			s.viewHalfWidth = 6.0f;
+			s.controlLabel = "Gravity";
+			s.control = 1.0f;
+			s.controlMin = 0.0f;
+			s.controlMax = 1.0f;
 			break;
 
 		case lab_chain:
@@ -211,10 +215,14 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 {
 	switch ( type )
 	{
+		case lab_drop:
+			// Thicker than water, so the drop holds together and shows its tension
+			def->liquid.cohesion = 0.2f;
+			break;
+
 		default:
 			break;
 	}
-	(void)def;
 }
 
 static b2fFluid* CreateTank( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
@@ -431,7 +439,8 @@ static b2fFluid* CreatePool( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	return AddLiquid( worldId, def, (b2Vec2){ -width + def->particleSpacing, def->particleSpacing }, (b2Vec2){ width - def->particleSpacing, depth } );
 }
 
-// A square of liquid over a low tray. Tension rounds it as it falls, and without gravity it should become a disc.
+// A square of thick liquid over a low tray. Tension rounds it as it falls. The Gravity slider scales the world's
+// gravity, down to none, where it floats.
 static b2fFluid* CreateDrop( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
@@ -604,6 +613,10 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			{
 				b2fFluid_SetCohesionBetween( fluid, a, ( a + 1 ) % 3, scene->control );
 			}
+			break;
+
+		case lab_drop:
+			b2World_SetGravity( b2Body_GetWorld( scene->bodies[0] ), (b2Vec2){ 0.0f, -10.0f * scene->control } );
 			break;
 
 		case lab_splash:
