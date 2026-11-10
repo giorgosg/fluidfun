@@ -181,7 +181,7 @@ LabScene LabDefaultScene( LabSceneType type )
 
 		case lab_drop:
 			s.name = "Drop";
-			s.viewCenter = (b2Vec2){ 0.0f, 4.0f };
+			s.viewCenter = (b2Vec2){ 0.0f, 5.0f };
 			s.viewHalfWidth = 6.0f;
 			s.controlLabel = "Gravity";
 			s.control = 1.0f;
@@ -544,11 +544,10 @@ static b2fFluid* CreatePool( b2WorldId worldId, LabScene* scene, const b2fFluidD
 static b2fFluid* CreateDrop( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
-	AddBox( ground, 0.0f, -0.5f, 6.0f, 0.5f, 0.0f, 0.0f );
-	// Walls 6 m high: at cohesion 0.07 the landing throws droplets over 3 m ones
-	AddBox( ground, -5.5f, 3.0f, 0.5f, 3.0f, 0.0f, 0.0f );
-	AddBox( ground, 5.5f, 3.0f, 0.5f, 3.0f, 0.0f, 0.0f );
-	return AddLiquid( worldId, def, (b2Vec2){ -1.0f, 5.0f }, (b2Vec2){ 1.0f, 7.0f } );
+	AddBox( ground, 0.0f, -0.5f, 9.5f, 0.5f, 0.0f, 0.0f );
+	AddBox( ground, -9.0f, 5.0f, 0.5f, 5.0f, 0.0f, 0.0f );
+	AddBox( ground, 9.0f, 5.0f, 0.5f, 5.0f, 0.0f, 0.0f );
+	return AddLiquid( worldId, def, (b2Vec2){ -2.0f, 5.5f }, (b2Vec2){ 2.0f, 9.5f } );
 }
 
 // Three liquids stacked the wrong way up: light oil at the bottom, water, then heavy syrup on top. They turn over,
