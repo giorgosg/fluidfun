@@ -126,7 +126,7 @@ public:
 											 wide ? ImGuiSliderFlags_Logarithmic : 0 );
 
 			// The hole and the ball are built into the scene
-			rebuild |= moved && ( m_scene->type == lab_hole || m_scene->type == lab_tap || m_scene->type == lab_splash || m_scene->type == lab_drain || m_scene->type == lab_pool );
+			rebuild |= moved && ( m_scene->type == lab_hole || m_scene->type == lab_tap || m_scene->type == lab_space || m_scene->type == lab_splash || m_scene->type == lab_drain || m_scene->type == lab_pool );
 		}
 		if ( rebuild )
 		{
@@ -166,3 +166,4 @@ static int sampleChain = RegisterSample( "Fluid Tests", "Chain Bowl", SampleFlui
 static int sampleTap = RegisterSample( "Fluid", "Dripping Tap", SampleFluid::Create<lab_tap> );
 static int sampleHoney = RegisterSample( "Fluid", "Honey Race", SampleFluid::Create<lab_honey> );
 static int sampleLava = RegisterSample( "Fluid", "Lava Lamp", SampleFluid::Create<lab_lava> );
+static int sampleSpace = RegisterSample( "Fluid", "Zero-G Drops", SampleFluid::Create<lab_space> );

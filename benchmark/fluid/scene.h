@@ -25,6 +25,7 @@ typedef enum LabSceneType
 	lab_tap,
 	lab_honey,
 	lab_lava,
+	lab_space,
 	lab_sceneCount
 } LabSceneType;
 

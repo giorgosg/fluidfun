@@ -235,6 +235,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 20.0f;
 			break;
 
+		case lab_space:
+			s.name = "Zero-G Drops";
+			s.viewCenter = (b2Vec2){ 0.0f, 0.0f };
+			s.viewHalfWidth = 6.5f;
+			s.controlLabel = "Drop speed";
+			s.control = 0.8f;
+			s.controlMin = 0.0f;
+			s.controlMax = 4.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -248,6 +258,13 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 		case lab_tap:
 			// Thick enough that the stream breaks into drops. From about 0.15 the liquid holds in the nozzle like a gel.
 			def->liquid.cohesion = 0.1f;
+			break;
+
+		case lab_space:
+			// No weight, thick, and all one size, since giving the drops a start speed lays them out at the finest size
+			def->liquid.gravityScale = 0.0f;
+			def->liquid.cohesion = 0.2f;
+			def->liquid.adaptiveRatio = 1.0f;
 			break;
 
 		case lab_drop:
@@ -667,6 +684,36 @@ static b2fFluid* CreateLava( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	return fluid;
 }
 
+// Four drops of thick liquid with no weight round up, meet a little off centre, and merge into one spinning blob. Fast
+// enough, they bounce apart instead.
+#define LAB_SPACE_DROPS 4
+#define LAB_SPACE_HALF 0.6f
+
+static b2Vec2 SpaceDrop( int i )
+{
+	float a = 0.25f * B2_PI + 0.5f * B2_PI * (float)i;
+	return (b2Vec2){ 3.5f * cosf( a ), 3.5f * sinf( a ) };
+}
+
+static b2fFluid* CreateSpace( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float w = 9.0f, h = 6.0f, t = 0.3f;
+	AddBox( ground, 0.0f, -h - t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( ground, 0.0f, h + t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( ground, -w - t, 0.0f, t, h, 0.0f, 0.0f );
+	AddBox( ground, w + t, 0.0f, t, h, 0.0f, 0.0f );
+
+	b2fFluid* fluid = b2fCreateFluid( worldId, def );
+	for ( int i = 0; i < LAB_SPACE_DROPS; ++i )
+	{
+		b2Vec2 c = SpaceDrop( i );
+		b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ c.x - LAB_SPACE_HALF, c.y - LAB_SPACE_HALF },
+									   (b2Pos){ c.x + LAB_SPACE_HALF, c.y + LAB_SPACE_HALF } );
+	}
+	return fluid;
+}
+
 b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
 {
 	scene->bodyCount = 0;
@@ -703,6 +750,8 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 			return CreateHoney( worldId, scene, def );
 		case lab_lava:
 			return CreateLava( worldId, scene, def );
+		case lab_space:
+			return CreateSpace( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -801,6 +850,21 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			}
 		}
 		break;
+
+		case lab_space:
+			// Moving a drop onto itself is how it gets its start speed: towards the middle, turned a little so that
+			// they pass off centre
+			if ( t == 0.0f )
+			{
+				for ( int i = 0; i < LAB_SPACE_DROPS; ++i )
+				{
+					b2Vec2 c = SpaceDrop( i );
+					b2Vec2 v = b2RotateVector( b2MakeRot( 0.15f ), b2MulSV( -scene->control / 3.5f, c ) );
+					b2AABB box = { { c.x - LAB_SPACE_HALF - 0.1f, c.y - LAB_SPACE_HALF - 0.1f }, { c.x + LAB_SPACE_HALF + 0.1f, c.y + LAB_SPACE_HALF + 0.1f } };
+					b2fFluid_MoveParticles( fluid, box, box, v, 100000 );
+				}
+			}
+			break;
 
 		case lab_drop:
 			b2World_SetGravity( b2Body_GetWorld( scene->bodies[0] ), (b2Vec2){ 0.0f, -10.0f * scene->control } );
