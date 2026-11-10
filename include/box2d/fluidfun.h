@@ -24,7 +24,9 @@ typedef struct b2fLiquidDef
 	float nearStiffness;
 	/// Share of the pull that pressure gives below rest density, from 0, where pressure only pushes, to 1, where it
 	/// pulls as hard as it pushes. At 1 the pull is the liquid's only tension, as in Clavet's double density, and it
-	/// can tear the bulk into holes. Lower values need cohesion to hold the liquid together.
+	/// can tear the bulk into holes. Lower values need cohesion to hold the liquid together. At 0, liquid with little
+	/// cohesion and adaptive sizes never settles: gaps left by merging particles do not close, so particles split and
+	/// merge over and over. The default of a half closes them without tearing holes.
 	float tensilePressure;
 	/// Pull between neighbours more than one spacing apart, and a push closer in, as its own term so that tension is
 	/// set apart from stiffness. In the same units as stiffness. This is the pull within the liquid; the pull between

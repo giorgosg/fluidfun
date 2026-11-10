@@ -5,7 +5,8 @@
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_SUBSTEPS,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_LIQUIDS, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with LAB_FRAME_EVERY.
+// LAB_LIQUIDS, LAB_CALM, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
+// LAB_FRAME_EVERY.
 #include "scene.h"
 
 #include "box2d/math_functions.h"
@@ -529,6 +530,56 @@ int main( int argc, char** argv )
 				snprintf( path, sizeof( path ), "%s/%04d.ppm", frameDir, i );
 				WriteFrame( path, fluid, &scene );
 			}
+			// LAB_CALM: every half second, the liquid's mean and peak speed and the mean height of its particles, to see
+			// how quickly liquid spawned at rest settles, and how far it sinks or swells while it does
+			if ( getenv( "LAB_CALM" ) && i % 30 == 0 )
+			{
+				int n = b2fFluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2fFluid_GetPositions( fluid );
+				const float* cvx = b2fFluid_GetVelocitiesX( fluid );
+				const float* cvy = b2fFluid_GetVelocitiesY( fluid );
+				double speedSum = 0.0, height = 0.0;
+				float peak = 0.0f;
+				for ( int k = 0; k < n; ++k )
+				{
+					float v = sqrtf( cvx[k] * cvx[k] + cvy[k] * cvy[k] );
+					speedSum += v;
+					height += pos[k].y;
+					peak = peak > v ? peak : v;
+				}
+				printf( "CALM %.1f mean %.3f peak %.2f y %.3f\n", (double)i / 60.0, n > 0 ? speedSum / n : 0.0, (double)peak, n > 0 ? height / n : 0.0 );
+			}
+			// After the first and last steps, density over rest density and particle size in bands a metre high, to see
+			// whether liquid spawns packed tighter or looser than it rests
+			if ( getenv( "LAB_CALM" ) && ( i == 0 || i == frames - 1 ) )
+			{
+				int n = b2fFluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2fFluid_GetPositions( fluid );
+				{
+					const float* rho = b2fFluid_GetDensities( fluid );
+					const float* size = b2fFluid_GetSizes( fluid );
+					float rest = b2fFluid_GetRestDensity( fluid );
+					double bandRho[64] = { 0 }, bandSize[64] = { 0 };
+					int bandCount[64] = { 0 };
+					for ( int k = 0; k < n; ++k )
+					{
+						int band = (int)floor( pos[k].y );
+						band = band < 0 ? 0 : ( band > 63 ? 63 : band );
+						bandRho[band] += rho[k] / rest;
+						bandSize[band] += size[k];
+						bandCount[band] += 1;
+					}
+					for ( int band = 0; band < 64; ++band )
+					{
+						if ( bandCount[band] > 0 )
+						{
+							printf( "%s y %d-%d: %d particles, density/rest %.3f, size %.3f\n", i == 0 ? "SPAWN" : "END", band, band + 1,
+									bandCount[band], bandRho[band] / bandCount[band], bandSize[band] / bandCount[band] );
+						}
+					}
+				}
+			}
+
 			if ( getenv( "LAB_CHANGES" ) )
 			{
 				printf( "CH %d\n", p.sizeChanges );
