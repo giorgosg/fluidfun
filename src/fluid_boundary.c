@@ -59,7 +59,11 @@ static int FindBody( b2fFluid* f, b2BodyId id )
 		f->bodyCapacity = f->bodyCapacity == 0 ? 32 : 2 * f->bodyCapacity;
 		f->bodies = realloc( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
 	}
-	f->bodies[f->bodyCount] = (b2fBody){ .id = id };
+	f->bodies[f->bodyCount] = (b2fBody){
+		.id = id,
+		.lastVelocity = b2Body_GetLinearVelocity( id ),
+		.lastAngularVelocity = b2Body_GetAngularVelocity( id ),
+	};
 	return f->bodyCount++;
 }
 
@@ -354,7 +358,8 @@ static void ContactTask( int start, int end, int worker, void* context )
 			b2Vec2 n = b2RotateVector( body->motion.rotation, normal );
 			density += a[0] + blend * ( b[0] - a[0] );
 			nearDensity += a[1] + blend * ( b[1] - a[1] );
-			contacts[count++] = (b2fContact){ s->bodyIndex, n.x, n.y, a[2] + blend * ( b[2] - a[2] ), a[3] + blend * ( b[3] - a[3] ), 0.0f };
+			float share = 1.0f - ( distance > 0.0f ? distance : 0.0f ) / h;
+			contacts[count++] = (b2fContact){ s->bodyIndex, n.x, n.y, a[2] + blend * ( b[2] - a[2] ), a[3] + blend * ( b[3] - a[3] ), 0.0f, share };
 		}
 		f->contactCount[i] = count;
 		f->wallDensity[i] = density;
@@ -383,28 +388,39 @@ static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, b
 	}
 }
 
-// A particle near two shapes of one body samples its patches once
-static inline bool FirstContact( const b2fContact* contacts, int c )
-{
-	for ( int e = 0; e < c; ++e )
-	{
-		if ( contacts[e].bodyIndex == contacts[c].bodyIndex )
-		{
-			return false;
-		}
-	}
-	return true;
-}
-
 // Reactions go to a chunk chosen by particle index, and chunks sum in order, so the total does not
 // depend on which worker ran which chunk.
+// A particle near two shapes of one body counts once for it, as close as its nearest shape. Zero for any but the
+// first contact with each body.
+static inline float ContactShare( const b2fContact* contacts, int count, int c )
+{
+	int bodyIndex = contacts[c].bodyIndex;
+	for ( int e = 0; e < c; ++e )
+	{
+		if ( contacts[e].bodyIndex == bodyIndex )
+		{
+			return 0.0f;
+		}
+	}
+
+	float share = contacts[c].share;
+	for ( int e = c + 1; e < count; ++e )
+	{
+		if ( contacts[e].bodyIndex == bodyIndex && contacts[e].share > share )
+		{
+			share = contacts[e].share;
+		}
+	}
+	return share;
+}
+
 static void CollideTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
 	float margin = f->margin, h = f->h, inv = 1.0f / h, friction = f->liquids[0].def.friction, m = f->mass;
 	bool adaptive = f->adaptive, multi = f->liquidCount > 1;
-	float baseMass = f->mass, spacing = f->def.particleSpacing;
+	float baseMass = f->mass, spacing = f->def.particleSpacing, added = f->liquids[0].def.addedMass;
 
 	// Patches take hydrostatic pressure from each particle's depth, read from how squeezed it is
 	const b2fLiquidDef* def = &f->liquids[0].def;
@@ -430,6 +446,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 				friction = liquid->def.friction;
 				patchScale = liquid->def.contactPressure * liquid->def.massDensity * liquid->def.gravityScale;
 				perMetre = f->squeezePerMetre[f->liquid[i]];
+				added = liquid->def.addedMass;
 			}
 			if ( adaptive )
 			{
@@ -452,10 +469,21 @@ static void CollideTask( int start, int end, int worker, void* context )
 					reaction->x += impulseX;
 					reaction->y += impulseY;
 					reaction->angular += rx * impulseY - ry * impulseX;
-					if ( patches && body->patchCount > 0 && FirstContact( contacts, c ) )
+					float share = ContactShare( contacts, f->contactCount[i], c );
+					if ( patches && share > 0.0f && body->patchCount > 0 )
 					{
 						float depth = perMetre > 0.0f ? ( f->rho[i] / rest - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / perMetre : 0.0f;
 						SamplePatches( f, chunk, body, f->pos[i].x, f->pos[i].y, m, patchScale * ( depth > 0.0f ? depth : 0.0f ) );
+					}
+
+					share = added > 0.0f && body->motion.invMass > 0.0f ? share : 0.0f;
+					if ( share > 0.0f )
+					{
+						float lump = m * added * share;
+						reaction->mass += lump;
+						reaction->momentX += lump * rx;
+						reaction->momentY += lump * ry;
+						reaction->inertia += lump * ( rx * rx + ry * ry );
 					}
 				}
 			}
@@ -524,7 +552,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 // near the ends add nothing to it. It runs in a line from one end to the other, as in still water, so an upright gap
 // is pushed apart less near the top. An end with no liquid near it, closed off by another body, takes the other
 // end's pressure, as one wet end is enough to fill the gap.
-static void ApplyPatches( b2fFluid* f, b2SubStepContext* context )
+static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 {
 	float impulsePerPressure = b2Length( f->worldGravity ) * f->h;
 	for ( int i = 0; i < f->patchCount; ++i )
@@ -560,7 +588,89 @@ static void ApplyPatches( b2fFluid* f, b2SubStepContext* context )
 		float rx = (float)( patch->x[0] + t * ( patch->x[1] - patch->x[0] ) - body->center.x );
 		float ry = (float)( patch->y[0] + t * ( patch->y[1] - patch->y[0] ) - body->center.y );
 		float impulseX = impulse * patch->normalX, impulseY = impulse * patch->normalY;
-		b2SubStep_ApplyImpulse( context, body->id, ( b2Vec2 ){ impulseX, impulseY }, rx * impulseY - ry * impulseX );
+		b2fReaction* total = totals + patch->bodyIndex;
+		total->x += impulseX;
+		total->y += impulseY;
+		total->angular += rx * impulseY - ry * impulseX;
+	}
+}
+
+// The body and the liquid within its reach take the change of the body's motion this substep as one lump: the
+// liquid's push, and what Box2D added since the last substep. A light body then speeds up about as a body in
+// liquid does, rather than as one in air pushed by the liquid, and the liquid near it is carried along. A body
+// floating or resting at a steady speed has no change of motion to share, so nothing changes for it. The lump's
+// mass, first moment and inertia about the centre of mass give a 3x3 solve, which keeps momentum.
+static void Respond( b2SubStepContext* context, b2fBody* body, const b2fReaction* total )
+{
+	const b2SubStepBody* motion = &body->motion;
+	body->sharing = false;
+	if ( motion->invMass == 0.0f || total->mass <= 0.0f )
+	{
+		if ( total->x != 0.0f || total->y != 0.0f || total->angular != 0.0f )
+		{
+			b2SubStep_ApplyImpulse( context, body->id, ( b2Vec2 ){ total->x, total->y }, total->angular );
+			body->lastVelocity = b2MulAdd( body->lastVelocity, motion->invMass, ( b2Vec2 ){ total->x, total->y } );
+			body->lastAngularVelocity += motion->invInertia * total->angular;
+		}
+		return;
+	}
+
+	float bodyMass = 1.0f / motion->invMass, lumpMass = bodyMass + total->mass;
+	float forceX = total->x + bodyMass * body->solverDelta.x;
+	float forceY = total->y + bodyMass * body->solverDelta.y;
+	float dw = 0.0f, bodyInertia = 0.0f;
+	if ( motion->invInertia > 0.0f )
+	{
+		bodyInertia = 1.0f / motion->invInertia;
+		float torque = total->angular + bodyInertia * body->solverAngularDelta;
+		float sx = total->momentX, sy = total->momentY;
+		float pivot = bodyInertia + total->inertia - ( sx * sx + sy * sy ) / lumpMass;
+		dw = ( torque + ( sy * forceX - sx * forceY ) / lumpMass ) / pivot;
+		forceX += sy * dw;
+		forceY -= sx * dw;
+	}
+	b2Vec2 dv = { forceX / lumpMass, forceY / lumpMass };
+
+	b2Vec2 bodyDelta = b2Sub( dv, body->solverDelta );
+	float bodyAngularDelta = motion->invInertia > 0.0f ? dw - body->solverAngularDelta : 0.0f;
+	b2SubStep_ApplyImpulse( context, body->id, b2MulSV( bodyMass, bodyDelta ), bodyInertia * bodyAngularDelta );
+	body->lastVelocity = b2Add( body->lastVelocity, bodyDelta );
+	body->lastAngularVelocity += bodyAngularDelta;
+
+	body->shareVelocity = dv;
+	body->shareAngular = dw;
+	body->sharing = true;
+}
+
+// Each particle within reach of a body moves with the body's change of motion, in proportion to how much of it the
+// lump counted
+static void ShareTask( int start, int end, int worker, void* context )
+{
+	(void)worker;
+	b2fFluid* f = context;
+	float h = f->h, added = f->liquids[0].def.addedMass;
+	bool multi = f->liquidCount > 1;
+	for ( int i = start; i < end; ++i )
+	{
+		if ( multi )
+		{
+			added = f->liquids[f->liquid[i]].def.addedMass;
+		}
+
+		const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
+		int count = f->contactCount[i];
+		for ( int c = 0; c < count; ++c )
+		{
+			const b2fBody* body = f->bodies + contacts[c].bodyIndex;
+			float share = body->sharing && added > 0.0f ? ContactShare( contacts, count, c ) : 0.0f;
+			if ( share > 0.0f )
+			{
+				float rx = (float)( f->pos[i].x - body->center.x ), ry = (float)( f->pos[i].y - body->center.y );
+				float scale = h * added * share;
+				f->pos[i].x += scale * ( body->shareVelocity.x - body->shareAngular * ry );
+				f->pos[i].y += scale * ( body->shareVelocity.y + body->shareAngular * rx );
+			}
+		}
 	}
 }
 
@@ -570,6 +680,10 @@ void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
 	{
 		b2fBody* body = f->bodies + i;
 		body->awake = b2SubStep_GetBodyMotion( context, body->id, &body->motion );
+		body->solverDelta = body->awake ? b2Sub( body->motion.linearVelocity, body->lastVelocity ) : b2Vec2_zero;
+		body->solverAngularDelta = body->awake ? body->motion.angularVelocity - body->lastAngularVelocity : 0.0f;
+		body->lastVelocity = body->motion.linearVelocity;
+		body->lastAngularVelocity = body->motion.angularVelocity;
 		b2Vec2 offset = b2RotateVector( body->motion.rotation, body->motion.localCenter );
 		body->center = body->motion.center;
 		body->origin = b2OffsetPos( body->center, b2Neg( offset ) );
@@ -628,15 +742,22 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 	}
 
 	b2SubStep_ParallelFor( context, CollideTask, B2F_CHUNK_COUNT, 1, f );
-	for ( int chunk = 0; chunk < B2F_CHUNK_COUNT; ++chunk )
+
+	// Chunk 0 holds the totals, summed in chunk order so the result does not depend on the workers
+	b2fReaction* totals = f->reactions;
+	for ( int chunk = 1; chunk < B2F_CHUNK_COUNT; ++chunk )
 	{
 		for ( int i = 0; i < f->bodyCount; ++i )
 		{
 			const b2fReaction* r = f->reactions + chunk * f->bodyCount + i;
-			if ( f->bodies[i].awake && ( r->x != 0.0f || r->y != 0.0f || r->angular != 0.0f ) )
-			{
-				b2SubStep_ApplyImpulse( context, f->bodies[i].id, ( b2Vec2 ){ r->x, r->y }, r->angular );
-			}
+			b2fReaction* t = totals + i;
+			t->x += r->x;
+			t->y += r->y;
+			t->angular += r->angular;
+			t->mass += r->mass;
+			t->momentX += r->momentX;
+			t->momentY += r->momentY;
+			t->inertia += r->inertia;
 		}
 	}
 
@@ -647,6 +768,26 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 	}
 	if ( patches )
 	{
-		ApplyPatches( f, context );
+		ApplyPatches( f, totals );
+	}
+
+	bool sharing = false;
+	for ( int i = 0; i < f->bodyCount; ++i )
+	{
+		b2fBody* body = f->bodies + i;
+		if ( body->awake )
+		{
+			Respond( context, body, totals + i );
+			sharing = sharing || body->sharing;
+		}
+		else
+		{
+			body->sharing = false;
+		}
+	}
+
+	if ( sharing )
+	{
+		b2SubStep_ParallelFor( context, ShareTask, f->count, 1024, f );
 	}
 }

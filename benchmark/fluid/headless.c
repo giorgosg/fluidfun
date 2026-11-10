@@ -159,6 +159,7 @@ static void ApplySettings( b2fFluidDef* def )
 	} settings[] = {
 		{ "LAB_SPACING", &def->particleSpacing },
 		{ "LAB_CONTACT", &def->liquid.contactPressure },
+		{ "LAB_ADDED_MASS", &def->liquid.addedMass },
 		{ "LAB_FRICTION", &def->liquid.friction },
 		{ "LAB_TENSILE", &def->liquid.tensilePressure },
 		{ "LAB_COHESION", &def->liquid.cohesion },

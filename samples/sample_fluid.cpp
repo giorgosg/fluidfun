@@ -100,6 +100,7 @@ public:
 		ImGui::Text( "Measure %.2f ms", p.measure );
 		changed |= ImGui::SliderFloat( "Contact pressure", &s_def.liquid.contactPressure, 0.0f, 2.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Friction", &s_def.liquid.friction, 0.0f, 1.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Added mass", &s_def.liquid.addedMass, 0.0f, 1.0f, "%.2f" );
 		if ( changed )
 		{
 			b2fFluid_SetDef( m_fluid, &s_def );

@@ -44,6 +44,11 @@ typedef struct b2fLiquidDef
 	/// resting body. At 1 a body lighter than the liquid lifts off the floor and a heavier one stays down, though
 	/// bodies within about a tenth of the liquid's density may do either.
 	float contactPressure;
+	/// Share of the liquid within reach of a body that moves with it when the body speeds up or slows down, from 0
+	/// to 1. Without it a light body takes the liquid's push alone, so one much lighter than the liquid shoots out of
+	/// it. The body and that liquid share each change of the body's motion as one lump, which keeps momentum, and a
+	/// body floating or resting at a steady speed is not affected.
+	float addedMass;
 	/// Spacing of the coarsest particles over the fluid's particleSpacing, which is the finest. One keeps this liquid
 	/// fine everywhere. Particles are fine at the surface and coarser with depth, and split and merge as they move.
 	/// Merges only join particles of the same liquid.

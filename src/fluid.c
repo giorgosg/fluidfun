@@ -14,6 +14,7 @@ b2fLiquidDef b2fDefaultLiquidDef( void )
 	def.friction = 0.1f;
 	def.gravityScale = 1.0f;
 	def.contactPressure = 1.0f;
+	def.addedMass = 1.0f;
 	def.adaptiveRatio = 10.0f;
 	def.adaptiveSpeed = 0.0f;
 	def.adaptiveDepthLimit = false;
