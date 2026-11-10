@@ -85,6 +85,16 @@ typedef struct b2fBody
 	// World centre of mass and body origin, in double when Box2D is built for large worlds
 	b2Pos center, origin;
 	bool awake;
+	// Velocity as of the end of the last substep, after the liquid's push, or at the start of the step. What Box2D
+	// added since then, from gravity, contacts and joints, is the rest of what moved the body this substep.
+	b2Vec2 lastVelocity;
+	float lastAngularVelocity;
+	b2Vec2 solverDelta;
+	float solverAngularDelta;
+	// The change of motion the liquid within reach shares with the body this substep, for the share pass
+	b2Vec2 shareVelocity;
+	float shareAngular;
+	bool sharing;
 } b2fBody;
 
 // A shape within the interaction radius of a particle
@@ -95,6 +105,8 @@ typedef struct b2fContact
 	// Kernel integrals over the wall, for the pressure and near pressure parts of the move
 	float pressureWeight, nearWeight;
 	float move;
+	// One where the particle touches the shape, falling to zero at the edge of its reach
+	float share;
 } b2fContact;
 
 // A neighbour within reach, found by the density pass. Nothing moves before the move pass reads it, so the
@@ -105,9 +117,12 @@ typedef struct b2fPair
 	float l;
 } b2fPair;
 
+// What the liquid gives a body in a substep, and the mass of the liquid within reach that moves with it, with its
+// first and second moments about the body's centre of mass
 typedef struct b2fReaction
 {
 	float x, y, angular;
+	float mass, momentX, momentY, inertia;
 } b2fReaction;
 
 typedef struct b2fLiquid
