@@ -31,7 +31,7 @@ b2fLiquidDef b2fDefaultLiquidDef( void )
 b2fFluidDef b2fDefaultFluidDef( void )
 {
 	b2fFluidDef def = { 0 };
-	def.particleSpacing = 0.079f;
+	def.particleSpacing = 0.08f;
 	def.adaptiveDepth = 12.0f;
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;

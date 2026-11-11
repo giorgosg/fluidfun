@@ -961,7 +961,8 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 		case lab_drain:
 		{
 			b2AABB sump = { { -3.8f, -4.1f }, { 3.8f, -0.8f } };
-			b2AABB source = { { -5.0f, 13.5f }, { 5.0f, 14.5f } };
+			// Above the highest the surface gets, since liquid put down onto liquid shoots particles out over the walls
+			b2AABB source = { { -5.0f, 15.0f }, { 5.0f, 16.0f } };
 			int moved = b2fFluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -2.0f }, 80 );
 			scene->pumped += moved;
 			scene->stall = moved > 0 ? 0 : scene->stall + 1;
