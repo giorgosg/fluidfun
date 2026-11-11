@@ -540,7 +540,34 @@ static void CollideTask( int start, int end, int worker, void* context )
 				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( world, body->origin ) );
 				float distance;
 				b2Vec2 normal;
-				if ( b2fShapeDistance( s, local, &distance, &normal ) == false || distance >= margin )
+				bool crossed = false;
+				if ( b2fShapeDistance( s, local, &distance, &normal ) == false )
+				{
+					// Behind a chain segment, which has no inside to push a particle out of. A small particle keeps
+					// only half its size from a surface, so a fast one can pass a segment within one substep. If it
+					// started the substep in front and its path cuts the segment, it goes back to the front.
+					b2Vec2 before = b2InvRotateVector( body->motion.rotation, b2SubPos( f->prev[i], body->origin ) );
+					b2Vec2 edge = b2Sub( s->p2, s->p1 );
+					float sideBefore = b2Cross( b2Sub( before, s->p1 ), edge ), sideNow = b2Cross( b2Sub( local, s->p1 ), edge );
+					float length2 = b2Dot( edge, edge );
+					if ( s->type != b2_chainSegmentShape || sideBefore < 0.0f || sideNow >= 0.0f || length2 <= 0.0f )
+					{
+						continue;
+					}
+
+					b2Vec2 cut = b2Lerp( before, local, sideBefore / ( sideBefore - sideNow ) );
+					float along = b2Dot( b2Sub( cut, s->p1 ), edge ) / length2;
+					if ( along < 0.0f || along > 1.0f )
+					{
+						continue;
+					}
+
+					float length = sqrtf( length2 );
+					distance = sideNow / length;
+					normal = b2MulSV( 1.0f / length, b2RightPerp( edge ) );
+					crossed = true;
+				}
+				else if ( distance >= margin )
 				{
 					continue;
 				}
@@ -549,7 +576,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 				float push = margin - distance;
 
 				// Sizes can change next to a shape. What a body feels is limited to what a particle could carry in.
-				if ( adaptive && push > 2.0f * margin )
+				if ( adaptive && crossed == false && push > 2.0f * margin )
 				{
 					push = 2.0f * margin;
 				}
