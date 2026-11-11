@@ -84,9 +84,15 @@ b2Liquid_CreateParticlesInBox( oilId, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0
 // Each frame. The world steps its fluid with the bodies.
 b2World_Step( worldId, 1.0f / 60.0f, 4 );
 
-int count = b2Fluid_GetParticleCount( fluid );
-const b2Pos* positions = b2Fluid_GetPositions( fluid );
-const float* sizes = b2Fluid_GetSizes( fluid );
+// What the fluid gives back is good until the next step or change to the fluid. Particles change order every step;
+// ids[i] follows a particle from one step to the next.
+b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+for ( int i = 0; i < particles.count; ++i )
+{
+	b2Pos p = particles.positions[i];
+	float size = particles.sizes[i]; // in the units of particleSpacing
+	// draw particle i at p, size across
+}
 
 // Destroying the world destroys its fluid too
 b2DestroyWorld( worldId );

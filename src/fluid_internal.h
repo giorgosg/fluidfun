@@ -282,9 +282,11 @@ struct b2fFluid
 	float *boxDepth, *boxFlow, *boxPressure;
 	int boxCapacity;
 
-	// Particle sizes as the caller sees them, in rest spacings, filled when asked for
+	// Particle sizes as the caller sees them, in rest spacings, refilled by b2Fluid_GetParticles when marked stale.
+	// Whatever may change a size or the order of particles marks them: adapting sizes and each substep's sort, adding
+	// particles, and destroying a liquid. Moving particles changes neither.
 	float* restSizes;
-	int restSizeCapacity;
+	bool restSizesStale;
 
 	b2FluidProfile profile;
 	float measureTime;

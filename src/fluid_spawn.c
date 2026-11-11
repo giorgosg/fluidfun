@@ -24,6 +24,7 @@ static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float 
 	f->id[i] = f->nextParticleId++;
 	f->size[i] = size;
 	f->liquid[i] = (unsigned char)liquid;
+	f->restSizesStale = true;
 
 	// The particle has no grid cell until the next sub-step sorts it, so sizes must not adapt before then: the search
 	// for partners would read past the grid

@@ -84,7 +84,7 @@ int main( int argc, char** argv )
 	int n = b2Fluid_GetParticleCount( fluid );
 	double startArea = 0.0;
 	{
-		const float* size = b2Fluid_GetSizes( fluid );
+		const float* size = b2Fluid_GetParticles( fluid ).sizes;
 		for ( int i = 0; i < n; ++i )
 		{
 			startArea += (double)size[i] * size[i];
@@ -108,9 +108,10 @@ int main( int argc, char** argv )
 			fflush( stdout );
 		}
 
-		const b2Pos* pos = b2Fluid_GetPositions( fluid );
-		const float* vx = b2Fluid_GetVelocitiesX( fluid );
-		const float* vy = b2Fluid_GetVelocitiesY( fluid );
+		b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+		const b2Pos* pos = particles.positions;
+		const float* vx = particles.velocitiesX;
+		const float* vy = particles.velocitiesY;
 		double sum = 0.0, top = 0.0;
 		for ( int i = 0; i < n; ++i )
 		{
@@ -164,7 +165,8 @@ int main( int argc, char** argv )
 		// Height as the median of the surface across columns of the tank
 		enum { binCount = 48 };
 		float tops[binCount] = { 0 };
-		const b2Pos* pos = b2Fluid_GetPositions( fluid );
+		b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+		const b2Pos* pos = particles.positions;
 		for ( int i = 0; i < n; ++i )
 		{
 			int bin = (int)( ( pos[i].x + halfWidth ) / ( 2.0f * halfWidth ) * binCount );
@@ -213,7 +215,7 @@ int main( int argc, char** argv )
 		printf( "nearest p5=%.2f median=%.2f p95=%.2f | ", nearest[taken / 20], nearest[taken / 2], nearest[taken * 19 / 20] );
 
 		{
-			const float* size = b2Fluid_GetSizes( fluid );
+			const float* size = particles.sizes;
 			double area = 0.0;
 			float smallest = 1e9f, largest = 0.0f;
 			for ( int i = 0; i < n; ++i )

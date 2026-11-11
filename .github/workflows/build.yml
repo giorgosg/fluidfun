@@ -359,14 +359,16 @@ jobs:
         		b2World_Step( worldId, 1.0f / 60.0f, 4 );
         	}
 
-        	int particleCount = b2Fluid_GetParticleCount( fluid );
+        	b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+        	int particleCount = particles.count;
+        	float size = particleCount > 0 ? particles.sizes[0] : 0.0f;
         	b2DestroyFluid( fluid );
 
         	b2Pos p = b2Body_GetPosition( bodyId );
         	b2DestroyWorld( worldId );
 
-        	printf( "y = %g, %d particles\n", (double)p.y, particleCount );
-        	return p.y < 9.0 && particleCount > 0 ? 0 : 1;
+        	printf( "y = %g, %d particles, first %g across\n", (double)p.y, particleCount, (double)size );
+        	return p.y < 9.0 && particleCount > 0 && size > 0.0f ? 0 : 1;
         }
         EOF
 
