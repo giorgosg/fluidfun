@@ -7,14 +7,12 @@
 extern "C" {
 #endif
 
-typedef struct b2fFluid b2fFluid;
-
 /// The most liquids one fluid can hold
-#define B2F_MAX_LIQUIDS 16
+#define B2_MAX_LIQUIDS 16
 
 /// Settings of one liquid. A fluid can hold several liquids, which share its particle spacing and grid but move by
-/// their own settings. Liquids do not mix: each pulls only on itself unless b2fFluid_SetCohesionBetween says otherwise.
-typedef struct b2fLiquidDef
+/// their own settings. Liquids do not mix: each pulls only on itself unless b2Fluid_SetCohesionBetween says otherwise.
+typedef struct b2LiquidDef
 {
 	/// Mass per unit area of the liquid at rest, to compare with b2ShapeDef::material density: a body lighter than
 	/// this floats. Between liquids the lighter one takes more of each push, which makes it float.
@@ -30,7 +28,7 @@ typedef struct b2fLiquidDef
 	float tensilePressure;
 	/// Pull between neighbours more than one spacing apart, and a push closer in, as its own term so that tension is
 	/// set apart from stiffness. In the same units as stiffness. This is the pull within the liquid; the pull between
-	/// two liquids is set with b2fFluid_SetCohesionBetween.
+	/// two liquids is set with b2Fluid_SetCohesionBetween.
 	float cohesion;
 	/// Pull of static and kinematic shapes on the liquid, after Akinci et al. 2013: particles between half and all of
 	/// the interaction radius from such a shape are drawn towards it. Bodies moved by forces do not pull. It helps a
@@ -87,10 +85,10 @@ typedef struct b2fLiquidDef
 	/// Most mass a particle passes to its neighbours in one frame, as a fraction of its target. Merges and mass
 	/// sharing happen over several frames at small values. One moves everything at once.
 	float adaptiveRate;
-} b2fLiquidDef;
+} b2LiquidDef;
 
 /// Settings the whole fluid shares, and its first liquid
-typedef struct b2fFluidDef
+typedef struct b2FluidDef
 {
 	/// How far apart particles of water-like liquid rest, away from the weight of deep liquid. The interaction radius
 	/// is 1.78 times this. A liquid with much more cohesion than the default rests closer.
@@ -103,11 +101,11 @@ typedef struct b2fFluidDef
 	float adaptiveFullBox;
 	int capacity;
 	/// Liquid 0, which every fluid has
-	b2fLiquidDef liquid;
-} b2fFluidDef;
+	b2LiquidDef liquid;
+} b2FluidDef;
 
 /// Timing of the last step in milliseconds, summed over substeps.
-typedef struct b2fProfile
+typedef struct b2FluidProfile
 {
 	float prepare;
 	float sort;
@@ -119,57 +117,60 @@ typedef struct b2fProfile
 	int sizeChanges;
 	/// Part of prepare spent measuring depth, flow and distance to bodies
 	float measure;
-} b2fProfile;
+} b2FluidProfile;
 
-B2_API b2fFluidDef b2fDefaultFluidDef( void );
-B2_API b2fLiquidDef b2fDefaultLiquidDef( void );
+B2_API b2FluidDef b2DefaultFluidDef( void );
+B2_API b2LiquidDef b2DefaultLiquidDef( void );
 
-/// Installs the world's sub-step callback, so a world can have one fluid.
-B2_API b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def );
-B2_API void b2fDestroyFluid( b2fFluid* fluid );
+/// Give a world its fluid, which holds all of its liquids. A world has at most one, and b2World_Step steps it with
+/// the bodies. Returns b2_nullFluidId if the world already has one. Call between steps.
+B2_API b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def );
+
+/// Remove a world's fluid and every particle in it. Destroying the world does this too. Call between steps.
+B2_API void b2DestroyFluid( b2FluidId fluidId );
+
+/// Whether the id names a fluid that still exists
+B2_API bool b2Fluid_IsValid( b2FluidId fluidId );
 
 /// Change settings between steps, including liquid 0's. The spacing and capacity cannot change.
-B2_API void b2fFluid_SetDef( b2fFluid* fluid, const b2fFluidDef* def );
+B2_API void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def );
 
-/// Add a liquid. Returns its index, or -1 if the fluid already holds B2F_MAX_LIQUIDS.
-B2_API int b2fFluid_CreateLiquid( b2fFluid* fluid, const b2fLiquidDef* def );
+/// Add a liquid. Returns its index, or -1 if the fluid already holds B2_MAX_LIQUIDS.
+B2_API int b2Fluid_CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def );
 /// Change a liquid's settings between steps
-B2_API void b2fFluid_SetLiquid( b2fFluid* fluid, int liquid, const b2fLiquidDef* def );
-B2_API int b2fFluid_GetLiquidCount( const b2fFluid* fluid );
+B2_API void b2Fluid_SetLiquid( b2FluidId fluidId, int liquid, const b2LiquidDef* def );
+B2_API int b2Fluid_GetLiquidCount( b2FluidId fluidId );
 
-/// Pull between particles of two different liquids, in the units of b2fLiquidDef::cohesion. It starts at zero, so
+/// Pull between particles of two different liquids, in the units of b2LiquidDef::cohesion. It starts at zero, so
 /// liquids keep apart; a value near their own cohesion lets them cling to each other.
-B2_API void b2fFluid_SetCohesionBetween( b2fFluid* fluid, int liquidA, int liquidB, float cohesion );
+B2_API void b2Fluid_SetCohesionBetween( b2FluidId fluidId, int liquidA, int liquidB, float cohesion );
 
 /// Fill a box with particles of one liquid on a triangular lattice. Returns how many were added. With adaptive
 /// sizes particles start at the size their distance from the edge of the box asks for.
-B2_API int b2fFluid_CreateParticlesInBox( b2fFluid* fluid, int liquid, b2Pos lowerBound, b2Pos upperBound );
+B2_API int b2Fluid_CreateParticlesInBox( b2FluidId fluidId, int liquid, b2Pos lowerBound, b2Pos upperBound );
 
 /// Move up to maxCount particles found in the box from to a lattice in the box to, with this velocity.
 /// Call between steps. This is how a scene recycles liquid into a stream. Returns how many moved.
-B2_API int b2fFluid_MoveParticles( b2fFluid* fluid, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount );
+B2_API int b2Fluid_MoveParticles( b2FluidId fluidId, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount );
 
-/// The total mass moved by b2fFluid_MoveParticles so far.
-B2_API float b2fFluid_GetMovedMass( const b2fFluid* fluid );
+/// The total mass moved by b2Fluid_MoveParticles so far.
+B2_API float b2Fluid_GetMovedMass( b2FluidId fluidId );
 
-/// Call before b2World_Step, which then runs the fluid in each sub-step.
-B2_API void b2fFluid_Prepare( b2fFluid* fluid );
-
-B2_API int b2fFluid_GetParticleCount( const b2fFluid* fluid );
+B2_API int b2Fluid_GetParticleCount( b2FluidId fluidId );
 /// World positions, in double when Box2D is built for large worlds
-B2_API const b2Pos* b2fFluid_GetPositions( const b2fFluid* fluid );
-B2_API const float* b2fFluid_GetVelocitiesX( const b2fFluid* fluid );
-B2_API const float* b2fFluid_GetVelocitiesY( const b2fFluid* fluid );
+B2_API const b2Pos* b2Fluid_GetPositions( b2FluidId fluidId );
+B2_API const float* b2Fluid_GetVelocitiesX( b2FluidId fluidId );
+B2_API const float* b2Fluid_GetVelocitiesY( b2FluidId fluidId );
 
 /// The spacing of each particle, in the units of particleSpacing. Mass is proportional to its square. The array is
 /// filled by this call.
-B2_API const float* b2fFluid_GetSizes( const b2fFluid* fluid );
+B2_API const float* b2Fluid_GetSizes( b2FluidId fluidId );
 /// The liquid each particle belongs to
-B2_API const unsigned char* b2fFluid_GetLiquids( const b2fFluid* fluid );
-/// Kernel density of each particle from the last substep, in the same units as b2fFluid_GetRestDensity
-B2_API const float* b2fFluid_GetDensities( const b2fFluid* fluid );
-B2_API float b2fFluid_GetRestDensity( const b2fFluid* fluid );
-B2_API b2fProfile b2fFluid_GetProfile( const b2fFluid* fluid );
+B2_API const unsigned char* b2Fluid_GetLiquids( b2FluidId fluidId );
+/// Kernel density of each particle from the last substep, in the same units as b2Fluid_GetRestDensity
+B2_API const float* b2Fluid_GetDensities( b2FluidId fluidId );
+B2_API float b2Fluid_GetRestDensity( b2FluidId fluidId );
+B2_API b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId );
 
 #ifdef __cplusplus
 }

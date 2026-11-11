@@ -45,7 +45,7 @@ int main( int argc, char** argv )
 	AddWall( tank, -halfWidth - 1.0f, wallHeight, 1.0f, wallHeight + 2.0f );
 	AddWall( tank, halfWidth + 1.0f, wallHeight, 1.0f, wallHeight + 2.0f );
 
-	b2fFluidDef def = b2fDefaultFluidDef();
+	b2FluidDef def = b2DefaultFluidDef();
 	def.liquid.stiffness = param;
 	def.liquid.nearStiffness = 2.5f * param;
 	if ( getenv( "LAB_VISCOSITY" ) )
@@ -75,14 +75,14 @@ int main( int argc, char** argv )
 		def.liquid.adaptiveRatio = (float)atof( getenv( "LAB_ADAPTIVE" ) );
 	}
 
-	b2fFluid* fluid = b2fCreateFluid( worldId, &def );
+	b2FluidId fluid = b2CreateFluid( worldId, &def );
 	float spacing = def.particleSpacing;
-	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
+	b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
 								   (b2Pos){ halfWidth - 0.5f * spacing, depth } );
-	int n = b2fFluid_GetParticleCount( fluid );
+	int n = b2Fluid_GetParticleCount( fluid );
 	double startArea = 0.0;
 	{
-		const float* size = b2fFluid_GetSizes( fluid );
+		const float* size = b2Fluid_GetSizes( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
 			startArea += (double)size[i] * size[i];
@@ -98,18 +98,17 @@ int main( int argc, char** argv )
 	bool blown = false;
 	for ( int frame = 0; frame < frames && blown == false; ++frame )
 	{
-		b2fFluid_Prepare( fluid );
 		b2World_Step( worldId, 1.0f / 60.0f, substeps );
-		n = b2fFluid_GetParticleCount( fluid );
+		n = b2Fluid_GetParticleCount( fluid );
 		if ( getenv( "LAB_KEEP_GOING" ) && frame % 120 == 0 )
 		{
-			printf( "  t=%.0fs fluid %.1f ms\n", (double)frame / 60.0, (double)b2fFluid_GetProfile( fluid ).total );
+			printf( "  t=%.0fs fluid %.1f ms\n", (double)frame / 60.0, (double)b2Fluid_GetProfile( fluid ).total );
 			fflush( stdout );
 		}
 
-		const b2Pos* pos = b2fFluid_GetPositions( fluid );
-		const float* vx = b2fFluid_GetVelocitiesX( fluid );
-		const float* vy = b2fFluid_GetVelocitiesY( fluid );
+		const b2Pos* pos = b2Fluid_GetPositions( fluid );
+		const float* vx = b2Fluid_GetVelocitiesX( fluid );
+		const float* vy = b2Fluid_GetVelocitiesY( fluid );
 		double sum = 0.0, top = 0.0;
 		for ( int i = 0; i < n; ++i )
 		{
@@ -163,7 +162,7 @@ int main( int argc, char** argv )
 		// Height as the median of the surface across columns of the tank
 		enum { binCount = 48 };
 		float tops[binCount] = { 0 };
-		const b2Pos* pos = b2fFluid_GetPositions( fluid );
+		const b2Pos* pos = b2Fluid_GetPositions( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
 			int bin = (int)( ( pos[i].x + halfWidth ) / ( 2.0f * halfWidth ) * binCount );
@@ -212,7 +211,7 @@ int main( int argc, char** argv )
 		printf( "nearest p5=%.2f median=%.2f p95=%.2f | ", nearest[taken / 20], nearest[taken / 2], nearest[taken * 19 / 20] );
 
 		{
-			const float* size = b2fFluid_GetSizes( fluid );
+			const float* size = b2Fluid_GetSizes( fluid );
 			double area = 0.0;
 			float smallest = 1e9f, largest = 0.0f;
 			for ( int i = 0; i < n; ++i )
@@ -227,7 +226,7 @@ int main( int argc, char** argv )
 				substeps, n, height / idealHeight, rms / samples, peak / samples, ms );
 	}
 
-	b2fDestroyFluid( fluid );
+	b2DestroyFluid( fluid );
 	b2DestroyWorld( worldId );
 	return 0;
 }

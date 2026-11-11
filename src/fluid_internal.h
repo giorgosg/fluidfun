@@ -4,6 +4,10 @@
 
 #include "box2d/fluidfun.h"
 
+// Inside the library the fluid is a plain struct; callers hold a b2FluidId
+typedef struct b2fFluid b2fFluid;
+#define B2F_MAX_LIQUIDS B2_MAX_LIQUIDS
+
 // One coordinate of a b2Pos: double when Box2D is built for large worlds
 #if defined( BOX2D_DOUBLE_PRECISION )
 typedef double b2fCoord;
@@ -181,7 +185,7 @@ typedef struct b2fReaction
 
 typedef struct b2fLiquid
 {
-	b2fLiquidDef def;
+	b2LiquidDef def;
 	float mass;	 // of a particle at the finest size
 } b2fLiquid;
 
@@ -199,7 +203,7 @@ typedef struct b2fLiquidPair
 struct b2fFluid
 {
 	b2WorldId worldId;
-	b2fFluidDef def;
+	b2FluidDef def;
 	// Spacing of the lattice rest density is counted from, particleSpacing over B2F_REST_PITCH. Particle sizes, the
 	// interaction radius and every length inside the library are in these, not in particleSpacing.
 	float spacing;
@@ -279,7 +283,7 @@ struct b2fFluid
 	float* restSizes;
 	int restSizeCapacity;
 
-	b2fProfile profile;
+	b2FluidProfile profile;
 	float measureTime;
 };
 
@@ -314,6 +318,9 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 			  j < end_; ++j )
 
 #define FOR_NEIGHBOURS( f, i, j ) FOR_NEIGHBOURS_WITHIN( f, i, j, f->uniformWindow > 0 ? f->uniformWindow : f->window[i] )
+
+// fluid.c
+b2fFluid* b2fGetFluid( b2FluidId fluidId );
 
 // grid.c
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );

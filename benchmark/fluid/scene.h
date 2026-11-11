@@ -74,7 +74,7 @@ typedef struct LabScene
 	int stall, longestStall;
 
 	// A second liquid's settings, for scenes whose slider changes it
-	b2fLiquidDef second;
+	b2LiquidDef second;
 
 	// Liquid a scene keeps where it put it, such as a basin's water, as area in particle sizes squared, so that it
 	// can move the rest back
@@ -84,12 +84,12 @@ typedef struct LabScene
 LabScene LabDefaultScene( LabSceneType type );
 
 /// Changes the fluid settings a scene starts from, for scenes that show a liquid other than water. Call it on
-/// b2fDefaultFluidDef before creating the scene.
-void LabSceneSettings( LabSceneType type, b2fFluidDef* def );
-b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def );
+/// b2DefaultFluidDef before creating the scene.
+void LabSceneSettings( LabSceneType type, b2FluidDef* def );
+b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const b2FluidDef* def );
 
-/// Call once per frame before b2fFluid_Prepare. Drives whatever the scene moves.
-void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep );
+/// Call once per frame before b2World_Step. Drives whatever the scene moves.
+void LabStepScene( LabScene* scene, b2FluidId fluid, float timeStep );
 
 #ifdef __cplusplus
 }

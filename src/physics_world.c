@@ -7,6 +7,9 @@
 
 #include "physics_world.h"
 
+#include "fluid.h"
+#include "box2d/fluidfun.h"
+
 #include "aabb.h"
 #include "arena_allocator.h"
 #include "bitset.h"
@@ -333,6 +336,12 @@ void b2DestroyWorld( b2WorldId worldId )
 
 	// Detach any recording before teardown. The user owns and frees the recording buffer.
 	b2StopRecordingInternal( world );
+
+	if ( world->fluid != NULL )
+	{
+		b2FreeFluid( world->fluid );
+		world->fluid = NULL;
+	}
 
 	if ( world->scheduler != NULL )
 	{
@@ -908,6 +917,12 @@ void b2World_Step( b2WorldId worldId, float timeStep, int subStepCount )
 	world->profile = (b2Profile){ 0 };
 
 	b2TracyCZoneNC( world_step, "Step", b2_colorBox2DGreen, true );
+
+	// The fluid gathers the shapes near it and changes particle sizes while the world can still be asked things
+	if ( world->fluid != NULL )
+	{
+		b2PrepareFluid( world->fluid );
+	}
 
 	world->locked = true;
 	world->activeTaskCount = 0;
@@ -1573,6 +1588,23 @@ bool b2World_IsValid( b2WorldId id )
 	}
 
 	return id.generation == world->generation;
+}
+
+bool b2Fluid_IsValid( b2FluidId id )
+{
+	if ( id.index1 < 1 || B2_MAX_WORLDS <= id.world0 )
+	{
+		return false;
+	}
+
+	b2World* world = b2_worlds + id.world0;
+	if ( world->worldId != id.world0 || world->generation != id.generation )
+	{
+		// world is not allocated, or is a later one in the same slot
+		return false;
+	}
+
+	return world->fluid != NULL && world->fluidSerial == id.index1;
 }
 
 bool b2Body_IsValid( b2BodyId id )

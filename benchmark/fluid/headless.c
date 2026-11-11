@@ -93,7 +93,7 @@ static void PlotBody( b2BodyId body )
 	}
 }
 
-static void WriteFrame( const char* path, b2fFluid* fluid, const LabScene* scene )
+static void WriteFrame( const char* path, b2FluidId fluid, const LabScene* scene )
 {
 	memset( image, 24, sizeof( image ) );
 	// Tall scenes are fitted by height, wide ones by width
@@ -102,11 +102,11 @@ static void WriteFrame( const char* path, b2fFluid* fluid, const LabScene* scene
 	viewCenter = scene->viewCenter;
 	viewCenter.y = getenv( "LAB_VIEW_Y" ) ? (float)atof( getenv( "LAB_VIEW_Y" ) ) : viewCenter.y;
 
-	int n = b2fFluid_GetParticleCount( fluid );
-	const b2Pos* pos = b2fFluid_GetPositions( fluid );
+	int n = b2Fluid_GetParticleCount( fluid );
+	const b2Pos* pos = b2Fluid_GetPositions( fluid );
 	// With LAB_SIZED each particle is a square 0.7 of its size across, as the sample draws them
-	const float* sizes = b2fFluid_GetSizes( fluid );
-	const unsigned char* liquids = b2fFluid_GetLiquids( fluid );
+	const float* sizes = b2Fluid_GetSizes( fluid );
+	const unsigned char* liquids = b2Fluid_GetLiquids( fluid );
 	bool sized = getenv( "LAB_SIZED" ) != NULL;
 	static const unsigned char tints[3][3] = { { 60, 140, 255 }, { 230, 170, 40 }, { 200, 40, 60 } };
 	for ( int i = 0; i < n; ++i )
@@ -150,7 +150,7 @@ static uint64_t HashBytes( uint64_t hash, const void* data, size_t size )
 }
 
 // Fluid settings that can be set from the environment, for example LAB_ADAPTIVE=1 for uniform sizes
-static void ApplySettings( b2fFluidDef* def )
+static void ApplySettings( b2FluidDef* def )
 {
 	struct
 	{
@@ -203,14 +203,14 @@ static void ApplySettings( b2fFluidDef* def )
 // the outside, so they are gaps the liquid closes around. Packing is density over the lattice density for particles
 // with at least 5 neighbours, and gap is each such particle's nearest neighbour over the spacing, as percentiles.
 // Sizes are taken as uniform, so run it with LAB_ADAPTIVE=1.
-static void PrintShape( b2fFluid* fluid, float spacing, int frame )
+static void PrintShape( b2FluidId fluid, float spacing, int frame )
 {
-	int n = b2fFluid_GetParticleCount( fluid );
-	const b2Pos* pos = b2fFluid_GetPositions( fluid );
-	const float* rho = b2fFluid_GetDensities( fluid );
-	const float* vx = b2fFluid_GetVelocitiesX( fluid );
-	const float* vy = b2fFluid_GetVelocitiesY( fluid );
-	float rest = b2fFluid_GetRestDensity( fluid );
+	int n = b2Fluid_GetParticleCount( fluid );
+	const b2Pos* pos = b2Fluid_GetPositions( fluid );
+	const float* rho = b2Fluid_GetDensities( fluid );
+	const float* vx = b2Fluid_GetVelocitiesX( fluid );
+	const float* vy = b2Fluid_GetVelocitiesY( fluid );
+	float rest = b2Fluid_GetRestDensity( fluid );
 	if ( n == 0 )
 	{
 		return;
@@ -265,7 +265,7 @@ static void PrintShape( b2fFluid* fluid, float spacing, int frame )
 		}
 	}
 	// Mass-weighted vertical speed in the strip within 0.4 m of the sides, and in the middle, below the top tenth
-	const float* sizes = b2fFluid_GetSizes( fluid );
+	const float* sizes = b2Fluid_GetSizes( fluid );
 	double wallV = 0.0, wallM = 0.0, midV = 0.0, midM = 0.0, wallRho = 0.0, wallLow = 0.0, midRho = 0.0, midLow = 0.0;
 	for ( int i = 0; i < n; ++i )
 	{
@@ -396,16 +396,16 @@ int main( int argc, char** argv )
 		scene.tankWidth *= scale;
 		scene.liquidHeight *= scale;
 		scene.tankHeight *= scale;
-		b2fFluidDef def = b2fDefaultFluidDef();
+		b2FluidDef def = b2DefaultFluidDef();
 		def.capacity = 2000000;
 		LabSceneSettings( scene.type, &def );
 		ApplySettings( &def );
-		b2fFluid* fluid = LabCreateScene( worldId, &scene, &def );
+		b2FluidId fluid = LabCreateScene( worldId, &scene, &def );
 		// LAB_SECOND_LIQUID: add a liquid like the first with no particles, which runs the passes for several
 		// liquids on the same physics, to time them
 		if ( getenv( "LAB_SECOND_LIQUID" ) )
 		{
-			b2fFluid_CreateLiquid( fluid, &def.liquid );
+			b2Fluid_CreateLiquid( fluid, &def.liquid );
 		}
 
 		// LAB_BODY_DENSITY: give every moving body this density, to find the lightest body the coupling holds
@@ -446,7 +446,7 @@ int main( int argc, char** argv )
 		int lateFrames = 0;
 
 		uint64_t start = b2GetTicks();
-		b2fProfile sum = { 0 };
+		b2FluidProfile sum = { 0 };
 		double measureSum = 0.0;
 		for ( int i = 0; i < frames; ++i )
 		{
@@ -483,9 +483,8 @@ int main( int argc, char** argv )
 				}
 			}
 
-			b2fFluid_Prepare( fluid );
 			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : ( scene.subSteps > 0 ? scene.subSteps : 4 ) );
-			b2fProfile p = b2fFluid_GetProfile( fluid );
+			b2FluidProfile p = b2Fluid_GetProfile( fluid );
 			measureSum += p.measure;
 			if ( settle >= 0.0f )
 			{
@@ -515,8 +514,8 @@ int main( int argc, char** argv )
 						lowBottom[k] = box.lowerBound.y < lowBottom[k] ? box.lowerBound.y : lowBottom[k];
 						highBottom[k] = box.lowerBound.y > highBottom[k] ? box.lowerBound.y : highBottom[k];
 						float inset = 2.0f * def.particleSpacing;
-						const b2Pos* ps = b2fFluid_GetPositions( fluid );
-						int n = b2fFluid_GetParticleCount( fluid ), count = 0;
+						const b2Pos* ps = b2Fluid_GetPositions( fluid );
+						int n = b2Fluid_GetParticleCount( fluid ), count = 0;
 						for ( int j = 0; j < n; ++j )
 						{
 							float px = (float)ps[j].x, py = (float)ps[j].y;
@@ -536,9 +535,9 @@ int main( int argc, char** argv )
 			if ( getenv( "LAB_LEVEL" ) && ( i < 60 ? i % 10 == 0 : i % 120 == 0 ) )
 			{
 				// Mass weighted height of the liquid: lower means it packed tighter or left a gap
-				int n = b2fFluid_GetParticleCount( fluid );
-				const b2Pos* pos = b2fFluid_GetPositions( fluid );
-				const float* ps = b2fFluid_GetSizes( fluid );
+				int n = b2Fluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2Fluid_GetPositions( fluid );
+				const float* ps = b2Fluid_GetSizes( fluid );
 				double my = 0.0, m = 0.0, fineY = 0.0, coarseY = 0.0;
 				int fine = 0, coarse = 0;
 				for ( int k = 0; k < n; ++k )
@@ -576,10 +575,10 @@ int main( int argc, char** argv )
 			// how quickly liquid spawned at rest settles, and how far it sinks or swells while it does
 			if ( getenv( "LAB_CALM" ) && i % 30 == 0 )
 			{
-				int n = b2fFluid_GetParticleCount( fluid );
-				const b2Pos* pos = b2fFluid_GetPositions( fluid );
-				const float* cvx = b2fFluid_GetVelocitiesX( fluid );
-				const float* cvy = b2fFluid_GetVelocitiesY( fluid );
+				int n = b2Fluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2Fluid_GetPositions( fluid );
+				const float* cvx = b2Fluid_GetVelocitiesX( fluid );
+				const float* cvy = b2Fluid_GetVelocitiesY( fluid );
 				double speedSum = 0.0, height = 0.0;
 				float peak = 0.0f;
 				for ( int k = 0; k < n; ++k )
@@ -595,12 +594,12 @@ int main( int argc, char** argv )
 			// whether liquid spawns packed tighter or looser than it rests
 			if ( getenv( "LAB_CALM" ) && ( i == 0 || i == frames - 1 ) )
 			{
-				int n = b2fFluid_GetParticleCount( fluid );
-				const b2Pos* pos = b2fFluid_GetPositions( fluid );
+				int n = b2Fluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2Fluid_GetPositions( fluid );
 				{
-					const float* rho = b2fFluid_GetDensities( fluid );
-					const float* size = b2fFluid_GetSizes( fluid );
-					float rest = b2fFluid_GetRestDensity( fluid );
+					const float* rho = b2Fluid_GetDensities( fluid );
+					const float* size = b2Fluid_GetSizes( fluid );
+					float rest = b2Fluid_GetRestDensity( fluid );
 					double bandRho[64] = { 0 }, bandSize[64] = { 0 };
 					int bandCount[64] = { 0 };
 					for ( int k = 0; k < n; ++k )
@@ -631,11 +630,11 @@ int main( int argc, char** argv )
 			{
 				// Per liquid: area, area weighted mean height and its spread. Separated layers stack by density,
 				// each with a spread near its thickness over the square root of 12.
-				int n = b2fFluid_GetParticleCount( fluid );
-				const b2Pos* pos = b2fFluid_GetPositions( fluid );
-				const float* ps = b2fFluid_GetSizes( fluid );
-				const unsigned char* liquid = b2fFluid_GetLiquids( fluid );
-				double area[B2F_MAX_LIQUIDS] = { 0 }, my[B2F_MAX_LIQUIDS] = { 0 }, myy[B2F_MAX_LIQUIDS] = { 0 };
+				int n = b2Fluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2Fluid_GetPositions( fluid );
+				const float* ps = b2Fluid_GetSizes( fluid );
+				const unsigned char* liquid = b2Fluid_GetLiquids( fluid );
+				double area[B2_MAX_LIQUIDS] = { 0 }, my[B2_MAX_LIQUIDS] = { 0 }, myy[B2_MAX_LIQUIDS] = { 0 };
 				for ( int k = 0; k < n; ++k )
 				{
 					double weight = (double)ps[k] * ps[k];
@@ -644,7 +643,7 @@ int main( int argc, char** argv )
 					myy[liquid[k]] += weight * pos[k].y * pos[k].y;
 				}
 				printf( "LQ %d", i );
-				for ( int l = 0; l < b2fFluid_GetLiquidCount( fluid ); ++l )
+				for ( int l = 0; l < b2Fluid_GetLiquidCount( fluid ); ++l )
 				{
 					double mean = area[l] > 0.0 ? my[l] / area[l] : 0.0;
 					double spread = area[l] > 0.0 ? sqrt( fmax( myy[l] / area[l] - mean * mean, 0.0 ) ) : 0.0;
@@ -668,10 +667,10 @@ int main( int argc, char** argv )
 
 			if ( getenv( "LAB_EVENTS" ) && i % 6 == 0 )
 			{
-				const b2Pos* pos = b2fFluid_GetPositions( fluid );
-				const float* evx = b2fFluid_GetVelocitiesX( fluid );
-				const float* evy = b2fFluid_GetVelocitiesY( fluid );
-				int count = b2fFluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2Fluid_GetPositions( fluid );
+				const float* evx = b2Fluid_GetVelocitiesX( fluid );
+				const float* evy = b2Fluid_GetVelocitiesY( fluid );
+				int count = b2Fluid_GetParticleCount( fluid );
 				double e = 0.0, best = 0.0;
 				int bi = 0;
 				for ( int k = 0; k < count; ++k )
@@ -689,10 +688,10 @@ int main( int argc, char** argv )
 
 			if ( getenv( "LAB_TRACE" ) && i % 30 == 0 )
 			{
-				const b2Pos* pos = b2fFluid_GetPositions( fluid );
-				const float* tvx = b2fFluid_GetVelocitiesX( fluid );
-				const float* tvy = b2fFluid_GetVelocitiesY( fluid );
-				int count = b2fFluid_GetParticleCount( fluid );
+				const b2Pos* pos = b2Fluid_GetPositions( fluid );
+				const float* tvx = b2Fluid_GetVelocitiesX( fluid );
+				const float* tvy = b2Fluid_GetVelocitiesY( fluid );
+				int count = b2Fluid_GetParticleCount( fluid );
 				float maxSpeed = 0.0f, minY = 1e9f, maxY = -1e9f, minX = 1e9f, maxX = -1e9f;
 				for ( int k = 0; k < count; ++k )
 				{
@@ -709,9 +708,9 @@ int main( int argc, char** argv )
 		}
 		float ms = b2GetMilliseconds( start ) / (float)frames;
 
-		int n = b2fFluid_GetParticleCount( fluid );
+		int n = b2Fluid_GetParticleCount( fluid );
 		uint64_t hash = 14695981039346656037ull;
-		const b2Pos* hashed = b2fFluid_GetPositions( fluid );
+		const b2Pos* hashed = b2Fluid_GetPositions( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
 			hash = HashBytes( hash, &hashed[i].x, sizeof( hashed[i].x ) );
@@ -720,11 +719,11 @@ int main( int argc, char** argv )
 		{
 			hash = HashBytes( hash, &hashed[i].y, sizeof( hashed[i].y ) );
 		}
-		hash = HashBytes( hash, b2fFluid_GetVelocitiesX( fluid ), (size_t)n * sizeof( float ) );
-		hash = HashBytes( hash, b2fFluid_GetVelocitiesY( fluid ), (size_t)n * sizeof( float ) );
+		hash = HashBytes( hash, b2Fluid_GetVelocitiesX( fluid ), (size_t)n * sizeof( float ) );
+		hash = HashBytes( hash, b2Fluid_GetVelocitiesY( fluid ), (size_t)n * sizeof( float ) );
 
 		float top = -1e9f;
-		const b2Pos* pos = b2fFluid_GetPositions( fluid );
+		const b2Pos* pos = b2Fluid_GetPositions( fluid );
 		for ( int i = 0; i < n; ++i )
 		{
 			top = top > pos[i].y ? top : (float)pos[i].y;
@@ -745,10 +744,10 @@ int main( int argc, char** argv )
 		}
 		if ( scene.type == lab_drain )
 		{
-			printf( "  pumped %d mass %.0f stall %.1fs\n", scene.pumped, (double)b2fFluid_GetMovedMass( fluid ), (double)scene.longestStall / 60.0 );
+			printf( "  pumped %d mass %.0f stall %.1fs\n", scene.pumped, (double)b2Fluid_GetMovedMass( fluid ), (double)scene.longestStall / 60.0 );
 		}
 		{
-			const float* size = b2fFluid_GetSizes( fluid );
+			const float* size = b2Fluid_GetSizes( fluid );
 			int bins[6] = { 0 };
 			for ( int i = 0; i < n; ++i )
 			{
@@ -763,9 +762,9 @@ int main( int argc, char** argv )
 		{
 			// Every particle as x, y, size over particleSpacing, density over rest
 			FILE* dump = fopen( getenv( "LAB_DUMP" ), "w" );
-			const float* ps = b2fFluid_GetSizes( fluid );
-			const float* rho = b2fFluid_GetDensities( fluid );
-			float rest = b2fFluid_GetRestDensity( fluid );
+			const float* ps = b2Fluid_GetSizes( fluid );
+			const float* rho = b2Fluid_GetDensities( fluid );
+			float rest = b2Fluid_GetRestDensity( fluid );
 			for ( int i = 0; dump != NULL && i < n; ++i )
 			{
 				fprintf( dump, "%.5f %.5f %.4f %.4f\n", (double)pos[i].x, (double)pos[i].y, (double)( ps[i] / def.particleSpacing ), (double)( rho[i] / rest ) );
@@ -779,7 +778,7 @@ int main( int argc, char** argv )
 		{
 			// Mass over area against depth below the top particle, in the middle half of the width, as a share of a
 			// lattice at particleSpacing, which liquid at rest fills. Spawned liquid stands at 1 / 0.97^2 throughout.
-			const float* ps = b2fFluid_GetSizes( fluid );
+			const float* ps = b2Fluid_GetSizes( fluid );
 			float surface = -1e9f, left = 1e9f, right = -1e9f;
 			for ( int i = 0; i < n; ++i )
 			{
@@ -815,9 +814,9 @@ int main( int argc, char** argv )
 		if ( getenv( "LAB_SQUEEZE" ) )
 		{
 			// How far past rest each particle is squeezed, against its depth below the surface, by size
-			const float* ps = b2fFluid_GetSizes( fluid );
-			const float* rho = b2fFluid_GetDensities( fluid );
-			float rest = b2fFluid_GetRestDensity( fluid );
+			const float* ps = b2Fluid_GetSizes( fluid );
+			const float* rho = b2Fluid_GetDensities( fluid );
+			float rest = b2Fluid_GetRestDensity( fluid );
 			float surface = -1e9f;
 			for ( int i = 0; i < n; ++i )
 			{
@@ -909,7 +908,7 @@ int main( int argc, char** argv )
 			}
 		}
 
-		b2fDestroyFluid( fluid );
+		b2DestroyFluid( fluid );
 		b2DestroyWorld( worldId );
 		if ( oneRun )
 		{

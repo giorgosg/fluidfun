@@ -9,6 +9,7 @@
 #include "body.h"
 #include "contact.h"
 #include "contact_solver.h"
+#include "fluid.h"
 #include "core.h"
 #include "dynamic_tree.h"
 #include "island.h"
@@ -1296,6 +1297,11 @@ static void b2SolverTask( void* taskContext )
 
 			profile->relaxImpulses += b2GetMillisecondsAndReset( &ticks );
 
+			if ( subStepWorld->fluid != NULL )
+			{
+				b2FluidSubStep( &subStepContext, subStepIndex, subStepCount, context->h, subStepWorld->fluid );
+			}
+
 			if ( subStepWorld->subStepFcn != NULL )
 			{
 				subStepWorld->subStepFcn( &subStepContext, subStepIndex, subStepCount, context->h, subStepWorld->subStepContext );
@@ -1435,13 +1441,21 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 	int awakeBodyCount = awakeSet->bodySims.count;
 	if ( awakeBodyCount == 0 )
 	{
-		if ( world->subStepFcn != NULL )
+		if ( world->subStepFcn != NULL || world->fluid != NULL )
 		{
 			b2SubStepContext subStepContext = { 0 };
 			subStepContext.world = world;
 			for ( int i = 0; i < stepContext->subStepCount; ++i )
 			{
-				world->subStepFcn( &subStepContext, i, stepContext->subStepCount, stepContext->h, world->subStepContext );
+				if ( world->fluid != NULL )
+				{
+					b2FluidSubStep( &subStepContext, i, stepContext->subStepCount, stepContext->h, world->fluid );
+				}
+
+				if ( world->subStepFcn != NULL )
+				{
+					world->subStepFcn( &subStepContext, i, stepContext->subStepCount, stepContext->h, world->subStepContext );
+				}
 			}
 		}
 		return;
