@@ -119,6 +119,7 @@ fn compileBox2d(b: *Build, target: ResolvedTarget, optimize: OptimizeMode, optio
         "src/fluid_grid.c",
         "src/fluid_solver.c",
         "src/fluid_spawn.c",
+        "src/fluid_state.c",
         "src/geometry.c",
         "src/hull.c",
         "src/id_pool.c",

@@ -5,7 +5,7 @@
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_CRATE_HALF, LAB_SUBSTEPS,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
+// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
 // LAB_FRAME_EVERY.
 #include "scene.h"
 
@@ -658,6 +658,60 @@ int main( int argc, char** argv )
 				}
 				printf( "\n" );
 			}
+			// LAB_STATE: every half second, or every so many frames if it is a number above 1, each moving body's share under liquid and the liquid's push along up over its
+			// weight, which is near 1 for a body afloat, and every frame the fluid's events. Level is the share of the
+			// body's bounds under the surface three spacings to its right, to compare the share with for a box upright.
+			if ( getenv( "LAB_STATE" ) )
+			{
+				b2Vec2 gravity = b2World_GetGravity( worldId );
+				float g = b2Length( gravity );
+				b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, gravity ) : ( b2Vec2 ){ 0.0f, 1.0f };
+				int every = atoi( getenv( "LAB_STATE" ) ) > 1 ? atoi( getenv( "LAB_STATE" ) ) : 30;
+				if ( ( i + 1 ) % every == 0 )
+				{
+					printf( "STATE %.2f", (double)( i + 1 ) / 60.0 );
+					for ( int k = 0; k < scene.bodyCount; ++k )
+					{
+						if ( b2Body_GetType( scene.bodies[k] ) != b2_dynamicBody )
+						{
+							continue;
+						}
+						b2FluidBodyState state = b2Fluid_GetBodyState( fluid, scene.bodies[k] );
+						float weight = b2Body_GetMass( scene.bodies[k] ) * g;
+						b2AABB box = b2Body_ComputeBounds( scene.bodies[k] );
+						b2Pos beside = { box.upperBound.x + 3.0f * def.fluid.particleSpacing, box.lowerBound.y }, surface = beside;
+						float level = 0.0f;
+						if ( b2Fluid_GetSurfaceHeight( fluid, beside, &surface ) )
+						{
+							level = (float)( surface.y - box.lowerBound.y ) / ( box.upperBound.y - box.lowerBound.y );
+							level = level < 0.0f ? 0.0f : ( level > 1.0f ? 1.0f : level );
+						}
+						printf( " | %d: %s submerged %.2f level %.2f force/weight %.2f", k, state.inLiquid ? "in" : "out", (double)state.submerged,
+								(double)level, weight > 0.0f ? (double)( b2Dot( state.force, up ) / weight ) : 0.0 );
+					}
+					printf( "\n" );
+				}
+
+				b2FluidEvents events = b2Fluid_GetEvents( fluid );
+				for ( int e = 0; e < events.bodyBeginCount; ++e )
+				{
+					printf( "EVENT %.2f body %d begins in liquid %d\n", (double)( i + 1 ) / 60.0, events.bodyBeginEvents[e].bodyId.index1,
+							B2_IS_NULL( events.bodyBeginEvents[e].liquidId ) ? -1 : b2Liquid_GetIndex( events.bodyBeginEvents[e].liquidId ) );
+				}
+				for ( int e = 0; e < events.bodyEndCount; ++e )
+				{
+					printf( "EVENT %.2f body %d ends\n", (double)( i + 1 ) / 60.0, events.bodyEndEvents[e].bodyId.index1 );
+				}
+				for ( int e = 0; e < events.sensorBeginCount; ++e )
+				{
+					printf( "EVENT %.2f sensor %d begins\n", (double)( i + 1 ) / 60.0, events.sensorBeginEvents[e].sensorShapeId.index1 );
+				}
+				for ( int e = 0; e < events.sensorEndCount; ++e )
+				{
+					printf( "EVENT %.2f sensor %d ends\n", (double)( i + 1 ) / 60.0, events.sensorEndEvents[e].sensorShapeId.index1 );
+				}
+			}
+
 			if ( getenv( "LAB_BODIES" ) && i % 120 == 0 )
 			{
 				printf( "T %.0f", (double)i / 60.0 );

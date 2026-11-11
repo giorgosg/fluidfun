@@ -85,6 +85,7 @@ set(FLUIDFUN_SOURCE_FILES
 	fluid_grid.c
 	fluid_solver.c
 	fluid_spawn.c
+	fluid_state.c
 )
 
 set(BOX2D_API_FILES

@@ -233,6 +233,123 @@ typedef struct b2FluidParticles
 B2_API b2FluidParticles b2Fluid_GetParticles( b2FluidId fluidId );
 B2_API b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId );
 
+/// What the liquid did to a body over the last step. It is worked out at the end of each b2World_Step and is good
+/// until the next one.
+///
+/// Only bodies the solver moves this step feel the liquid: dynamic bodies, which the fluid keeps awake near liquid, and
+/// kinematic bodies that are awake. Static bodies, and kinematic bodies Box2D has put to sleep, are never in liquid
+/// here and report a zeroed state. A kinematic body reports the push the liquid gives it, though nothing moves it.
+typedef struct b2FluidBodyState
+{
+	/// Whether liquid has been within reach of the body: within the interaction radius of its outline, 1.78 particle
+	/// spacings for particles at the finest size. It turns true once there has been liquid in reach for 3 steps in a
+	/// row, and false once there has been none for 3 steps in a row, so a drop that splashes past does not begin and
+	/// end it. The other fields are from the last step whatever this says.
+	bool inLiquid;
+	/// Share of the body under liquid, 0 to 1, averaged over the substeps of the last step. It is the solver's own
+	/// estimate, which buoyancyAssist uses: twice the mean height of the liquid within reach above the body's lowest
+	/// point, over the body's height, against gravity; and 1 with liquid all the way round the body. That would be
+	/// exact for a box wet up its sides alone, but the liquid under the body's bottom counts too, so it reads low for
+	/// a body afloat, and more so for a small one: with particles 0.08 apart, an upright crate 1.2 across that is half
+	/// under reads about 0.37, and one 0.6 across that is 0.42 under reads about 0.06. Other shapes are rougher
+	/// still. Use it to tell more from less; inLiquid and force are the better guides. Zero without gravity unless
+	/// liquid is all round.
+	float submerged;
+	/// The liquid's push on the body, its impulse over the last step divided by the step's time, in Box2D's units of
+	/// force. It counts the particles pushed out of the body and their pressure across its outline, and the buoyancy
+	/// that b2LiquidTuning::buoyancyAssist makes up in gaps and around a still body. It leaves out what
+	/// b2LiquidTuning::addedMass does, which shares each change of the body's motion with the liquid near it, so a
+	/// light body speeding up accelerates by less than this force over its mass.
+	b2Vec2 force;
+	/// The turning effect of that push about the body's centre of mass, its angular impulse over the step's time
+	float torque;
+	/// The liquid most of the mass within reach of the body is, counted in the last substep of the last step that
+	/// had liquid in reach at its end, or null if it has not been in liquid
+	b2LiquidId liquidId;
+} b2FluidBodyState;
+
+/// The state of a body after the last step. A body that has not been near liquid, or that no longer exists, gives a
+/// zeroed state with inLiquid false and a null liquid.
+B2_API b2FluidBodyState b2Fluid_GetBodyState( b2FluidId fluidId, b2BodyId bodyId );
+
+/// A body's inLiquid turned true in the last step
+typedef struct b2FluidBodyBeginEvent
+{
+	b2BodyId bodyId;
+	/// The liquid most of what is within reach of it is
+	b2LiquidId liquidId;
+} b2FluidBodyBeginEvent;
+
+/// A body's inLiquid turned false in the last step, or a body that was in liquid was destroyed since the step before.
+/// @warning the body may have been destroyed, so confirm it with b2Body_IsValid
+typedef struct b2FluidBodyEndEvent
+{
+	b2BodyId bodyId;
+} b2FluidBodyEndEvent;
+
+/// A sensor shape went from holding no liquid to holding some in the last step
+typedef struct b2FluidSensorBeginEvent
+{
+	b2ShapeId sensorShapeId;
+} b2FluidSensorBeginEvent;
+
+/// A sensor shape that held liquid holds none after the last step, or it was destroyed since the step before.
+/// @warning the shape may have been destroyed, so confirm it with b2Shape_IsValid
+typedef struct b2FluidSensorEndEvent
+{
+	b2ShapeId sensorShapeId;
+} b2FluidSensorEndEvent;
+
+/// What changed in the last step, as Box2D gives sensor and contact events: arrays with counts, which belong to the
+/// fluid and are good until the next b2World_Step.
+///
+/// Sensors count liquid in every sensor shape near the liquid, by whether each particle's centre is inside the
+/// shape's outline, once a step after the substeps. Sensor shapes made from segments hold nothing. Sensors have no
+/// delay, unlike bodies: a sensor that one drop passes through begins and ends with it.
+typedef struct b2FluidEvents
+{
+	b2FluidBodyBeginEvent* bodyBeginEvents;
+	b2FluidBodyEndEvent* bodyEndEvents;
+	b2FluidSensorBeginEvent* sensorBeginEvents;
+	b2FluidSensorEndEvent* sensorEndEvents;
+	int bodyBeginCount;
+	int bodyEndCount;
+	int sensorBeginCount;
+	int sensorEndCount;
+} b2FluidEvents;
+
+B2_API b2FluidEvents b2Fluid_GetEvents( b2FluidId fluidId );
+
+/// How much liquid a sensor shape held after the last step, as the area it fills at rest, in length units squared:
+/// a particle of size s, as b2FluidParticles::sizes gives it, fills 0.866 s^2. Zero for a shape that is not a sensor
+/// or is far from the liquid. Liquid squeezed by depth packs a little tighter than at rest, so a sensor under liquid
+/// reads a little over its own area: 3% over, averaged over a second, for a box 0.8 by 0.3 between 0.25 and 0.55
+/// under the surface with particles 0.08 apart. Particles crossing its edges make it vary from step to step.
+B2_API float b2Fluid_GetSensorArea( b2FluidId fluidId, b2ShapeId sensorShapeId );
+
+/// An amount of liquid
+typedef struct b2FluidAmount
+{
+	/// Particles
+	int count;
+	/// The area they fill at rest, 0.866 s^2 for a particle of size s, in length units squared
+	float area;
+	/// That area times each particle's liquid's density
+	float mass;
+} b2FluidAmount;
+
+/// The liquid whose particle centres are inside a box, counted now with a loop over every particle. Call it between
+/// steps.
+B2_API b2FluidAmount b2Fluid_MeasureBox( b2FluidId fluidId, b2Pos lowerBound, b2Pos upperBound );
+
+/// Where the liquid's surface is over a point, counted now with a loop over every particle. Among particles within two
+/// particle spacings of the line through the point along gravity, it takes the highest, leaving out spray, whose
+/// density is under 0.4 of rest, and gives the point on that line half that particle's size above it. So it is the
+/// top of the liquid in that column, wherever the point is: over liquid resting on a shelf above a pool it finds the
+/// top of that on the shelf. Returns false, and leaves surface alone, if there is no such particle. With no gravity,
+/// up is +y. Call it between steps.
+B2_API bool b2Fluid_GetSurfaceHeight( b2FluidId fluidId, b2Pos point, b2Pos* surface );
+
 #ifdef __cplusplus
 }
 #endif

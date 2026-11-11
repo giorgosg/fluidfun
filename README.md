@@ -16,6 +16,8 @@ fluidfun is not part of Box2D and is not made by its author.
   and coarser deep down. A deep pool needs far fewer particles.
 - **Several liquids** that keep apart, each with its own density, stiffness, viscosity and cohesion. Light liquids
   float on heavy ones.
+- **Asking the liquid**: whether a body is in liquid, how much of it is under, and how hard the liquid pushes it;
+  events when bodies and sensor shapes gain or lose liquid; how much liquid is in a box, and where its surface is.
 - **Deterministic**: the same scene gives the same result bit for bit at any worker count.
 - **Large worlds**: particle positions are `b2Pos`, so they are doubles when Box2D is built with
   `BOX2D_DOUBLE_PRECISION`.
@@ -24,8 +26,8 @@ fluidfun is not part of Box2D and is not made by its author.
 
 Besides the liquid code (`src/fluid*.c`, `include/box2d/fluidfun.h`), the fork changes Box2D in two ways.
 
-The world owns its fluid: `b2World_Step` prepares it before the step and runs it at the end of every solver sub-step,
-and `b2DestroyWorld` frees it. A fluid is named by a `b2FluidId`, as bodies and shapes are by theirs.
+The world owns its fluid: `b2World_Step` prepares it before the step, runs it at the end of every solver sub-step and
+has it work out body states and events after the step, and `b2DestroyWorld` frees it. A fluid is named by a `b2FluidId`, as bodies and shapes are by theirs.
 
 There is also a callback that runs at the end of every solver sub-step, after the fluid, with access to the step's
 workers and to body motion. The fluid is built on the same three `b2SubStep_` functions.
@@ -92,6 +94,18 @@ for ( int i = 0; i < particles.count; ++i )
 	b2Pos p = particles.positions[i];
 	float size = particles.sizes[i]; // in the units of particleSpacing
 	// draw particle i at p, size across
+}
+
+// What the liquid did to a body over the last step, and what began and ended, as Box2D gives sensor events
+b2FluidBodyState state = b2Fluid_GetBodyState( fluid, crateId );
+if ( state.inLiquid )
+{
+	// state.submerged, from 0 to 1, and the liquid's push, state.force and state.torque
+}
+b2FluidEvents events = b2Fluid_GetEvents( fluid );
+for ( int i = 0; i < events.sensorBeginCount; ++i )
+{
+	// liquid reached events.sensorBeginEvents[i].sensorShapeId; b2Fluid_GetSensorArea says how much
 }
 
 // Destroying the world destroys its fluid too
