@@ -449,12 +449,12 @@ static void CollideTask( int start, int end, int worker, void* context )
 	b2fFluid* f = context;
 	float margin = f->margin, h = f->h, inv = 1.0f / h, friction = f->liquids[0].def.friction, m = f->mass;
 	bool adaptive = f->adaptive, multi = f->liquidCount > 1;
-	float baseMass = f->mass, spacing = f->spacing, added = f->liquids[0].def.addedMass;
+	float baseMass = f->mass, spacing = f->spacing, added = f->liquids[0].def.tuning.addedMass;
 
 	// What a patch needs of the liquid around its body: the density its buoyancy goes by, and how high the liquid
 	// stands on the body, against gravity
 	const b2LiquidDef* def = &f->liquids[0].def;
-	float buoyantDensity = def->contactPressure * def->massDensity * def->gravityScale;
+	float buoyantDensity = def->tuning.buoyancyAssist * def->density * def->gravityScale;
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
 
@@ -473,8 +473,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 				baseMass = liquid->mass;
 				m = baseMass;
 				friction = liquid->def.friction;
-				buoyantDensity = liquid->def.contactPressure * liquid->def.massDensity * liquid->def.gravityScale;
-				added = liquid->def.addedMass;
+				buoyantDensity = liquid->def.tuning.buoyancyAssist * liquid->def.density * liquid->def.gravityScale;
+				added = liquid->def.tuning.addedMass;
 			}
 			if ( adaptive )
 			{
@@ -776,13 +776,13 @@ static void ShareTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float h = f->h, added = f->liquids[0].def.addedMass;
+	float h = f->h, added = f->liquids[0].def.tuning.addedMass;
 	bool multi = f->liquidCount > 1;
 	for ( int i = start; i < end; ++i )
 	{
 		if ( multi )
 		{
-			added = f->liquids[f->liquid[i]].def.addedMass;
+			added = f->liquids[f->liquid[i]].def.tuning.addedMass;
 		}
 
 		const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
@@ -900,7 +900,7 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 	bool patches = false;
 	for ( int l = 0; l < f->liquidCount; ++l )
 	{
-		patches = patches || f->liquids[l].def.contactPressure > 0.0f;
+		patches = patches || f->liquids[l].def.tuning.buoyancyAssist > 0.0f;
 	}
 	if ( patches )
 	{

@@ -7,8 +7,8 @@
 float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h )
 {
 	const b2LiquidDef* def = &f->liquids[liquid].def;
-	float coarse = def->adaptiveRatio * f->spacing;
-	float reach = g > 0.0f && h > 0.0f ? 0.5f * B2F_DEPTH_LIMIT_SCALE * def->stiffness * coarse * coarse / ( g * h * h ) : FLT_MAX;
+	float coarse = def->tuning.adaptiveRatio * f->spacing;
+	float reach = g > 0.0f && h > 0.0f ? 0.5f * B2F_DEPTH_LIMIT_SCALE * def->tuning.stiffness * coarse * coarse / ( g * h * h ) : FLT_MAX;
 	return f->def.adaptiveDepth > 0.0f && f->def.adaptiveDepth < reach ? f->def.adaptiveDepth : reach;
 }
 
@@ -292,25 +292,25 @@ void b2fAdaptSizes( b2fFluid* f )
 	for ( int l = 0; l < f->liquidCount; ++l )
 	{
 		const b2LiquidDef* def = &f->liquids[l].def;
-		float ratio = def->adaptiveRatio > 1.0f ? def->adaptiveRatio : 1.0f;
+		float ratio = def->tuning.adaptiveRatio > 1.0f ? def->tuning.adaptiveRatio : 1.0f;
 		float g = -def->gravityScale * f->worldGravity.y;
 		float reach = b2fAdaptiveReach( f, l, g, f->h );
 		sizes[l] = ( b2fLiquidSizes ){
 			.baseMass = fineMass * ratio * ratio,
 			.ratio = ratio,
 			.reach = reach,
-			.fastSpeed = def->adaptiveSpeed,
-			.tolerance = def->adaptiveTolerance,
-			.limit = def->adaptiveLimit,
-			.rate = def->adaptiveRate,
-			.safeScale = fineMass * 2.0f * g * f->h * f->h / ( B2F_DEPTH_LIMIT_SCALE * def->stiffness * spacing * spacing ),
-			.depthLimit = def->adaptiveDepthLimit,
+			.fastSpeed = def->tuning.adaptiveSpeed,
+			.tolerance = def->tuning.adaptiveTolerance,
+			.limit = def->tuning.adaptiveLimit,
+			.rate = def->tuning.adaptiveRate,
+			.safeScale = fineMass * 2.0f * g * f->h * f->h / ( B2F_DEPTH_LIMIT_SCALE * def->tuning.stiffness * spacing * spacing ),
+			.depthLimit = def->tuning.adaptiveDepthLimit,
 		};
-		perMetre[l] = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( def->stiffness * spacing * spacing );
+		perMetre[l] = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( def->tuning.stiffness * spacing * spacing );
 		if ( ratio > 1.0f )
 		{
 			deepest = deepest > reach ? deepest : reach;
-			wantFlow = wantFlow || def->adaptiveSpeed > 0.0f;
+			wantFlow = wantFlow || def->tuning.adaptiveSpeed > 0.0f;
 		}
 	}
 

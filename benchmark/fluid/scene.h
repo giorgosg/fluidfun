@@ -35,6 +35,14 @@ typedef enum LabSceneType
 
 #define LAB_MAX_BODIES 64
 
+// What a scene is made from: the fluid's settings and those of its first liquid, which the other liquids of a scene
+// start from
+typedef struct LabDef
+{
+	b2FluidDef fluid;
+	b2LiquidDef liquid;
+} LabDef;
+
 typedef struct LabScene
 {
 	LabSceneType type;
@@ -73,6 +81,9 @@ typedef struct LabScene
 	int pumped;
 	int stall, longestStall;
 
+	// The scene's liquids: its first, then any it adds
+	b2LiquidId liquids[3];
+
 	// A second liquid's settings, for scenes whose slider changes it
 	b2LiquidDef second;
 
@@ -83,10 +94,11 @@ typedef struct LabScene
 
 LabScene LabDefaultScene( LabSceneType type );
 
-/// Changes the fluid settings a scene starts from, for scenes that show a liquid other than water. Call it on
-/// b2DefaultFluidDef before creating the scene.
-void LabSceneSettings( LabSceneType type, b2FluidDef* def );
-b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const b2FluidDef* def );
+/// Changes the settings a scene starts from, for scenes that show a liquid other than water. Call it on
+/// LabDefaultDef before creating the scene.
+void LabSceneSettings( LabSceneType type, LabDef* def );
+LabDef LabDefaultDef( void );
+b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def );
 
 /// Call once per frame before b2World_Step. Drives whatever the scene moves.
 void LabStepScene( LabScene* scene, b2FluidId fluid, float timeStep );

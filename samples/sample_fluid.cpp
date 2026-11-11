@@ -18,8 +18,8 @@ public:
 			for ( int i = 0; i < lab_sceneCount; ++i )
 			{
 				s_scenes[i] = LabDefaultScene( (LabSceneType)i );
-				s_defs[i] = b2DefaultFluidDef();
-				s_defs[i].capacity = 2000000;
+				s_defs[i] = LabDefaultDef();
+				s_defs[i].fluid.capacity = 2000000;
 				LabSceneSettings( (LabSceneType)i, s_defs + i );
 			}
 			first = false;
@@ -66,7 +66,7 @@ public:
 		static const float tints[3][3] = { { 40.0f, 110.0f, 255.0f }, { 230.0f, 170.0f, 40.0f }, { 200.0f, 40.0f, 60.0f } };
 		for ( int i = 0; i < n; ++i )
 		{
-			float scale = size[i] / m_def->particleSpacing;
+			float scale = size[i] / m_def->fluid.particleSpacing;
 			float speed = b2MinFloat( b2Length( { vx[i], vy[i] } ) / 8.0f, 1.0f );
 			const float* tint = liquid[i] == 0 && m_scene->color[0] + m_scene->color[1] + m_scene->color[2] > 0.0f ? m_scene->color : tints[liquid[i] % 3];
 			uint32_t red = (uint32_t)( tint[0] + ( 255.0f - tint[0] ) * speed );
@@ -89,39 +89,40 @@ public:
 		ImGui::Text( "density %.2f collide %.2f", p.density, p.collide );
 
 		bool changed = false;
-		changed |= ImGui::SliderFloat( "Stiffness", &m_def->liquid.stiffness, 0.0f, 0.2f, "%.3f" );
-		changed |= ImGui::SliderFloat( "Near", &m_def->liquid.nearStiffness, 0.0f, 0.5f, "%.3f" );
-		changed |= ImGui::SliderFloat( "Tensile pressure", &m_def->liquid.tensilePressure, 0.0f, 1.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Stiffness", &m_def->liquid.tuning.stiffness, 0.0f, 0.2f, "%.3f" );
+		changed |= ImGui::SliderFloat( "Near", &m_def->liquid.tuning.nearStiffness, 0.0f, 0.5f, "%.3f" );
+		changed |= ImGui::SliderFloat( "Tensile pressure", &m_def->liquid.tuning.tensilePressure, 0.0f, 1.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Cohesion", &m_def->liquid.cohesion, 0.0f, 0.5f, "%.3f" );
 		changed |= ImGui::SliderFloat( "Adhesion", &m_def->liquid.adhesion, 0.0f, 0.5f, "%.3f" );
-		changed |= ImGui::SliderFloat( "Viscosity", &m_def->liquid.linearViscosity, 0.0f, 20.0f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Quad viscosity", &m_def->liquid.quadraticViscosity, 0.0f, 5.0f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Adaptive ratio", &m_def->liquid.adaptiveRatio, 1.0f, 30.0f, "%.1f" );
-		changed |= ImGui::SliderFloat( "Adaptive depth", &m_def->adaptiveDepth, 0.0f, 60.0f, "%.1f" );
-		changed |= ImGui::SliderFloat( "Fast speed (0 off)", &m_def->liquid.adaptiveSpeed, 0.0f, 12.0f, "%.1f" );
-		changed |= ImGui::Checkbox( "Respect depth limit", &m_def->liquid.adaptiveDepthLimit );
+		changed |= ImGui::SliderFloat( "Viscosity", &m_def->liquid.viscosity, 0.0f, 20.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Quad viscosity", &m_def->liquid.tuning.quadraticViscosity, 0.0f, 5.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Adaptive ratio", &m_def->liquid.tuning.adaptiveRatio, 1.0f, 30.0f, "%.1f" );
+		changed |= ImGui::SliderFloat( "Adaptive depth", &m_def->fluid.adaptiveDepth, 0.0f, 60.0f, "%.1f" );
+		changed |= ImGui::SliderFloat( "Fast speed (0 off)", &m_def->liquid.tuning.adaptiveSpeed, 0.0f, 12.0f, "%.1f" );
+		changed |= ImGui::Checkbox( "Respect depth limit", &m_def->liquid.tuning.adaptiveDepthLimit );
 		ImGui::Text( "Size changes %d", p.sizeChanges );
-		changed |= ImGui::SliderFloat( "Full box", &m_def->adaptiveFullBox, 0.5f, 1.2f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Size tolerance", &m_def->liquid.adaptiveTolerance, 0.0f, 0.45f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Split/merge limit", &m_def->liquid.adaptiveLimit, 1.5f, 4.0f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Exchange rate", &m_def->liquid.adaptiveRate, 0.01f, 1.0f, "%.2f", ImGuiSliderFlags_Logarithmic );
+		changed |= ImGui::SliderFloat( "Full box", &m_def->fluid.adaptiveFullBox, 0.5f, 1.2f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Size tolerance", &m_def->liquid.tuning.adaptiveTolerance, 0.0f, 0.45f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Split/merge limit", &m_def->liquid.tuning.adaptiveLimit, 1.5f, 4.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Exchange rate", &m_def->liquid.tuning.adaptiveRate, 0.01f, 1.0f, "%.2f", ImGuiSliderFlags_Logarithmic );
 		ImGui::Text( "Measure %.2f ms", p.measure );
-		changed |= ImGui::SliderFloat( "Contact pressure", &m_def->liquid.contactPressure, 0.0f, 2.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Contact pressure", &m_def->liquid.tuning.buoyancyAssist, 0.0f, 2.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Friction", &m_def->liquid.friction, 0.0f, 1.0f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Added mass", &m_def->liquid.addedMass, 0.0f, 1.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Added mass", &m_def->liquid.tuning.addedMass, 0.0f, 1.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Spring stiffness", &m_def->liquid.springStiffness, 0.0f, 100000.0f, "%.0f", ImGuiSliderFlags_Logarithmic );
 		changed |= ImGui::SliderFloat( "Plasticity", &m_def->liquid.plasticity, 0.0f, 5.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Yield ratio", &m_def->liquid.yieldRatio, 0.0f, 0.5f, "%.2f" );
 		if ( changed )
 		{
-			b2Fluid_SetDef( m_fluid, m_def );
+			b2Fluid_SetDef( m_fluid, &m_def->fluid );
+			b2Liquid_SetDef( m_scene->liquids[0], &m_def->liquid );
 		}
 
 		ImGui::SliderFloat( "Dot size", &m_pointSize, 1.0f, 12.0f, "%.1f" );
 
 		// These need a new scene
-		bool rebuild = ImGui::SliderFloat( "Spacing", &m_def->particleSpacing, 0.02f, 0.2f, "%.3f" );
-		rebuild |= ImGui::SliderFloat( "Liquid density", &m_def->liquid.massDensity, 0.25f, 4.0f, "%.2f" );
+		bool rebuild = ImGui::SliderFloat( "Spacing", &m_def->fluid.particleSpacing, 0.02f, 0.2f, "%.3f" );
+		rebuild |= ImGui::SliderFloat( "Liquid density", &m_def->liquid.density, 0.25f, 4.0f, "%.2f" );
 		if ( m_scene->type == lab_tank )
 		{
 			rebuild |= ImGui::SliderInt( "Crates", &m_scene->crateCount, 0, 40 );
@@ -149,11 +150,11 @@ public:
 		return new SampleFluid( context, type );
 	}
 
-	static inline b2FluidDef s_defs[lab_sceneCount];
+	static inline LabDef s_defs[lab_sceneCount];
 	static inline LabScene s_scenes[lab_sceneCount];
 
 	LabScene* m_scene;
-	b2FluidDef* m_def;
+	LabDef* m_def;
 	b2FluidId m_fluid;
 	float m_pointSize = 4.0f;
 };

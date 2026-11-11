@@ -187,6 +187,9 @@ typedef struct b2fLiquid
 {
 	b2LiquidDef def;
 	float mass;	 // of a particle at the finest size
+	// A destroyed liquid leaves its slot for the next one created, and the count changes so old ids do not fit
+	bool alive;
+	uint16_t generation;
 } b2fLiquid;
 
 // What two liquids use between them, kept for every ordered pair so the move pass makes one lookup per pair
@@ -196,7 +199,7 @@ typedef struct b2fLiquidPair
 	// Share of the pair's move the first liquid takes, over the even share: twice the other's mass density over the
 	// sum of both. Heavier particles move less, which keeps momentum and makes lighter liquid float.
 	float weight;
-	float linearViscosity, quadraticViscosity;
+	float viscosity, quadraticViscosity;
 } b2fLiquidPair;
 
 
@@ -321,6 +324,8 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 
 // fluid.c
 b2fFluid* b2fGetFluid( b2FluidId fluidId );
+// The liquid's index in its fluid
+int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
 
 // grid.c
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );

@@ -150,33 +150,33 @@ static uint64_t HashBytes( uint64_t hash, const void* data, size_t size )
 }
 
 // Fluid settings that can be set from the environment, for example LAB_ADAPTIVE=1 for uniform sizes
-static void ApplySettings( b2FluidDef* def )
+static void ApplySettings( LabDef* def )
 {
 	struct
 	{
 		const char* name;
 		float* value;
 	} settings[] = {
-		{ "LAB_SPACING", &def->particleSpacing },
-		{ "LAB_CONTACT", &def->liquid.contactPressure },
-		{ "LAB_ADDED_MASS", &def->liquid.addedMass },
+		{ "LAB_SPACING", &def->fluid.particleSpacing },
+		{ "LAB_CONTACT", &def->liquid.tuning.buoyancyAssist },
+		{ "LAB_ADDED_MASS", &def->liquid.tuning.addedMass },
 		{ "LAB_SPRING", &def->liquid.springStiffness },
 		{ "LAB_PLASTICITY", &def->liquid.plasticity },
 		{ "LAB_YIELD", &def->liquid.yieldRatio },
 		{ "LAB_FRICTION", &def->liquid.friction },
-		{ "LAB_TENSILE", &def->liquid.tensilePressure },
+		{ "LAB_TENSILE", &def->liquid.tuning.tensilePressure },
 		{ "LAB_COHESION", &def->liquid.cohesion },
 		{ "LAB_ADHESION", &def->liquid.adhesion },
 		{ "LAB_GRAVITY", &def->liquid.gravityScale },
-		{ "LAB_VISCOSITY", &def->liquid.linearViscosity },
-		{ "LAB_QUADRATIC", &def->liquid.quadraticViscosity },
-		{ "LAB_ADAPTIVE", &def->liquid.adaptiveRatio },
-		{ "LAB_ADAPTIVE_DEPTH", &def->adaptiveDepth },
-		{ "LAB_FAST", &def->liquid.adaptiveSpeed },
-		{ "LAB_FULL", &def->adaptiveFullBox },
-		{ "LAB_TOLERANCE", &def->liquid.adaptiveTolerance },
-		{ "LAB_LIMIT", &def->liquid.adaptiveLimit },
-		{ "LAB_RATE", &def->liquid.adaptiveRate },
+		{ "LAB_VISCOSITY", &def->liquid.viscosity },
+		{ "LAB_QUADRATIC", &def->liquid.tuning.quadraticViscosity },
+		{ "LAB_ADAPTIVE", &def->liquid.tuning.adaptiveRatio },
+		{ "LAB_ADAPTIVE_DEPTH", &def->fluid.adaptiveDepth },
+		{ "LAB_FAST", &def->liquid.tuning.adaptiveSpeed },
+		{ "LAB_FULL", &def->fluid.adaptiveFullBox },
+		{ "LAB_TOLERANCE", &def->liquid.tuning.adaptiveTolerance },
+		{ "LAB_LIMIT", &def->liquid.tuning.adaptiveLimit },
+		{ "LAB_RATE", &def->liquid.tuning.adaptiveRate },
 	};
 	for ( size_t i = 0; i < sizeof( settings ) / sizeof( settings[0] ); ++i )
 	{
@@ -190,12 +190,12 @@ static void ApplySettings( b2FluidDef* def )
 	// Near stiffness follows stiffness, at the usual 2.5 times
 	if ( getenv( "LAB_STIFFNESS" ) )
 	{
-		def->liquid.stiffness = (float)atof( getenv( "LAB_STIFFNESS" ) );
-		def->liquid.nearStiffness = 2.5f * def->liquid.stiffness;
+		def->liquid.tuning.stiffness = (float)atof( getenv( "LAB_STIFFNESS" ) );
+		def->liquid.tuning.nearStiffness = 2.5f * def->liquid.tuning.stiffness;
 	}
 	if ( getenv( "LAB_DEPTH_LIMIT" ) )
 	{
-		def->liquid.adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;
+		def->liquid.tuning.adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;
 	}
 }
 
@@ -396,8 +396,8 @@ int main( int argc, char** argv )
 		scene.tankWidth *= scale;
 		scene.liquidHeight *= scale;
 		scene.tankHeight *= scale;
-		b2FluidDef def = b2DefaultFluidDef();
-		def.capacity = 2000000;
+		LabDef def = LabDefaultDef();
+		def.fluid.capacity = 2000000;
 		LabSceneSettings( scene.type, &def );
 		ApplySettings( &def );
 		b2FluidId fluid = LabCreateScene( worldId, &scene, &def );
@@ -405,7 +405,7 @@ int main( int argc, char** argv )
 		// liquids on the same physics, to time them
 		if ( getenv( "LAB_SECOND_LIQUID" ) )
 		{
-			b2Fluid_CreateLiquid( fluid, &def.liquid );
+			b2CreateLiquid( fluid, &def.liquid );
 		}
 
 		// LAB_BODY_DENSITY: give every moving body this density, to find the lightest body the coupling holds
@@ -513,14 +513,14 @@ int main( int argc, char** argv )
 						b2AABB box = b2Body_ComputeBounds( scene.bodies[k] );
 						lowBottom[k] = box.lowerBound.y < lowBottom[k] ? box.lowerBound.y : lowBottom[k];
 						highBottom[k] = box.lowerBound.y > highBottom[k] ? box.lowerBound.y : highBottom[k];
-						float inset = 2.0f * def.particleSpacing;
+						float inset = 2.0f * def.fluid.particleSpacing;
 						const b2Pos* ps = b2Fluid_GetPositions( fluid );
 						int n = b2Fluid_GetParticleCount( fluid ), count = 0;
 						for ( int j = 0; j < n; ++j )
 						{
 							float px = (float)ps[j].x, py = (float)ps[j].y;
-							count += px > box.lowerBound.x + inset && px < box.upperBound.x - inset && py < box.lowerBound.y + 0.3f * def.particleSpacing &&
-											 py > box.lowerBound.y - 4.0f * def.particleSpacing
+							count += px > box.lowerBound.x + inset && px < box.upperBound.x - inset && py < box.lowerBound.y + 0.3f * def.fluid.particleSpacing &&
+											 py > box.lowerBound.y - 4.0f * def.fluid.particleSpacing
 										 ? 1
 										 : 0;
 						}
@@ -530,7 +530,7 @@ int main( int argc, char** argv )
 			}
 			if ( getenv( "LAB_HOLES" ) && ( i + 1 ) % atoi( getenv( "LAB_HOLES" ) ) == 0 )
 			{
-				PrintShape( fluid, def.particleSpacing, i + 1 );
+				PrintShape( fluid, def.fluid.particleSpacing, i + 1 );
 			}
 			if ( getenv( "LAB_LEVEL" ) && ( i < 60 ? i % 10 == 0 : i % 120 == 0 ) )
 			{
@@ -545,7 +545,7 @@ int main( int argc, char** argv )
 					double weight = (double)ps[k] * ps[k];
 					my += weight * pos[k].y;
 					m += weight;
-					float r = ps[k] / def.particleSpacing;
+					float r = ps[k] / def.fluid.particleSpacing;
 					if ( r < 1.5f )
 					{
 						fineY += pos[k].y;
@@ -751,7 +751,7 @@ int main( int argc, char** argv )
 			int bins[6] = { 0 };
 			for ( int i = 0; i < n; ++i )
 			{
-				float ratio = size[i] / def.particleSpacing;
+				float ratio = size[i] / def.fluid.particleSpacing;
 				int bin = ratio < 1.1f ? 0 : ratio < 1.3f ? 1 : ratio < 1.6f ? 2 : ratio < 2.1f ? 3 : ratio < 3.0f ? 4 : 5;
 				bins[bin] += 1;
 			}
@@ -767,7 +767,7 @@ int main( int argc, char** argv )
 			float rest = b2Fluid_GetRestDensity( fluid );
 			for ( int i = 0; dump != NULL && i < n; ++i )
 			{
-				fprintf( dump, "%.5f %.5f %.4f %.4f\n", (double)pos[i].x, (double)pos[i].y, (double)( ps[i] / def.particleSpacing ), (double)( rho[i] / rest ) );
+				fprintf( dump, "%.5f %.5f %.4f %.4f\n", (double)pos[i].x, (double)pos[i].y, (double)( ps[i] / def.fluid.particleSpacing ), (double)( rho[i] / rest ) );
 			}
 			if ( dump != NULL )
 			{
@@ -829,7 +829,7 @@ int main( int argc, char** argv )
 			for ( int i = 0; i < n; ++i )
 			{
 				int b = (int)( ( surface - pos[i].y ) / binDepth );
-				float r = ps[i] / def.particleSpacing;
+				float r = ps[i] / def.fluid.particleSpacing;
 				int c = r < 1.5f ? 0 : r < 3.0f ? 1 : 2;
 				if ( b >= 0 && b < bins )
 				{
@@ -844,7 +844,7 @@ int main( int argc, char** argv )
 				FILE* dump = fopen( getenv( "LAB_SQUEEZE_DUMP" ), "w" );
 				for ( int i = 0; dump != NULL && i < n; ++i )
 				{
-					fprintf( dump, "%g %g %g\n", (double)( surface - pos[i].y ), (double)( ps[i] / def.particleSpacing ), (double)( rho[i] / rest - 1.0f ) );
+					fprintf( dump, "%g %g %g\n", (double)( surface - pos[i].y ), (double)( ps[i] / def.fluid.particleSpacing ), (double)( rho[i] / rest - 1.0f ) );
 				}
 				if ( dump != NULL )
 				{
