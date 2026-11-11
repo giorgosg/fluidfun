@@ -320,6 +320,11 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 			def->liquid.cohesion = 0.1f;
 			break;
 
+		case lab_lava:
+			// Less adhesion than usual, chosen by eye. The wax copies it.
+			def->liquid.adhesion = 0.01f;
+			break;
+
 		case lab_plunge:
 			// All one size, since each drop is laid out at the finest size
 			def->liquid.adaptiveRatio = 1.0f;
