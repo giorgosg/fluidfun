@@ -7,7 +7,7 @@
 float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h )
 {
 	const b2fLiquidDef* def = &f->liquids[liquid].def;
-	float coarse = def->adaptiveRatio * f->def.particleSpacing;
+	float coarse = def->adaptiveRatio * f->spacing;
 	float reach = g > 0.0f && h > 0.0f ? 0.5f * B2F_DEPTH_LIMIT_SCALE * def->stiffness * coarse * coarse / ( g * h * h ) : FLT_MAX;
 	return f->def.adaptiveDepth > 0.0f && f->def.adaptiveDepth < reach ? f->def.adaptiveDepth : reach;
 }
@@ -71,7 +71,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		largest = largest > f->size[i] ? largest : f->size[i];
 	}
 
-	float spacing = f->def.particleSpacing, cell = B2F_BOX_CELL * spacing;
+	float spacing = f->spacing, cell = B2F_BOX_CELL * spacing;
 	float extentX = (float)( maxX - minX ), extentY = (float)( maxY - minY );
 	float extent = extentX > extentY ? extentX : extentY;
 	while ( extent / cell > 2048.0f )
@@ -284,7 +284,7 @@ void b2fAdaptSizes( b2fFluid* f )
 	// default settings, which keeps small, soft particles to a thin layer along a deep floor. Next to a moving body it
 	// cost lift, a quarter of it for a crate near the floor, so there size grows in a line with distance instead.
 	// Masses count in finest particles of liquid 0, whatever the liquid, so they measure area.
-	float spacing = f->def.particleSpacing, fineMass = f->mass;
+	float spacing = f->spacing, fineMass = f->mass;
 	b2fLiquidSizes sizes[B2F_MAX_LIQUIDS];
 	float perMetre[B2F_MAX_LIQUIDS];
 	float deepest = 0.0f;

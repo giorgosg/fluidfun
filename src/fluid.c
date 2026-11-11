@@ -31,7 +31,7 @@ b2fLiquidDef b2fDefaultLiquidDef( void )
 b2fFluidDef b2fDefaultFluidDef( void )
 {
 	b2fFluidDef def = { 0 };
-	def.particleSpacing = 0.07f;
+	def.particleSpacing = 0.079f;
 	def.adaptiveDepth = 12.0f;
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;
@@ -42,7 +42,7 @@ b2fFluidDef b2fDefaultFluidDef( void )
 // Rebuilds what the passes read from the liquids' settings
 static void UpdateLiquids( b2fFluid* f )
 {
-	float spacing = f->def.particleSpacing;
+	float spacing = f->spacing;
 	f->adaptive = false;
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
@@ -118,13 +118,14 @@ b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def )
 	f->worldId = worldId;
 	f->def = *def;
 	f->capacity = def->capacity;
-	f->radius = 2.0f * def->particleSpacing;
+	f->spacing = def->particleSpacing / B2F_REST_PITCH;
+	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
-	f->margin = 0.5f * def->particleSpacing;
+	f->margin = 0.5f * f->spacing;
 	f->liquids[0].def = def->liquid;
 	f->liquidCount = 1;
 	UpdateLiquids( f );
-	f->restDensity = LatticeDensity( def->particleSpacing, f->radius );
+	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
 	f->moveLimit = B2F_MOVE_LIMIT;
 
@@ -159,6 +160,7 @@ void b2fDestroyFluid( b2fFluid* f )
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
 	free( f->contacts );
+	free( f->restSizes );
 	free( f->pairs );
 	free( f->springs );
 	free( f->sortedSprings );
@@ -251,9 +253,20 @@ const float* b2fFluid_GetVelocitiesY( const b2fFluid* f )
 {
 	return f->vy;
 }
-const float* b2fFluid_GetSizes( const b2fFluid* f )
+const float* b2fFluid_GetSizes( const b2fFluid* fluid )
 {
-	return f->size;
+	// Inside, a size is a spacing of the solver's lattice; the caller gets how far apart such particles rest
+	b2fFluid* f = (b2fFluid*)fluid;
+	if ( f->restSizeCapacity < f->count )
+	{
+		f->restSizeCapacity = f->capacity;
+		f->restSizes = realloc( f->restSizes, (size_t)f->restSizeCapacity * sizeof( float ) );
+	}
+	for ( int i = 0; i < f->count; ++i )
+	{
+		f->restSizes[i] = B2F_REST_PITCH * f->size[i];
+	}
+	return f->restSizes;
 }
 const unsigned char* b2fFluid_GetLiquids( const b2fFluid* f )
 {
