@@ -348,18 +348,17 @@ jobs:
         	b2CreatePolygonShape( bodyId, &shapeDef, &box );
 
         	// The liquid's functions have to reach consumers too, shared builds included
-        	b2fFluidDef fluidDef = b2fDefaultFluidDef();
-        	b2fFluid* fluid = b2fCreateFluid( worldId, &fluidDef );
-        	b2fFluid_CreateParticlesInBox( fluid, 0, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 1.0f, 1.0f } );
+        	b2FluidDef fluidDef = b2DefaultFluidDef();
+        	b2FluidId fluid = b2CreateFluid( worldId, &fluidDef );
+        	b2Fluid_CreateParticlesInBox( fluid, 0, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 1.0f, 1.0f } );
 
         	for ( int i = 0; i < 60; ++i )
         	{
-        		b2fFluid_Prepare( fluid );
         		b2World_Step( worldId, 1.0f / 60.0f, 4 );
         	}
 
-        	int particleCount = b2fFluid_GetParticleCount( fluid );
-        	b2fDestroyFluid( fluid );
+        	int particleCount = b2Fluid_GetParticleCount( fluid );
+        	b2DestroyFluid( fluid );
 
         	b2Pos p = b2Body_GetPosition( bodyId );
         	b2DestroyWorld( worldId );
