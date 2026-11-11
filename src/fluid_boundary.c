@@ -89,6 +89,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 	shape->type = b2Shape_GetType( shapeId );
 	shape->bodyIndex = FindBody( f, b2Shape_GetBody( shapeId ) );
 	float area = 0.0f;
+	b2Vec2 center = b2Vec2_zero;
 	switch ( shape->type )
 	{
 		case b2_circleShape:
@@ -97,6 +98,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 			shape->p1 = shape->p2 = c.center;
 			shape->radius = c.radius;
 			area = B2_PI * c.radius * c.radius;
+			center = c.center;
 		}
 		break;
 
@@ -107,6 +109,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 			shape->p2 = c.center2;
 			shape->radius = c.radius;
 			area = B2_PI * c.radius * c.radius + 2.0f * c.radius * b2Distance( c.center1, c.center2 );
+			center = b2Lerp( c.center1, c.center2, 0.5f );
 		}
 		break;
 
@@ -129,7 +132,11 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 		case b2_polygonShape:
 			shape->polygon = b2Shape_GetPolygon( shapeId );
 			shape->radius = shape->polygon.radius;
-			area = b2ComputePolygonMass( &shape->polygon, 1.0f ).mass;
+		{
+			b2MassData mass = b2ComputePolygonMass( &shape->polygon, 1.0f );
+			area = mass.mass;
+			center = mass.center;
+		}
 			break;
 
 		default:
@@ -137,6 +144,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 	}
 
 	f->bodies[shape->bodyIndex].area += area;
+	f->bodies[shape->bodyIndex].areaCenter = b2MulAdd( f->bodies[shape->bodyIndex].areaCenter, area, center );
 	f->shapeCount += 1;
 	return true;
 }
@@ -190,8 +198,10 @@ static void FindPatches( b2fFluid* f )
 			b2ShapeProxy proxy = ShapeProxy( f->shapes + i );
 			for ( int j = 0; j < f->shapeCount; ++j )
 			{
+				// Only shapes that forces do not move count from a distance. A wheel turning beside its hull is always
+				// close to it, and its thrust is the liquid's push towards the hull, which this would cancel.
 				int otherIndex = f->shapes[j].bodyIndex;
-				if ( otherIndex == bodyIndex )
+				if ( otherIndex == bodyIndex || f->bodies[otherIndex].adheres == false )
 				{
 					continue;
 				}
@@ -210,7 +220,8 @@ static void FindPatches( b2fFluid* f )
 			}
 		}
 
-		// Shapes pressed into each other have no direction between them, so those come from Box2D's contacts
+		// Shapes pressed into each other have no direction between them, so those come from Box2D's contacts, and so
+		// do moving bodies that touch, which bodies joined so as not to collide never do
 		enum { contactCapacity = 32 };
 		b2ContactData contacts[contactCapacity];
 		int count = b2Body_GetContactData( body->id, contacts, contactCapacity );
@@ -225,7 +236,7 @@ static void FindPatches( b2fFluid* f )
 			{
 				otherIndex += 1;
 			}
-			if ( otherIndex < f->bodyCount && manifold->pointCount > 0 && manifold->points[0].separation <= 0.0f )
+			if ( otherIndex < f->bodyCount && manifold->pointCount > 0 && ( f->bodies[otherIndex].adheres == false || manifold->points[0].separation <= 0.0f ) )
 			{
 				AddPatch( f, bodyIndex, otherIndex, first ? b2Neg( manifold->normal ) : manifold->normal );
 			}
@@ -492,9 +503,15 @@ static void CollideTask( int start, int end, int worker, void* context )
 						reaction->wetMass += m;
 						reaction->wetDensity += m * buoyantDensity;
 						reaction->wetHeight += m * ( rx * up.x + ry * up.y );
-						reaction->wetLength += f->size[i];
-						reaction->wetNormalX += f->size[i] * contacts[c].normalX;
-						reaction->wetNormalY += f->size[i] * contacts[c].normalY;
+
+						// Only the row against the body: counting every particle within reach made a face with two
+						// rows beside it weigh twice one with a thin film
+						if ( share > 0.5f )
+						{
+							reaction->wetLength += f->size[i];
+							reaction->wetNormalX += f->size[i] * contacts[c].normalX;
+							reaction->wetNormalY += f->size[i] * contacts[c].normalY;
+						}
 					}
 
 					share = added > 0.0f && body->motion.invMass > 0.0f ? share : 0.0f;
@@ -606,39 +623,68 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 		// a tenth in place, anywhere in the liquid. A body with liquid all the way round that is nearly still gets
 		// its buoyancy exactly, up or down, so it cannot hang there. Once it moves the particles' push takes over,
 		// which is what slows it. A body at the surface or with a dry side, such as a hull, is left to the particles.
-		float open = b2Length( ( b2Vec2 ){ total->wetNormalX, total->wetNormalY } ) / total->wetLength;
-		float round = 1.0f - 4.0f * open;
+		// A crate afloat with its top dry has a third of its outline open, and a hull more. A small body has few
+		// particles against it, so up to a tenth open still counts as all the way round. The side facing a shape the
+		// body is close to is shut, not open: liquid would be there if it fitted.
+		b2Vec2 gap = total->wetLength > 0.0f ? b2MulSV( 1.0f / total->wetLength, ( b2Vec2 ){ total->wetNormalX, total->wetNormalY } ) : up;
+		for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
+		{
+			b2Vec2 normal = { f->patches[i].normalX, f->patches[i].normalY };
+			float along = b2Dot( gap, normal );
+			if ( f->bodies[f->patches[i].otherIndex].adheres && along > 0.0f )
+			{
+				gap = b2MulSub( gap, along, normal );
+			}
+		}
+		float open = b2Length( gap );
+		float round = open < 0.1f ? 1.0f : ( 0.25f - open ) / 0.15f;
 		float still = 1.0f - b2Length( body->motion.linearVelocity ) / B2F_STILL_SPEED;
 		if ( round > 0.0f && still > 0.0f )
 		{
-			// All of it is under liquid then, which the estimate above only gets to within a few percent
-			float full = total->wetDensity / total->wetMass * body->area * g * f->h;
+			// With liquid over nine tenths of its height all of it counts as under, since the estimate above is only
+			// good to a few percent. A crate standing in shallow liquid has its sides wet and counts for what is under.
+			float full = total->wetDensity / total->wetMass * body->area * g * f->h * ( share > 0.9f ? 1.0f : share );
 			float impulse = round * still * ( full - total->x * up.x - total->y * up.y );
 			total->x += impulse * up.x;
 			total->y += impulse * up.y;
 			needX -= impulse * up.x;
 			needY -= impulse * up.y;
+
+			// Buoyancy acts at the centre of the body's area, and still liquid turns the body no other way. A wedge
+			// of locked particles under a heavy crate otherwise propped it up on one edge.
+			float turn = round * still * ( full * ( body->buoyancyArm.x * up.y - body->buoyancyArm.y * up.x ) - total->angular );
+			total->angular += turn;
+			needAngular -= turn;
 		}
 
 		for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
 		{
 			const b2fPatch* patch = f->patches + i;
 			const b2fBody* other = f->bodies + patch->otherIndex;
-			float impulse = needX * patch->normalX + needY * patch->normalY;
+			b2Vec2 normal = { patch->normalX, patch->normalY };
+			if ( other->adheres == false )
+			{
+				// Off another moving body never downwards, and only when that body is in the liquid too. The area of
+				// a hull's planks says little about the lift of a hull, so pushing it down from a wet wheel or cargo
+				// to make up the difference sank the boat. Sideways still counts: liquid pressing on the outer
+				// sides of crates in a row otherwise clamps them together.
+				float down = b2Dot( normal, up );
+				normal = down < 0.0f ? b2MulSub( normal, down, up ) : normal;
+				float length = b2Length( normal );
+				if ( totals[patch->otherIndex].wetMass <= 0.0f || length < 0.1f )
+				{
+					continue;
+				}
+				normal = b2MulSV( 1.0f / length, normal );
+			}
+
+			float impulse = needX * normal.x + needY * normal.y;
 			if ( impulse <= 0.0f )
 			{
 				continue;
 			}
 
-			// Off another moving body only upwards, and only when that body is in the liquid too. The area of a
-			// hull's planks says little about the lift of a hull, so pushing it down from a wet wheel or cargo to make
-			// up the difference sank the boat.
-			if ( other->adheres == false && ( totals[patch->otherIndex].wetMass <= 0.0f || patch->normalX * up.x + patch->normalY * up.y <= 0.0f ) )
-			{
-				continue;
-			}
-
-			float impulseX = impulse * patch->normalX, impulseY = impulse * patch->normalY;
+			float impulseX = impulse * normal.x, impulseY = impulse * normal.y;
 			float angular = needAngular < -impulse * arm ? -impulse * arm : ( needAngular > impulse * arm ? impulse * arm : needAngular );
 			total->x += impulseX;
 			total->y += impulseY;
@@ -744,6 +790,7 @@ void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
 		body->origin = b2OffsetPos( body->center, b2Neg( offset ) );
 		body->low = FLT_MAX;
 		body->high = -FLT_MAX;
+		body->buoyancyArm = body->area > 0.0f ? b2Sub( b2RotateVector( body->motion.rotation, b2MulSV( 1.0f / body->area, body->areaCenter ) ), offset ) : b2Vec2_zero;
 	}
 
 	float g = b2Length( f->worldGravity );

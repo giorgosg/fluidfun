@@ -279,10 +279,10 @@ void b2fAdaptSizes( b2fFluid* f )
 	f->sizeChanges = 0;
 	int n = f->count;
 
-	// Size linear in depth, reaching the coarsest size at half the depth that size can hold up by pressure alone.
-	// Winchenbach et al. 2017 take mass linear in depth, which grows sizes fastest right at a surface: twice the finest
-	// within 0.4 m at the default settings. The liquid next to a body then differs in size from the liquid a little
-	// further out, and a crate near the floor lost a quarter of its lift.
+	// Mass linear in depth, as in Winchenbach et al. 2017, reaching the coarsest size at half the depth that size can
+	// hold up by pressure alone. That grows sizes fastest right at a surface, twice the finest within 0.4 m at the
+	// default settings, which keeps small, soft particles to a thin layer along a deep floor. Next to a moving body it
+	// cost lift, a quarter of it for a crate near the floor, so there size grows in a line with distance instead.
 	// Masses count in finest particles of liquid 0, whatever the liquid, so they measure area.
 	float spacing = f->def.particleSpacing, fineMass = f->mass;
 	b2fLiquidSizes sizes[B2F_MAX_LIQUIDS];
@@ -326,8 +326,31 @@ void b2fAdaptSizes( b2fFluid* f )
 		float baseMass = liquid->baseMass, fastSpeed = liquid->fastSpeed, limit = liquid->limit, tolerance = liquid->tolerance;
 		float t = f->adaptDepth[i] / liquid->reach;
 		t = t < 1.0f ? t : 1.0f;
-		float targetSize = 1.0f + ( liquid->ratio - 1.0f ) * t;
-		float target = fineMass * targetSize * targetSize;
+		float target = fineMass + ( baseMass - fineMass ) * t;
+
+		// Around a moving body size grows in a line with distance from it instead, at the rate that reaches the
+		// coarsest size at the reach. A body within this distance of the particle makes it finer than its depth asks.
+		float slope = ( liquid->ratio - 1.0f ) / liquid->reach;
+		float near = slope > 0.0f ? ( sqrtf( target / fineMass ) - 1.0f ) / slope : 0.0f;
+		b2Pos p = f->pos[i];
+		for ( int si = 0; si < f->shapeCount; ++si )
+		{
+			const b2fShape* shape = f->shapes + si;
+			const b2fBody* body = f->bodies + shape->bodyIndex;
+			if ( body->adheres || p.x < shape->minX - near || p.x > shape->maxX + near || p.y < shape->minY - near || p.y > shape->maxY + near )
+			{
+				continue;
+			}
+
+			float distance;
+			b2Vec2 normal;
+			if ( b2fShapeDistance( shape, b2InvRotateVector( body->motion.rotation, b2SubPos( p, body->origin ) ), &distance, &normal ) && distance < near )
+			{
+				near = distance > 0.0f ? distance : 0.0f;
+				float size = 1.0f + slope * near;
+				target = fineMass * size * size;
+			}
+		}
 
 		// Remembering recent speed means a particle near the threshold does not split and merge over and over
 		if ( fastSpeed > 0.0f )

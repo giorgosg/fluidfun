@@ -70,8 +70,8 @@ typedef struct b2fLiquidDef
 	/// Stretch or squeeze a spring takes, as a share of its rest length, before plasticity changes its rest length
 	float yieldRatio;
 	/// Spacing of the coarsest particles over the fluid's particleSpacing, which is the finest. One keeps this liquid
-	/// fine everywhere. Particles are fine at the surface and their size grows in a line with depth, and they split
-	/// and merge as they move.
+	/// fine everywhere. Particles are fine at the surface and coarser with depth, growing more gently away from a
+	/// moving body than from anything else, and they split and merge as they move.
 	/// Merges only join particles of the same liquid.
 	float adaptiveRatio;
 	/// Particles moving at this speed stay fine. They turn fine quickly and relax slowly. Zero turns this off.

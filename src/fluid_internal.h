@@ -138,6 +138,8 @@ typedef struct b2fBody
 	// Area of the body's shapes near the liquid, and how far they reach below and above its centre of mass, against
 	// gravity, this substep
 	float area, low, high;
+	// Centre of that area, as its sum weighted by area in the body's frame, and where it is from the centre of mass
+	b2Vec2 areaCenter, buoyancyArm;
 } b2fBody;
 
 // A shape within the interaction radius of a particle
