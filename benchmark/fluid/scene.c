@@ -668,9 +668,10 @@ static b2FluidId CreateChain( b2WorldId worldId, LabScene* scene, const LabDef* 
 // Particles merge and split, so liquid is counted by area
 static float BasinArea( b2FluidId fluid )
 {
-	int n = b2Fluid_GetParticleCount( fluid );
-	const b2Pos* pos = b2Fluid_GetPositions( fluid );
-	const float* size = b2Fluid_GetSizes( fluid );
+	b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+	int n = particles.count;
+	const b2Pos* pos = particles.positions;
+	const float* size = particles.sizes;
 	float area = 0.0f;
 	for ( int i = 0; i < n; ++i )
 	{
@@ -1081,7 +1082,7 @@ void LabStepScene( LabScene* scene, b2FluidId fluid, float timeStep )
 			if ( fmodf( t, LAB_PLUNGE_EVERY ) < timeStep && t > 1.0f )
 			{
 				// A square drop, so as many rows as fit across it
-				float half = 0.5f * scene->control, spacing = 1.09f * b2Fluid_GetSizes( fluid )[0];
+				float half = 0.5f * scene->control, spacing = 1.09f * b2Fluid_GetParticles( fluid ).sizes[0];
 				int perRow = (int)( scene->control / spacing ) + 1;
 				b2AABB floor = { { -4.9f, 0.0f }, { 4.9f, 0.3f } };
 				b2AABB drop = { { -half, 5.0f }, { half, 5.0f + scene->control } };

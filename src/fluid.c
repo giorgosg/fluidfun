@@ -210,6 +210,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 #undef B2F_ALLOC_SORTED
 	f->contacts = calloc( n, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
 	f->pairs = malloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
+	f->restSizes = calloc( n, sizeof( float ) );
 	b2fBuildWallTable( f );
 
 	world->fluid = f;
@@ -370,6 +371,7 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 	}
 	f->count = kept;
 	f->gridValid = false;
+	f->restSizesStale = true;
 
 	f->liquids[index].alive = false;
 	f->liquids[index].generation += 1;
@@ -436,51 +438,35 @@ int b2Fluid_GetParticleCount( b2FluidId fluidId )
 	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->count;
 }
-const b2Pos* b2Fluid_GetPositions( b2FluidId fluidId )
+
+b2FluidParticles b2Fluid_GetParticles( b2FluidId fluidId )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->pos;
-}
-const float* b2Fluid_GetVelocitiesX( b2FluidId fluidId )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->vx;
-}
-const float* b2Fluid_GetVelocitiesY( b2FluidId fluidId )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->vy;
-}
-const float* b2Fluid_GetSizes( b2FluidId fluidId )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	// Inside, a size is a spacing of the solver's lattice; the caller gets how far apart such particles rest
-	if ( f->restSizeCapacity < f->count )
+
+	// Inside, a size is a spacing of the solver's lattice; the caller gets how far apart such particles rest. This is
+	// worked out once after each change rather than on every call.
+	if ( f->restSizesStale )
 	{
-		f->restSizeCapacity = f->capacity;
-		f->restSizes = realloc( f->restSizes, (size_t)f->restSizeCapacity * sizeof( float ) );
+		for ( int i = 0; i < f->count; ++i )
+		{
+			f->restSizes[i] = B2F_REST_PITCH * f->size[i];
+		}
+		f->restSizesStale = false;
 	}
-	for ( int i = 0; i < f->count; ++i )
-	{
-		f->restSizes[i] = B2F_REST_PITCH * f->size[i];
-	}
-	return f->restSizes;
+
+	return ( b2FluidParticles ){
+		.count = f->count,
+		.positions = f->pos,
+		.velocitiesX = f->vx,
+		.velocitiesY = f->vy,
+		.sizes = f->restSizes,
+		.liquids = f->liquid,
+		.densities = f->rho,
+		.ids = f->id,
+		.restDensity = f->restDensity,
+	};
 }
-const unsigned char* b2Fluid_GetLiquids( b2FluidId fluidId )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->liquid;
-}
-const float* b2Fluid_GetDensities( b2FluidId fluidId )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->rho;
-}
-float b2Fluid_GetRestDensity( b2FluidId fluidId )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->restDensity;
-}
+
 b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
@@ -493,6 +479,7 @@ void b2PrepareFluid( b2fFluid* f )
 
 	// This reads where shapes and bodies were last substep, so it has to come before they are gathered again
 	b2fAdaptSizes( f );
+	f->restSizesStale = true;
 	b2fGatherShapes( f );
 
 	memset( &f->profile, 0, sizeof( f->profile ) );
@@ -505,6 +492,8 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCou
 {
 	(void)subStepCount;
 	f->checkSprings = subStepIndex == 0;
+	// The sort below reorders particles, and a substep callback can read them before the step ends
+	f->restSizesStale = true;
 	if ( f->count == 0 )
 	{
 		return;

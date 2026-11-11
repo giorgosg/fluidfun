@@ -177,7 +177,7 @@ B2_API bool b2Liquid_IsValid( b2LiquidId liquidId );
 B2_API void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def );
 B2_API b2LiquidDef b2Liquid_GetDef( b2LiquidId liquidId );
 
-/// The number b2Fluid_GetLiquids gives for particles of this liquid
+/// The number b2FluidParticles::liquids gives for particles of this liquid
 B2_API int b2Liquid_GetIndex( b2LiquidId liquidId );
 
 /// How many liquids the fluid holds
@@ -198,20 +198,39 @@ B2_API int b2Fluid_MoveParticles( b2FluidId fluidId, b2AABB from, b2AABB to, b2V
 /// The total mass moved by b2Fluid_MoveParticles so far.
 B2_API float b2Fluid_GetMovedMass( b2FluidId fluidId );
 
+/// How many particles the fluid holds, over all its liquids
 B2_API int b2Fluid_GetParticleCount( b2FluidId fluidId );
-/// World positions, in double when Box2D is built for large worlds
-B2_API const b2Pos* b2Fluid_GetPositions( b2FluidId fluidId );
-B2_API const float* b2Fluid_GetVelocitiesX( b2FluidId fluidId );
-B2_API const float* b2Fluid_GetVelocitiesY( b2FluidId fluidId );
 
-/// The spacing of each particle, in the units of particleSpacing. Mass is proportional to its square. The array is
-/// filled by this call.
-B2_API const float* b2Fluid_GetSizes( b2FluidId fluidId );
-/// The liquid each particle belongs to, as the number b2Liquid_GetIndex gives
-B2_API const unsigned char* b2Fluid_GetLiquids( b2FluidId fluidId );
-/// Kernel density of each particle from the last substep, in the same units as b2Fluid_GetRestDensity
-B2_API const float* b2Fluid_GetDensities( b2FluidId fluidId );
-B2_API float b2Fluid_GetRestDensity( b2FluidId fluidId );
+/// Every particle of a fluid, as arrays of count values each, one entry per particle at the same index in every array.
+/// The arrays belong to the fluid. They are good until the next b2World_Step, or the next call that adds, moves or
+/// removes particles or destroys a liquid or the fluid; read them again after any of those. Particles change order
+/// every step, so an index names a particle only until then, and ids follow a particle across steps.
+typedef struct b2FluidParticles
+{
+	int count;
+	/// World positions, in double when Box2D is built for large worlds
+	const b2Pos* positions;
+	const float* velocitiesX;
+	const float* velocitiesY;
+	/// The spacing of each particle, in the units of b2FluidDef::particleSpacing, so particleSpacing for a particle
+	/// at the finest size. Mass is proportional to its square.
+	const float* sizes;
+	/// The liquid each particle belongs to, as the number b2Liquid_GetIndex gives
+	const unsigned char* liquids;
+	/// Kernel density of each particle from the last substep, in the units of restDensity
+	const float* densities;
+	/// A number for each particle, unique within the fluid and kept while the particle lasts, through every step.
+	/// Particles get them in the order they are made, from zero, and a number is not given again. With adaptive sizes
+	/// a particle that splits keeps its id on one of its parts, and the others get new ones; a particle that merges
+	/// away gives its mass to neighbours, which keep their ids, and its own id is gone. b2Fluid_MoveParticles keeps
+	/// ids, so a moved particle has its id at its new place. Ids are ints, so they stay unique for the first 2^31
+	/// particles a fluid makes, splits included. Scenes of about 5000 particles make fewer than 7000 in 10 seconds.
+	const int* ids;
+	/// Kernel density of liquid at rest, which densities are compared with
+	float restDensity;
+} b2FluidParticles;
+
+B2_API b2FluidParticles b2Fluid_GetParticles( b2FluidId fluidId );
 B2_API b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId );
 
 #ifdef __cplusplus

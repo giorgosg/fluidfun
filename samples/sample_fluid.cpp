@@ -55,12 +55,13 @@ public:
 
 		Sample::Step();
 
-		int n = b2Fluid_GetParticleCount( m_fluid );
-		const b2Pos* pos = b2Fluid_GetPositions( m_fluid );
-		const float* vx = b2Fluid_GetVelocitiesX( m_fluid );
-		const float* vy = b2Fluid_GetVelocitiesY( m_fluid );
-		const float* size = b2Fluid_GetSizes( m_fluid );
-		const unsigned char* liquid = b2Fluid_GetLiquids( m_fluid );
+		b2FluidParticles particles = b2Fluid_GetParticles( m_fluid );
+		int n = particles.count;
+		const b2Pos* pos = particles.positions;
+		const float* vx = particles.velocitiesX;
+		const float* vy = particles.velocitiesY;
+		const float* size = particles.sizes;
+		const unsigned char* liquid = particles.liquids;
 
 		// Liquid 0 is blue, then amber and red. Speed lightens each toward white.
 		static const float tints[3][3] = { { 40.0f, 110.0f, 255.0f }, { 230.0f, 170.0f, 40.0f }, { 200.0f, 40.0f, 60.0f } };
