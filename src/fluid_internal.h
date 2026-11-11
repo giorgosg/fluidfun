@@ -38,6 +38,10 @@ typedef float b2fCoord;
 #define B2F_MOVE_LIMIT 0.1f
 #define B2F_SPAWN_SPACING 1.09f
 
+// Peak move per substep of adhesion at 1, as a share of the interaction radius. About what cohesion at 1 gives a
+// particle from three neighbours at its peak distance, so the two settings compare. Not calibrated further.
+#define B2F_ADHESION_SCALE 0.19f
+
 // Pressure alone can hold up a column of about this many metres, found by experiment at stiffness 0.04, spacing
 // 0.1 and 4 substeps. It is the usual explicit limit, so it scales with stiffness, spacing squared and substeps squared.
 #define B2F_DEPTH_LIMIT_SCALE 4.34f
@@ -115,6 +119,8 @@ typedef struct b2fBody
 	b2Vec2 shareVelocity;
 	float shareAngular;
 	bool sharing;
+	// Static and kinematic bodies pull on the liquid with adhesion; bodies moved by forces do not
+	bool adheres;
 } b2fBody;
 
 // A shape within the interaction radius of a particle

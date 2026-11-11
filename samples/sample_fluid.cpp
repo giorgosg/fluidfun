@@ -94,6 +94,7 @@ public:
 		changed |= ImGui::SliderFloat( "Near", &m_def->liquid.nearStiffness, 0.0f, 0.5f, "%.3f" );
 		changed |= ImGui::SliderFloat( "Tensile pressure", &m_def->liquid.tensilePressure, 0.0f, 1.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Cohesion", &m_def->liquid.cohesion, 0.0f, 0.5f, "%.3f" );
+		changed |= ImGui::SliderFloat( "Adhesion", &m_def->liquid.adhesion, 0.0f, 0.5f, "%.3f" );
 		changed |= ImGui::SliderFloat( "Viscosity", &m_def->liquid.linearViscosity, 0.0f, 20.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Quad viscosity", &m_def->liquid.quadraticViscosity, 0.0f, 5.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Adaptive ratio", &m_def->liquid.adaptiveRatio, 1.0f, 30.0f, "%.1f" );
