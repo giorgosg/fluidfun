@@ -3,14 +3,16 @@
 // in contact patches.
 #include "fluid_internal.h"
 
-// The kernels integrated over a solid half plane at distance d from a particle, at the liquid's
-// number density. Particles settle about half a spacing from a surface, which is where a lattice
-// of particles would end, so the table carries on the lattice without a seam. Columns are density,
+// The kernels integrated over a solid half plane at distance d from a particle, at the number density of the
+// liquid at rest. Particles settle about half a spacing from a surface, which is where a lattice
+// of particles would end, so the table carries on the lattice without a seam. At the denser lattice rest density
+// is counted from, a wall counted for more than the liquid it stands in for and kept the liquid next to it thin,
+// which gave a body lift for more than its own volume, a small body the most. Columns are density,
 // near density, and the matching pressure and near pressure weights along the normal.
 void b2fBuildWallTable( b2fFluid* f )
 {
 	float h = f->radius;
-	float numberDensity = 1.0f / ( 0.8660254f * f->def.particleSpacing * f->def.particleSpacing );
+	float numberDensity = B2F_REST_FILL / ( 0.8660254f * f->def.particleSpacing * f->def.particleSpacing );
 	enum { steps = 400 };
 	float cell = h / (float)steps, area = 2.0f * cell * cell;
 	for ( int i = 0; i <= B2F_WALL_TABLE_SIZE; ++i )
@@ -86,6 +88,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 	memset( shape, 0, sizeof( b2fShape ) );
 	shape->type = b2Shape_GetType( shapeId );
 	shape->bodyIndex = FindBody( f, b2Shape_GetBody( shapeId ) );
+	float area = 0.0f;
 	switch ( shape->type )
 	{
 		case b2_circleShape:
@@ -93,6 +96,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 			b2Circle c = b2Shape_GetCircle( shapeId );
 			shape->p1 = shape->p2 = c.center;
 			shape->radius = c.radius;
+			area = B2_PI * c.radius * c.radius;
 		}
 		break;
 
@@ -102,6 +106,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 			shape->p1 = c.center1;
 			shape->p2 = c.center2;
 			shape->radius = c.radius;
+			area = B2_PI * c.radius * c.radius + 2.0f * c.radius * b2Distance( c.center1, c.center2 );
 		}
 		break;
 
@@ -124,74 +129,107 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 		case b2_polygonShape:
 			shape->polygon = b2Shape_GetPolygon( shapeId );
 			shape->radius = shape->polygon.radius;
+			area = b2ComputePolygonMass( &shape->polygon, 1.0f ).mass;
 			break;
 
 		default:
 			return true;
 	}
 
+	f->bodies[shape->bodyIndex].area += area;
 	f->shapeCount += 1;
 	return true;
 }
 
-// Contacts come from the last step, since the world is locked during the substeps.
+static void AddPatch( b2fFluid* f, int bodyIndex, int otherIndex, b2Vec2 normal )
+{
+	if ( f->patchCount == f->patchCapacity )
+	{
+		f->patchCapacity = f->patchCapacity == 0 ? 32 : 2 * f->patchCapacity;
+		f->patches = realloc( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
+	}
+	f->patches[f->patchCount++] = ( b2fPatch ){ normal.x, normal.y, bodyIndex, otherIndex };
+	f->bodies[bodyIndex].patchCount += 1;
+}
+
+static b2ShapeProxy ShapeProxy( const b2fShape* s )
+{
+	if ( s->type == b2_polygonShape )
+	{
+		return b2MakeProxy( s->polygon.vertices, s->polygon.count, s->polygon.radius );
+	}
+	b2Vec2 points[2] = { s->p1, s->p2 };
+	return b2MakeProxy( points, s->type == b2_circleShape ? 1 : 2, s->radius );
+}
+
+// What each moving body touches or nearly touches, found once a step from where the bodies are then. Box2D's own
+// contacts end 2 cm apart, well short of the gap a particle fits in, so a body lifting off had nothing under it
+// in between.
 static void FindPatches( b2fFluid* f )
 {
-	enum { contactCapacity = 32 };
-	b2ContactData contacts[contactCapacity];
-
+	float range = B2F_PATCH_GAP * f->def.particleSpacing;
 	f->patchCount = 0;
 	for ( int bodyIndex = 0; bodyIndex < f->bodyCount; ++bodyIndex )
 	{
 		b2fBody* body = f->bodies + bodyIndex;
 		body->firstPatch = f->patchCount;
 		body->patchCount = 0;
-		if ( b2Body_GetType( body->id ) != b2_dynamicBody || b2Body_IsAwake( body->id ) == false )
+		if ( body->adheres || b2Body_IsAwake( body->id ) == false )
 		{
 			continue;
 		}
 
-		int count = b2Body_GetContactData( body->id, contacts, contactCapacity );
-		for ( int i = 0; i < count; ++i )
+		b2WorldTransform transform = b2Body_GetTransform( body->id );
+		for ( int i = 0; i < f->shapeCount; ++i )
 		{
-			const b2Manifold* manifold = &contacts[i].manifold;
-			// The manifold outlives the touch by a little. A gap this thin still has no liquid in it.
-			float maxGap = 2.0f * f->margin;
-			if ( manifold->pointCount != 2 || manifold->points[0].separation > maxGap || manifold->points[1].separation > maxGap )
+			if ( f->shapes[i].bodyIndex != bodyIndex )
 			{
 				continue;
 			}
 
-			if ( f->patchCount == f->patchCapacity )
+			b2ShapeProxy proxy = ShapeProxy( f->shapes + i );
+			for ( int j = 0; j < f->shapeCount; ++j )
 			{
-				f->patchCapacity = f->patchCapacity == 0 ? 32 : 2 * f->patchCapacity;
-				f->patches = realloc( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
-			}
+				int otherIndex = f->shapes[j].bodyIndex;
+				if ( otherIndex == bodyIndex )
+				{
+					continue;
+				}
 
-			b2BodyId bodyA = b2Shape_GetBody( contacts[i].shapeIdA );
-			b2Pos center = b2Body_GetWorldCenter( bodyA );
-			float sign = B2_ID_EQUALS( bodyA, body->id ) ? -1.0f : 1.0f;
-			b2fPatch* patch = f->patches + f->patchCount;
-			patch->bodyIndex = bodyIndex;
-			patch->normalX = sign * manifold->normal.x;
-			patch->normalY = sign * manifold->normal.y;
-			for ( int j = 0; j < 2; ++j )
-			{
-				patch->x[j] = center.x + manifold->points[j].anchorA.x;
-				patch->y[j] = center.y + manifold->points[j].anchorA.y;
+				b2DistanceInput input = { 0 };
+				input.proxyA = proxy;
+				input.proxyB = ShapeProxy( f->shapes + j );
+				input.transform = b2InvMulWorldTransforms( transform, b2Body_GetTransform( f->bodies[otherIndex].id ) );
+				input.useRadii = true;
+				b2SimplexCache cache = { 0 };
+				b2DistanceOutput output = b2ComputeShapeDistance( &input, &cache, NULL, 0 );
+				if ( output.distance < range && b2LengthSquared( output.normal ) > 0.5f )
+				{
+					AddPatch( f, bodyIndex, otherIndex, b2Neg( b2RotateVector( transform.q, output.normal ) ) );
+				}
 			}
-			float dx = (float)( patch->x[1] - patch->x[0] ), dy = (float)( patch->y[1] - patch->y[0] );
-			patch->length = sqrtf( dx * dx + dy * dy );
-			f->patchCount += 1;
-			body->patchCount += 1;
 		}
-	}
 
-	int needed = 4 * f->patchCount * B2F_CHUNK_COUNT;
-	if ( needed > f->patchSampleCapacity )
-	{
-		f->patchSampleCapacity = 2 * needed;
-		f->patchSamples = realloc( f->patchSamples, (size_t)f->patchSampleCapacity * sizeof( float ) );
+		// Shapes pressed into each other have no direction between them, so those come from Box2D's contacts
+		enum { contactCapacity = 32 };
+		b2ContactData contacts[contactCapacity];
+		int count = b2Body_GetContactData( body->id, contacts, contactCapacity );
+		for ( int i = 0; i < count; ++i )
+		{
+			const b2Manifold* manifold = &contacts[i].manifold;
+			b2BodyId bodyA = b2Shape_GetBody( contacts[i].shapeIdA ), bodyB = b2Shape_GetBody( contacts[i].shapeIdB );
+			bool first = B2_ID_EQUALS( bodyA, body->id );
+			b2BodyId otherId = first ? bodyB : bodyA;
+			int otherIndex = 0;
+			while ( otherIndex < f->bodyCount && B2_ID_EQUALS( f->bodies[otherIndex].id, otherId ) == false )
+			{
+				otherIndex += 1;
+			}
+			if ( otherIndex < f->bodyCount && manifold->pointCount > 0 && manifold->points[0].separation <= 0.0f )
+			{
+				AddPatch( f, bodyIndex, otherIndex, first ? b2Neg( manifold->normal ) : manifold->normal );
+			}
+		}
 	}
 }
 
@@ -368,27 +406,6 @@ static void ContactTask( int start, int end, int worker, void* context )
 	}
 }
 
-// The liquid next to the ends of a body's contacts gives the pressure to use on the part of the body that liquid
-// cannot reach. Each particle within reach of the body adds its mass and its mass times its pressure over g.
-static inline void SamplePatches( b2fFluid* f, int chunk, const b2fBody* body, b2fCoord x, b2fCoord y, float mass, float pressure )
-{
-	float window = 2.0f * f->radius, window2 = window * window;
-	float* samples = f->patchSamples + 4 * f->patchCount * chunk;
-	for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
-	{
-		const b2fPatch* patch = f->patches + i;
-		for ( int end = 0; end < 2; ++end )
-		{
-			float dx = (float)( x - patch->x[end] ), dy = (float)( y - patch->y[end] );
-			if ( dx * dx + dy * dy < window2 )
-			{
-				samples[4 * i + 2 * end] += mass;
-				samples[4 * i + 2 * end + 1] += mass * pressure;
-			}
-		}
-	}
-}
-
 // Reactions go to a chunk chosen by particle index, and chunks sum in order, so the total does not
 // depend on which worker ran which chunk.
 // A particle near two shapes of one body counts once for it, as close as its nearest shape. Zero for any but the
@@ -423,17 +440,17 @@ static void CollideTask( int start, int end, int worker, void* context )
 	bool adaptive = f->adaptive, multi = f->liquidCount > 1;
 	float baseMass = f->mass, spacing = f->def.particleSpacing, added = f->liquids[0].def.addedMass;
 
-	// Patches take hydrostatic pressure from each particle's depth, read from how squeezed it is
+	// What a patch needs of the liquid around its body: the density its buoyancy goes by, and how high the liquid
+	// stands on the body, against gravity
 	const b2fLiquidDef* def = &f->liquids[0].def;
-	float rest = f->restDensity, perMetre = f->squeezePerMetre[0];
-	float patchScale = def->contactPressure * def->massDensity * def->gravityScale;
-	bool patches = f->patchCount > 0;
+	float buoyantDensity = def->contactPressure * def->massDensity * def->gravityScale;
+	float g = b2Length( f->worldGravity );
+	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
 
 	for ( int chunk = start; chunk < end; ++chunk )
 	{
 		b2fReaction* reactions = f->reactions + chunk * f->bodyCount;
 		memset( reactions, 0, (size_t)f->bodyCount * sizeof( b2fReaction ) );
-		memset( f->patchSamples + 4 * f->patchCount * chunk, 0, 4 * (size_t)f->patchCount * sizeof( float ) );
 
 		int first = (int)( (int64_t)f->count * chunk / B2F_CHUNK_COUNT );
 		int last = (int)( (int64_t)f->count * ( chunk + 1 ) / B2F_CHUNK_COUNT );
@@ -445,8 +462,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 				baseMass = liquid->mass;
 				m = baseMass;
 				friction = liquid->def.friction;
-				patchScale = liquid->def.contactPressure * liquid->def.massDensity * liquid->def.gravityScale;
-				perMetre = f->squeezePerMetre[f->liquid[i]];
+				buoyantDensity = liquid->def.contactPressure * liquid->def.massDensity * liquid->def.gravityScale;
 				added = liquid->def.addedMass;
 			}
 			if ( adaptive )
@@ -471,10 +487,14 @@ static void CollideTask( int start, int end, int worker, void* context )
 					reaction->y += impulseY;
 					reaction->angular += rx * impulseY - ry * impulseX;
 					float share = ContactShare( contacts, f->contactCount[i], c );
-					if ( patches && share > 0.0f && body->patchCount > 0 )
+					if ( share > 0.0f )
 					{
-						float depth = perMetre > 0.0f ? ( f->rho[i] / rest - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / perMetre : 0.0f;
-						SamplePatches( f, chunk, body, f->pos[i].x, f->pos[i].y, m, patchScale * ( depth > 0.0f ? depth : 0.0f ) );
+						reaction->wetMass += m;
+						reaction->wetDensity += m * buoyantDensity;
+						reaction->wetHeight += m * ( rx * up.x + ry * up.y );
+						reaction->wetLength += f->size[i];
+						reaction->wetNormalX += f->size[i] * contacts[c].normalX;
+						reaction->wetNormalY += f->size[i] * contacts[c].normalY;
 					}
 
 					share = added > 0.0f && body->motion.invMass > 0.0f ? share : 0.0f;
@@ -548,51 +568,85 @@ static void CollideTask( int start, int end, int worker, void* context )
 	}
 }
 
-// Hydrostatic pressure across a closed gap, from the depth of the liquid at its ends. Pressure from depth is what
-// still water has, so a body denser than the liquid stays down and a lighter one lifts off, and waves and impacts
-// near the ends add nothing to it. It runs in a line from one end to the other, as in still water, so an upright gap
-// is pushed apart less near the top. An end with no liquid near it, closed off by another body, takes the other
-// end's pressure, as one wet end is enough to fill the gap.
+// Liquid cannot fill a gap narrower than a few particles, so a body touching or nearly touching something misses the
+// liquid's push on that side. Still liquid pushes on a body with the weight of the liquid it displaces, Archimedes'
+// principle, whatever the depth, and does not turn it. So the gap gives what the particles' push falls short of that,
+// along the direction away from the other shape: a body lighter than the liquid lifts off, a heavier one stays down,
+// and as particles fill the gap their push takes over and this fades. Reading the pressure in the gap from the depth
+// instead had to be right to a few percent of that pressure, many times the body's buoyancy in deep liquid, to tell
+// the two apart. It never pulls. The share of the body under liquid is taken from how high the liquid
+// within reach stands on it: twice its mean height above the body's lowest point, which is exact for a box wet up its
+// sides.
 static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 {
-	float impulsePerPressure = b2Length( f->worldGravity ) * f->h;
-	for ( int i = 0; i < f->patchCount; ++i )
+	float g = b2Length( f->worldGravity );
+	if ( g == 0.0f )
 	{
-		float sum[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		for ( int chunk = 0; chunk < B2F_CHUNK_COUNT; ++chunk )
-		{
-			const float* samples = f->patchSamples + 4 * f->patchCount * chunk + 4 * i;
-			sum[0] += samples[0];
-			sum[1] += samples[1];
-			sum[2] += samples[2];
-			sum[3] += samples[3];
-		}
+		return;
+	}
+	b2Vec2 up = b2MulSV( -1.0f / g, f->worldGravity );
 
-		const b2fPatch* patch = f->patches + i;
-		const b2fBody* body = f->bodies + patch->bodyIndex;
-		if ( body->awake == false || ( sum[0] <= 0.0f && sum[2] <= 0.0f ) )
+	for ( int bodyIndex = 0; bodyIndex < f->bodyCount; ++bodyIndex )
+	{
+		const b2fBody* body = f->bodies + bodyIndex;
+		b2fReaction* total = totals + bodyIndex;
+		float height = body->high - body->low;
+		if ( body->awake == false || body->motion.invMass == 0.0f || total->wetDensity <= 0.0f || height <= 0.0f )
 		{
 			continue;
 		}
 
-		float pressure0 = sum[0] > 0.0f ? sum[1] / sum[0] : sum[3] / sum[2];
-		float pressure1 = sum[2] > 0.0f ? sum[3] / sum[2] : pressure0;
-		float both = pressure0 + pressure1;
-		if ( both <= 0.0f )
+		float share = 2.0f * ( total->wetHeight / total->wetMass - body->low ) / height;
+		share = share < 0.0f ? 0.0f : ( share > 1.0f ? 1.0f : share );
+		float lift = total->wetDensity / total->wetMass * body->area * share * g * f->h;
+		float needX = lift * up.x - total->x, needY = lift * up.y - total->y, needAngular = -total->angular;
+		float arm = 0.5f * sqrtf( body->area );
+
+		// Settled particles lock together like packed grains and can hold a body whose weight and buoyancy differ by
+		// a tenth in place, anywhere in the liquid. A body with liquid all the way round that is nearly still gets
+		// its buoyancy exactly, up or down, so it cannot hang there. Once it moves the particles' push takes over,
+		// which is what slows it. A body at the surface or with a dry side, such as a hull, is left to the particles.
+		float open = b2Length( ( b2Vec2 ){ total->wetNormalX, total->wetNormalY } ) / total->wetLength;
+		float round = 1.0f - 4.0f * open;
+		float still = 1.0f - b2Length( body->motion.linearVelocity ) / B2F_STILL_SPEED;
+		if ( round > 0.0f && still > 0.0f )
 		{
-			continue;
+			// All of it is under liquid then, which the estimate above only gets to within a few percent
+			float full = total->wetDensity / total->wetMass * body->area * g * f->h;
+			float impulse = round * still * ( full - total->x * up.x - total->y * up.y );
+			total->x += impulse * up.x;
+			total->y += impulse * up.y;
+			needX -= impulse * up.x;
+			needY -= impulse * up.y;
 		}
 
-		// The push of a pressure running in a line acts at its centroid, a third of the way from the higher end
-		float impulse = 0.5f * both * patch->length * impulsePerPressure;
-		float t = ( pressure0 + 2.0f * pressure1 ) / ( 3.0f * both );
-		float rx = (float)( patch->x[0] + t * ( patch->x[1] - patch->x[0] ) - body->center.x );
-		float ry = (float)( patch->y[0] + t * ( patch->y[1] - patch->y[0] ) - body->center.y );
-		float impulseX = impulse * patch->normalX, impulseY = impulse * patch->normalY;
-		b2fReaction* total = totals + patch->bodyIndex;
-		total->x += impulseX;
-		total->y += impulseY;
-		total->angular += rx * impulseY - ry * impulseX;
+		for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
+		{
+			const b2fPatch* patch = f->patches + i;
+			const b2fBody* other = f->bodies + patch->otherIndex;
+			float impulse = needX * patch->normalX + needY * patch->normalY;
+			if ( impulse <= 0.0f )
+			{
+				continue;
+			}
+
+			// Off another moving body only upwards, and only when that body is in the liquid too. The area of a
+			// hull's planks says little about the lift of a hull, so pushing it down from a wet wheel or cargo to make
+			// up the difference sank the boat.
+			if ( other->adheres == false && ( totals[patch->otherIndex].wetMass <= 0.0f || patch->normalX * up.x + patch->normalY * up.y <= 0.0f ) )
+			{
+				continue;
+			}
+
+			float impulseX = impulse * patch->normalX, impulseY = impulse * patch->normalY;
+			float angular = needAngular < -impulse * arm ? -impulse * arm : ( needAngular > impulse * arm ? impulse * arm : needAngular );
+			total->x += impulseX;
+			total->y += impulseY;
+			total->angular += angular;
+			needX -= impulseX;
+			needY -= impulseY;
+			needAngular -= angular;
+		}
 	}
 }
 
@@ -688,12 +742,17 @@ void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
 		b2Vec2 offset = b2RotateVector( body->motion.rotation, body->motion.localCenter );
 		body->center = body->motion.center;
 		body->origin = b2OffsetPos( body->center, b2Neg( offset ) );
+		body->low = FLT_MAX;
+		body->high = -FLT_MAX;
 	}
+
+	float g = b2Length( f->worldGravity );
+	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
 
 	for ( int i = 0; i < f->shapeCount; ++i )
 	{
 		b2fShape* s = f->shapes + i;
-		const b2fBody* body = f->bodies + s->bodyIndex;
+		b2fBody* body = f->bodies + s->bodyIndex;
 		b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
 		int count = s->type == b2_polygonShape ? s->polygon.count : 2;
 		for ( int j = 0; j < count; ++j )
@@ -704,6 +763,9 @@ void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
 			minY = minY < p.y ? minY : p.y;
 			maxX = maxX > p.x ? maxX : p.x;
 			maxY = maxY > p.y ? maxY : p.y;
+			float height = b2Dot( b2SubPos( p, body->center ), up );
+			body->low = body->low < height - s->radius ? body->low : height - s->radius;
+			body->high = body->high > height + s->radius ? body->high : height + s->radius;
 		}
 		float grow = s->radius + f->maxRadius;
 		s->minX = minX - grow;
@@ -735,13 +797,6 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 		return;
 	}
 
-	for ( int l = 0; l < f->liquidCount; ++l )
-	{
-		const b2fLiquidDef* def = &f->liquids[l].def;
-		float g = -def->gravityScale * f->worldGravity.y, spacing = f->def.particleSpacing;
-		f->squeezePerMetre[l] = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( def->stiffness * spacing * spacing );
-	}
-
 	b2SubStep_ParallelFor( context, CollideTask, B2F_CHUNK_COUNT, 1, f );
 
 	// Chunk 0 holds the totals, summed in chunk order so the result does not depend on the workers
@@ -759,6 +814,12 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 			t->momentX += r->momentX;
 			t->momentY += r->momentY;
 			t->inertia += r->inertia;
+			t->wetMass += r->wetMass;
+			t->wetDensity += r->wetDensity;
+			t->wetHeight += r->wetHeight;
+			t->wetLength += r->wetLength;
+			t->wetNormalX += r->wetNormalX;
+			t->wetNormalY += r->wetNormalY;
 		}
 	}
 

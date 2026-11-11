@@ -97,6 +97,7 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.liquidWidth = 10.0f;
 			s.liquidHeight = 8.0f;
 			s.crateCount = 5;
+			s.crateHalfSize = 0.6f;
 			break;
 
 		case lab_hole:
@@ -352,7 +353,7 @@ static b2fFluid* CreateTank( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	static const float densities[] = { 0.5f, 0.25f, 0.75f, 0.1f, 2.0f };
 	for ( int i = 0; i < scene->crateCount; ++i )
 	{
-		AddCrate( scene, worldId, 2.0f + 2.0f * (float)( i % 5 ), 2.0f + 2.5f * (float)( i / 5 ), 0.6f, densities[i % 5] );
+		AddCrate( scene, worldId, 2.0f + 2.0f * (float)( i % 5 ), 2.0f + 2.5f * (float)( i / 5 ), scene->crateHalfSize, densities[i % 5] );
 	}
 
 	b2BodyId tank = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );

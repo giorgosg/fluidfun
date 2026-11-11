@@ -2,7 +2,7 @@
 // Runs the shared scene with no window. Prints timing and a hash of the final state, so that
 // runs can be compared across worker counts. Usage: fluid_headless [frames] [liquid scale]
 //
-// The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_SUBSTEPS,
+// The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_CRATE_HALF, LAB_SUBSTEPS,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
 // LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
@@ -387,6 +387,10 @@ int main( int argc, char** argv )
 		if ( getenv( "LAB_CRATES" ) )
 		{
 			scene.crateCount = atoi( getenv( "LAB_CRATES" ) );
+		}
+		if ( getenv( "LAB_CRATE_HALF" ) )
+		{
+			scene.crateHalfSize = (float)atof( getenv( "LAB_CRATE_HALF" ) );
 		}
 		scene.liquidWidth *= scale;
 		scene.tankWidth *= scale;

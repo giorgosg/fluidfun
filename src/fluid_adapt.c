@@ -160,8 +160,8 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	int flowSize = (int)( B2F_FLOW_BOX * largest / cell + 0.5f );
 	flowSize = flowSize < 1 ? 1 : flowSize;
 
-	// Liquid at rest stands at the spacing it spawns at
-	double fullMass = f->liquids[0].def.massDensity * cell * cell / ( B2F_SPAWN_SPACING * B2F_SPAWN_SPACING );
+	// Liquid at rest stands at the spacing it spawns at. Boxes count mass in particles of liquid 0, as area.
+	double fullMass = f->mass / ( 0.8660254 * spacing * spacing ) * cell * cell / ( B2F_SPAWN_SPACING * B2F_SPAWN_SPACING );
 	double full = f->def.adaptiveFullBox;
 	for ( int y = 0; y < height; ++y )
 	{
@@ -264,7 +264,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 // What the size pass reads per liquid
 typedef struct b2fLiquidSizes
 {
-	float baseMass, reach, fastSpeed, tolerance, limit, rate, safeScale;
+	float baseMass, ratio, reach, fastSpeed, tolerance, limit, rate, safeScale;
 	bool depthLimit;
 } b2fLiquidSizes;
 
@@ -279,7 +279,10 @@ void b2fAdaptSizes( b2fFluid* f )
 	f->sizeChanges = 0;
 	int n = f->count;
 
-	// Mass linear in depth, reaching the coarsest size at half the depth that size can hold up by pressure alone.
+	// Size linear in depth, reaching the coarsest size at half the depth that size can hold up by pressure alone.
+	// Winchenbach et al. 2017 take mass linear in depth, which grows sizes fastest right at a surface: twice the finest
+	// within 0.4 m at the default settings. The liquid next to a body then differs in size from the liquid a little
+	// further out, and a crate near the floor lost a quarter of its lift.
 	// Masses count in finest particles of liquid 0, whatever the liquid, so they measure area.
 	float spacing = f->def.particleSpacing, fineMass = f->mass;
 	b2fLiquidSizes sizes[B2F_MAX_LIQUIDS];
@@ -294,6 +297,7 @@ void b2fAdaptSizes( b2fFluid* f )
 		float reach = b2fAdaptiveReach( f, l, g, f->h );
 		sizes[l] = ( b2fLiquidSizes ){
 			.baseMass = fineMass * ratio * ratio,
+			.ratio = ratio,
 			.reach = reach,
 			.fastSpeed = def->adaptiveSpeed,
 			.tolerance = def->adaptiveTolerance,
@@ -322,7 +326,8 @@ void b2fAdaptSizes( b2fFluid* f )
 		float baseMass = liquid->baseMass, fastSpeed = liquid->fastSpeed, limit = liquid->limit, tolerance = liquid->tolerance;
 		float t = f->adaptDepth[i] / liquid->reach;
 		t = t < 1.0f ? t : 1.0f;
-		float target = fineMass + ( baseMass - fineMass ) * t;
+		float targetSize = 1.0f + ( liquid->ratio - 1.0f ) * t;
+		float target = fineMass * targetSize * targetSize;
 
 		// Remembering recent speed means a particle near the threshold does not split and merge over and over
 		if ( fastSpeed > 0.0f )
