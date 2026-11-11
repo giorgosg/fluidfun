@@ -1068,6 +1068,11 @@ void b2World_Step( b2WorldId worldId, float timeStep, int subStepCount )
 
 	world->locked = false;
 
+	if ( world->fluid != NULL )
+	{
+		b2FinishFluid( world->fluid );
+	}
+
 	b2TracyCFrame;
 }
 

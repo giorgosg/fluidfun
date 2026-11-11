@@ -12,5 +12,9 @@ void b2PrepareFluid( struct b2fFluid* fluid );
 // Once per sub-step, after the bodies have moved
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, struct b2fFluid* fluid );
 
+// After a step, while the world is unlocked: works out what the liquid tells the caller, body states, events and
+// the liquid in sensors
+void b2FinishFluid( struct b2fFluid* fluid );
+
 // Frees a fluid the world is done with
 void b2FreeFluid( struct b2fFluid* fluid );

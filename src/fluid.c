@@ -263,6 +263,7 @@ void b2FreeFluid( b2fFluid* f )
 	free( f->boxPressure );
 	free( f->boxDepth );
 	free( f->boxFlow );
+	b2fFreeState( f );
 	free( f );
 }
 
@@ -281,6 +282,12 @@ void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
 static uint16_t LiquidGeneration( const b2World* world, const b2fLiquid* liquid )
 {
 	return (uint16_t)( 31 * world->generation + 7 * world->fluidSerial + liquid->generation );
+}
+
+b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index )
+{
+	const b2World* world = b2GetWorldFromId( f->worldId );
+	return ( b2LiquidId ){ index + 1, world->worldId, LiquidGeneration( world, f->liquids + index ) };
 }
 
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid )
@@ -482,10 +489,17 @@ void b2PrepareFluid( b2fFluid* f )
 	f->restSizesStale = true;
 	b2fGatherShapes( f );
 
+	f->stepTime = 0.0f;
+	f->stepSubSteps = 0;
 	memset( &f->profile, 0, sizeof( f->profile ) );
 	f->profile.sizeChanges = f->sizeChanges;
 	f->profile.prepare = b2GetMilliseconds( ticks );
 	f->profile.measure = f->measureTime;
+}
+
+void b2FinishFluid( b2fFluid* f )
+{
+	b2fFinishStep( f );
 }
 
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, b2fFluid* f )
@@ -494,6 +508,8 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCou
 	f->checkSprings = subStepIndex == 0;
 	// The sort below reorders particles, and a substep callback can read them before the step ends
 	f->restSizesStale = true;
+	f->stepTime += h;
+	f->stepSubSteps += 1;
 	if ( f->count == 0 )
 	{
 		return;

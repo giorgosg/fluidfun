@@ -73,8 +73,10 @@ static int FindBody( b2fFluid* f, b2BodyId id )
 static bool OverlapShape( b2ShapeId shapeId, void* context )
 {
 	b2fFluid* f = context;
+	// The liquid passes through sensors, which only count the liquid in them once a step
 	if ( b2Shape_IsSensor( shapeId ) )
 	{
+		b2fGatherSensor( f, shapeId );
 		return true;
 	}
 
@@ -249,6 +251,10 @@ void b2fGatherShapes( b2fFluid* f )
 {
 	f->shapeCount = 0;
 	f->bodyCount = 0;
+	for ( int i = 0; i < f->sensorCount; ++i )
+	{
+		f->sensors[i].gathered = false;
+	}
 	if ( f->count > 0 )
 	{
 		b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
@@ -612,6 +618,24 @@ static void CollideTask( int start, int end, int worker, void* context )
 	}
 }
 
+// The open side of a body's outline: the mean outward normal of where liquid is against it, which is nothing with
+// liquid all the way round, less the parts facing shapes forces do not move that the body is close to. Up when no
+// liquid is against it.
+static b2Vec2 OpenSide( const b2fFluid* f, const b2fBody* body, const b2fReaction* total, b2Vec2 up )
+{
+	b2Vec2 gap = total->wetLength > 0.0f ? b2MulSV( 1.0f / total->wetLength, ( b2Vec2 ){ total->wetNormalX, total->wetNormalY } ) : up;
+	for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
+	{
+		b2Vec2 normal = { f->patches[i].normalX, f->patches[i].normalY };
+		float along = b2Dot( gap, normal );
+		if ( f->bodies[f->patches[i].otherIndex].adheres && along > 0.0f )
+		{
+			gap = b2MulSub( gap, along, normal );
+		}
+	}
+	return gap;
+}
+
 // Liquid cannot fill a gap narrower than a few particles, so a body touching or nearly touching something misses the
 // liquid's push on that side. Still liquid pushes on a body with the weight of the liquid it displaces, Archimedes'
 // principle, whatever the depth, and does not turn it. So the gap gives what the particles' push falls short of that,
@@ -653,17 +677,7 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 		// A crate afloat with its top dry has a third of its outline open, and a hull more. A small body has few
 		// particles against it, so up to a tenth open still counts as all the way round. The side facing a shape the
 		// body is close to is shut, not open: liquid would be there if it fitted.
-		b2Vec2 gap = total->wetLength > 0.0f ? b2MulSV( 1.0f / total->wetLength, ( b2Vec2 ){ total->wetNormalX, total->wetNormalY } ) : up;
-		for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
-		{
-			b2Vec2 normal = { f->patches[i].normalX, f->patches[i].normalY };
-			float along = b2Dot( gap, normal );
-			if ( f->bodies[f->patches[i].otherIndex].adheres && along > 0.0f )
-			{
-				gap = b2MulSub( gap, along, normal );
-			}
-		}
-		float open = b2Length( gap );
+		float open = b2Length( OpenSide( f, body, total, up ) );
 		float round = open < 0.1f ? 1.0f : ( 0.25f - open ) / 0.15f;
 		float still = 1.0f - b2Length( body->motion.linearVelocity ) / B2F_STILL_SPEED;
 		if ( round > 0.0f && still > 0.0f )
@@ -720,6 +734,44 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 			needY -= impulseY;
 			needAngular -= angular;
 		}
+	}
+}
+
+// What b2Fluid_GetBodyState reports, summed over the step: the liquid's push once patches are applied, before added
+// mass shares the body's change of motion with the liquid, and the share of the body under liquid. That share is the
+// one patches use, twice the mean height of the liquid within reach above the body's lowest point over the body's
+// height, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies.
+static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
+{
+	float g = b2Length( f->worldGravity );
+	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
+	for ( int i = 0; i < f->bodyCount; ++i )
+	{
+		b2fBody* body = f->bodies + i;
+		const b2fReaction* total = totals + i;
+		if ( body->awake == false )
+		{
+			continue;
+		}
+
+		body->stepImpulse.x += total->x;
+		body->stepImpulse.y += total->y;
+		body->stepAngular += total->angular;
+		float height = body->high - body->low;
+		if ( total->wetMass <= 0.0f )
+		{
+			continue;
+		}
+
+		// Without gravity there is no under, and only liquid all round counts
+		body->stepWet = true;
+		float share = 0.0f;
+		if ( height > 0.0f && g > 0.0f )
+		{
+			share = 2.0f * ( total->wetHeight / total->wetMass - body->low ) / height;
+			share = share < 0.0f ? 0.0f : ( share > 1.0f ? 1.0f : share );
+		}
+		body->stepSubmerged += b2Length( OpenSide( f, body, total, up ) ) < 0.1f ? 1.0f : share;
 	}
 }
 
@@ -906,6 +958,8 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 	{
 		ApplyPatches( f, totals );
 	}
+
+	RecordReactions( f, totals );
 
 	bool sharing = false;
 	for ( int i = 0; i < f->bodyCount; ++i )

@@ -147,7 +147,35 @@ typedef struct b2fBody
 	float area, low, high;
 	// Centre of that area, as its sum weighted by area in the body's frame, and where it is from the centre of mass
 	b2Vec2 areaCenter, buoyancyArm;
+	// What the liquid did to the body over this step, summed over substeps, for b2Fluid_GetBodyState: its impulse and
+	// angular impulse once patches are applied, the share under liquid, and whether any liquid was within reach
+	b2Vec2 stepImpulse;
+	float stepAngular, stepSubmerged;
+	bool stepWet;
 } b2fBody;
+
+// A body that has been in liquid lately, kept across steps, since the list of bodies is rebuilt every step
+typedef struct b2fBodyRecord
+{
+	b2BodyId id;
+	b2FluidBodyState state;
+	// Steps in a row whose liquid within reach disagrees with state.inLiquid; it flips at B2F_WET_STEPS
+	int run;
+	// Whether the body was near the liquid this step, and had liquid in reach
+	bool seen, wet;
+} b2fBodyRecord;
+
+// A body's inLiquid changes after this many steps in a row with liquid in reach, or without it, so that a splash
+// passing by does not begin and end it every step
+#define B2F_WET_STEPS 3
+
+// A sensor shape near the liquid this step, or one that held liquid last step
+typedef struct b2fSensor
+{
+	b2ShapeId id;
+	float area;
+	bool gathered;
+} b2fSensor;
 
 // A shape within the interaction radius of a particle
 typedef struct b2fContact
@@ -290,6 +318,27 @@ struct b2fFluid
 
 	b2FluidProfile profile;
 	float measureTime;
+
+	// What the liquid tells the caller after each step (fluid_state.c). Time and substeps the liquid ran this step.
+	float stepTime;
+	int stepSubSteps;
+	b2fBodyRecord* records;
+	int recordCount, recordCapacity;
+	// The record of each body, by its index in the world, plus one; zero for none. A destroyed body's slot can point
+	// at its record until the record goes, so the id in the record is checked.
+	int* recordOfBody;
+	int recordOfBodyCapacity;
+	b2fSensor* sensors;
+	int sensorCount, sensorCapacity;
+	// Mass of each liquid within reach of each body in the last substep, to find which liquid a body is in
+	float* bodyLiquidMass;
+	int bodyLiquidCapacity;
+	b2FluidBodyBeginEvent* bodyBeginEvents;
+	b2FluidBodyEndEvent* bodyEndEvents;
+	b2FluidSensorBeginEvent* sensorBeginEvents;
+	b2FluidSensorEndEvent* sensorEndEvents;
+	int bodyBeginCount, bodyEndCount, sensorBeginCount, sensorEndCount;
+	int bodyBeginCapacity, bodyEndCapacity, sensorBeginCapacity, sensorEndCapacity;
 };
 
 static inline void b2fCopyParticle( b2fFluid* f, int to, int from )
@@ -328,6 +377,8 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 b2fFluid* b2fGetFluid( b2FluidId fluidId );
 // The liquid's index in its fluid
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
+// The id of the liquid in a slot
+b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index );
 
 // grid.c
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
@@ -345,6 +396,11 @@ void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context );
 void b2fFindContacts( b2fFluid* f, b2SubStepContext* context );
 void b2fCollide( b2fFluid* f, b2SubStepContext* context );
 bool b2fShapeDistance( const b2fShape* s, b2Vec2 p, float* distance, b2Vec2* normal );
+
+// state.c
+void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId );
+void b2fFinishStep( b2fFluid* f );
+void b2fFreeState( b2fFluid* f );
 
 // adapt.c
 void b2fAdaptSizes( b2fFluid* f );
