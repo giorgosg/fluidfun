@@ -99,9 +99,9 @@ static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* n
 static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 {
 	const b2LiquidDef* def = &f->liquids[0].def;
-	float k = def->stiffness, kn = def->nearStiffness, rest = f->restDensity;
-	float tensile = def->tensilePressure, cohesion = def->cohesion;
-	float sigma = def->linearViscosity, beta = def->quadraticViscosity, dt = f->h;
+	float k = def->tuning.stiffness, kn = def->tuning.nearStiffness, rest = f->restDensity;
+	float tensile = def->tuning.tensilePressure, cohesion = def->cohesion;
+	float sigma = def->viscosity, beta = def->tuning.quadraticViscosity, dt = f->h;
 	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
@@ -186,7 +186,7 @@ static void MultiAccumulate( b2fFluid* f, int start, int end )
 		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
 		if ( u > 0.0f )                                                                                                \
 		{                                                                                                              \
-			float impulse = 0.5f * w * dt * q * ( pair->linearViscosity * u + pair->quadraticViscosity * u * u ) / l;  \
+			float impulse = 0.5f * w * dt * q * ( pair->viscosity * u + pair->quadraticViscosity * u * u ) / l;  \
 			dvx -= impulse * dx;                                                                                       \
 			dvy -= impulse * dy;                                                                                       \
 		}                                                                                                              \
@@ -289,8 +289,8 @@ static void DensityTask( int start, int end, int worker, void* context )
 			AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
 			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 			float hi2 = 4.0f * f->size[i] * f->size[i];
-			f->pressure[i] = def->stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tensilePressure );
-			f->nearPressure[i] = def->nearStiffness * hi2 * f->rhoNear[i];
+			f->pressure[i] = def->tuning.stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tuning.tensilePressure );
+			f->nearPressure[i] = def->tuning.nearStiffness * hi2 * f->rhoNear[i];
 			if ( springy )
 			{
 				AddSprings( f, i );
@@ -340,10 +340,10 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 
 	const b2LiquidDef* def = &f->liquids[0].def;
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
-	float scale = def->stiffness * h, nearScale = def->nearStiffness * h, rest = 2.0f * f->restDensity;
-	float tensile = def->tensilePressure, single = f->restDensity, pullScale = def->cohesion * h;
+	float scale = def->tuning.stiffness * h, nearScale = def->tuning.nearStiffness * h, rest = 2.0f * f->restDensity;
+	float tensile = def->tuning.tensilePressure, single = f->restDensity, pullScale = def->cohesion * h;
 	bool clamped = tensile < 1.0f;
-	float sigma = def->linearViscosity, beta = def->quadraticViscosity, dt = f->h;
+	float sigma = def->viscosity, beta = def->tuning.quadraticViscosity, dt = f->h;
 	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
@@ -447,8 +447,8 @@ static void ApplyTask( int start, int end, int worker, void* context )
 		{
 			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 			float h = adaptive ? 2.0f * f->size[i] : f->radius;
-			float excess = TensileClamp( f->rho[i] - f->restDensity, def->tensilePressure );
-			ApplyWallMoves( f, i, def->stiffness * h * excess, def->nearStiffness * h * f->rhoNear[i], def->adhesion, h );
+			float excess = TensileClamp( f->rho[i] - f->restDensity, def->tuning.tensilePressure );
+			ApplyWallMoves( f, i, def->tuning.stiffness * h * excess, def->tuning.nearStiffness * h * f->rhoNear[i], def->adhesion, h );
 		}
 	}
 }

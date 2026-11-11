@@ -70,13 +70,16 @@ ctest --test-dir build/benchmark/fluid
 b2FluidDef def = b2DefaultFluidDef();
 def.particleSpacing = 0.08f;
 b2FluidId fluid = b2CreateFluid( worldId, &def );
-b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f } );
 
-// A second liquid, lighter than the first
-b2LiquidDef oil = b2DefaultLiquidDef();
-oil.massDensity = 0.6f;
-int oilIndex = b2Fluid_CreateLiquid( fluid, &oil );
-b2Fluid_CreateParticlesInBox( fluid, oilIndex, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f } );
+// A fluid starts empty. Water is the default liquid.
+b2LiquidDef water = b2DefaultLiquidDef();
+b2LiquidId waterId = b2CreateLiquid( fluid, &water );
+b2Liquid_CreateParticlesInBox( waterId, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f } );
+
+// A second liquid, lighter than the first. There are also honey, mercury, slime, jelly and dough.
+b2LiquidDef oil = b2MakeOilDef();
+b2LiquidId oilId = b2CreateLiquid( fluid, &oil );
+b2Liquid_CreateParticlesInBox( oilId, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f } );
 
 // Each frame. The world steps its fluid with the bodies.
 b2World_Step( worldId, 1.0f / 60.0f, 4 );
@@ -89,7 +92,8 @@ const float* sizes = b2Fluid_GetSizes( fluid );
 b2DestroyWorld( worldId );
 ```
 
-A world has one fluid, which holds all of its liquids, up to 16 of them. Every setting is described in `include/box2d/fluidfun.h`.
+A world has one fluid, which holds all of its liquids, up to 16 of them. A liquid's settings come in two parts: what
+the liquid is like (density, viscosity, cohesion, friction, springs), and `tuning`, the solver's own settings. Every setting is described in `include/box2d/fluidfun.h`.
 
 ## License
 

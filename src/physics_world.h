@@ -233,6 +233,9 @@ b2World* b2GetWorldFromId( b2WorldId id );
 b2World* b2GetWorld( int index );
 b2World* b2GetWorldLocked( int index );
 
+// The world in a slot, or null if the slot is out of range or holds no world
+b2World* b2FindWorld( int index );
+
 // Union of the broad-phase root bounds across all body types. Returns false when no tree holds a
 // proxy, so callers don't fold an empty world's origin into a running bounds.
 bool b2ComputeWorldBounds( b2World* world, b2AABB* bounds );

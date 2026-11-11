@@ -350,7 +350,9 @@ jobs:
         	// The liquid's functions have to reach consumers too, shared builds included
         	b2FluidDef fluidDef = b2DefaultFluidDef();
         	b2FluidId fluid = b2CreateFluid( worldId, &fluidDef );
-        	b2Fluid_CreateParticlesInBox( fluid, 0, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 1.0f, 1.0f } );
+        	b2LiquidDef liquidDef = b2DefaultLiquidDef();
+        	b2LiquidId liquid = b2CreateLiquid( fluid, &liquidDef );
+        	b2Liquid_CreateParticlesInBox( liquid, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 1.0f, 1.0f } );
 
         	for ( int i = 0; i < 60; ++i )
         	{

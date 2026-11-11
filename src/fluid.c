@@ -9,26 +9,79 @@
 b2LiquidDef b2DefaultLiquidDef( void )
 {
 	b2LiquidDef def = { 0 };
-	def.massDensity = 1.0f;
-	def.stiffness = 0.04f;
-	def.nearStiffness = 0.1f;
-	def.tensilePressure = 0.5f;
+	def.density = 1.0f;
+	def.tuning.stiffness = 0.04f;
+	def.tuning.nearStiffness = 0.1f;
+	def.tuning.tensilePressure = 0.5f;
 	def.cohesion = 0.04f;
 	def.adhesion = 0.025f;
-	def.linearViscosity = 0.5f;
+	def.viscosity = 0.5f;
 	def.friction = 0.1f;
 	def.gravityScale = 1.0f;
-	def.contactPressure = 1.0f;
-	def.addedMass = 1.0f;
+	def.tuning.buoyancyAssist = 1.0f;
+	def.tuning.addedMass = 1.0f;
 	def.springStiffness = 0.0f;
 	def.plasticity = 0.5f;
 	def.yieldRatio = 0.1f;
-	def.adaptiveRatio = 10.0f;
-	def.adaptiveSpeed = 0.0f;
-	def.adaptiveDepthLimit = false;
-	def.adaptiveTolerance = 0.3f;
-	def.adaptiveLimit = 3.0f;
-	def.adaptiveRate = 0.05f;
+	def.tuning.adaptiveRatio = 10.0f;
+	def.tuning.adaptiveSpeed = 0.0f;
+	def.tuning.adaptiveDepthLimit = false;
+	def.tuning.adaptiveTolerance = 0.3f;
+	def.tuning.adaptiveLimit = 3.0f;
+	def.tuning.adaptiveRate = 0.05f;
+	return def;
+}
+
+// The values the sample scenes use for these liquids
+b2LiquidDef b2MakeOilDef( void )
+{
+	b2LiquidDef def = b2DefaultLiquidDef();
+	def.density = 0.6f;
+	def.cohesion = 0.1f;
+	return def;
+}
+
+b2LiquidDef b2MakeHoneyDef( void )
+{
+	b2LiquidDef def = b2DefaultLiquidDef();
+	def.density = 1.4f;
+	def.cohesion = 0.2f;
+	def.friction = 0.3f;
+	def.viscosity = 20.0f;
+	return def;
+}
+
+b2LiquidDef b2MakeMercuryDef( void )
+{
+	b2LiquidDef def = b2DefaultLiquidDef();
+	def.density = 13.6f;
+	def.cohesion = 0.1f;
+	return def;
+}
+
+b2LiquidDef b2MakeSlimeDef( void )
+{
+	b2LiquidDef def = b2DefaultLiquidDef();
+	def.cohesion = 0.25f;
+	def.viscosity = 10.0f;
+	def.friction = 0.5f;
+	return def;
+}
+
+b2LiquidDef b2MakeJellyDef( void )
+{
+	b2LiquidDef def = b2DefaultLiquidDef();
+	def.springStiffness = 10000.0f;
+	def.plasticity = 0.0f;
+	return def;
+}
+
+b2LiquidDef b2MakeDoughDef( void )
+{
+	b2LiquidDef def = b2DefaultLiquidDef();
+	def.springStiffness = 10000.0f;
+	def.plasticity = 1.0f;
+	def.yieldRatio = 0.1f;
 	return def;
 }
 
@@ -39,29 +92,32 @@ b2FluidDef b2DefaultFluidDef( void )
 	def.adaptiveDepth = 12.0f;
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;
-	def.liquid = b2DefaultLiquidDef();
 	return def;
 }
 
-// Rebuilds what the passes read from the liquids' settings
+// Rebuilds what the passes read from the liquids' settings. A destroyed liquid's slot keeps its last settings, which
+// nothing reads since no particle is of it.
 static void UpdateLiquids( b2fFluid* f )
 {
 	float spacing = f->spacing;
 	f->adaptive = false;
-	for ( int a = 0; a < f->liquidCount; ++a )
-	{
-		b2fLiquid* liquid = f->liquids + a;
-		liquid->mass = liquid->def.massDensity * 0.8660254f * spacing * spacing / B2F_REST_FILL;
-		f->adaptive = f->adaptive || liquid->def.adaptiveRatio > 1.0f;
-		f->cohesionBetween[a][a] = liquid->def.cohesion;
-	}
-	f->mass = f->liquids[0].mass;
-
 	f->springy = false;
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
-		f->springy = f->springy || f->liquids[a].def.springStiffness > 0.0f;
+		b2fLiquid* liquid = f->liquids + a;
+		liquid->mass = liquid->def.density * 0.8660254f * spacing * spacing / B2F_REST_FILL;
+		f->cohesionBetween[a][a] = liquid->def.cohesion;
+		if ( liquid->alive )
+		{
+			f->adaptive = f->adaptive || liquid->def.tuning.adaptiveRatio > 1.0f;
+			f->springy = f->springy || liquid->def.springStiffness > 0.0f;
+		}
 	}
+
+	// Adaptive sizes count mass in finest particles of the first liquid, as a measure of area. Without one, any
+	// mass does.
+	f->mass = f->liquidCount > 0 && f->liquids[0].alive ? f->liquids[0].mass : 0.8660254f * spacing * spacing / B2F_REST_FILL;
+
 	if ( f->springy && f->springs == NULL )
 	{
 		size_t n = (size_t)f->capacity + 1, slots = 1;
@@ -74,7 +130,6 @@ static void UpdateLiquids( b2fFluid* f )
 		f->idMap = malloc( slots * sizeof( b2fIdSlot ) );
 		f->newIndex = calloc( n, sizeof( int ) );
 	}
-	f->def.liquid = f->liquids[0].def;
 
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
@@ -82,12 +137,12 @@ static void UpdateLiquids( b2fFluid* f )
 		for ( int b = 0; b < f->liquidCount; ++b )
 		{
 			const b2LiquidDef* db = &f->liquids[b].def;
-			float sum = da->massDensity + db->massDensity;
+			float sum = da->density + db->density;
 			f->liquidPairs[a][b] = ( b2fLiquidPair ){
 				.cohesion = f->cohesionBetween[a][b],
-				.weight = sum > 0.0f ? 2.0f * db->massDensity / sum : 1.0f,
-				.linearViscosity = 0.5f * ( da->linearViscosity + db->linearViscosity ),
-				.quadraticViscosity = 0.5f * ( da->quadraticViscosity + db->quadraticViscosity ),
+				.weight = sum > 0.0f ? 2.0f * db->density / sum : 1.0f,
+				.viscosity = 0.5f * ( da->viscosity + db->viscosity ),
+				.quadraticViscosity = 0.5f * ( da->tuning.quadraticViscosity + db->tuning.quadraticViscosity ),
 			};
 		}
 	}
@@ -140,8 +195,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
 	f->margin = 0.5f * f->spacing;
-	f->liquids[0].def = def->liquid;
-	f->liquidCount = 1;
 	UpdateLiquids( f );
 	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
@@ -220,43 +273,151 @@ void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
 	f->def = *def;
 	f->def.particleSpacing = spacing;
 	f->def.capacity = capacity;
-	f->liquids[0].def = def->liquid;
-	UpdateLiquids( f );
 }
 
-int b2Fluid_CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
+// A liquid id carries a count that changes with the world in the slot, the fluid the world has, and each liquid
+// destroyed in the liquid's own slot
+static uint16_t LiquidGeneration( const b2World* world, const b2fLiquid* liquid )
 {
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( f->liquidCount == B2F_MAX_LIQUIDS )
-	{
-		return -1;
-	}
-	int index = f->liquidCount++;
-	f->liquids[index].def = *def;
-	UpdateLiquids( f );
+	return (uint16_t)( 31 * world->generation + 7 * world->fluidSerial + liquid->generation );
+}
+
+int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid )
+{
+	b2World* world = b2GetWorld( liquidId.world0 );
+	b2fFluid* f = world->fluid;
+	int index = liquidId.index1 - 1;
+	B2_ASSERT( f != NULL && 0 <= index && index < f->liquidCount );
+	B2_ASSERT( f->liquids[index].alive && liquidId.generation == LiquidGeneration( world, f->liquids + index ) );
+	*fluid = f;
 	return index;
 }
 
-void b2Fluid_SetLiquid( b2FluidId fluidId, int liquid, const b2LiquidDef* def )
+bool b2Liquid_IsValid( b2LiquidId liquidId )
+{
+	const b2World* world = b2FindWorld( liquidId.world0 );
+	if ( world == NULL || world->fluid == NULL )
+	{
+		return false;
+	}
+
+	const b2fFluid* f = world->fluid;
+	int index = liquidId.index1 - 1;
+	return 0 <= index && index < f->liquidCount && f->liquids[index].alive &&
+		   liquidId.generation == LiquidGeneration( world, f->liquids + index );
+}
+
+b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( 0 <= liquid && liquid < f->liquidCount )
+	b2World* world = b2GetWorld( fluidId.world0 );
+	B2_ASSERT( world->locked == false );
+	if ( world->locked )
 	{
-		f->liquids[liquid].def = *def;
-		UpdateLiquids( f );
+		return b2_nullLiquidId;
 	}
+
+	// The lowest free slot, so that the first liquid of a fluid is the one the single-liquid passes read
+	int index = 0;
+	while ( index < f->liquidCount && f->liquids[index].alive )
+	{
+		index += 1;
+	}
+	if ( index == B2F_MAX_LIQUIDS )
+	{
+		return b2_nullLiquidId;
+	}
+
+	f->liquidCount = index < f->liquidCount ? f->liquidCount : index + 1;
+	f->liquids[index].def = *def;
+	f->liquids[index].alive = true;
+	for ( int other = 0; other < B2F_MAX_LIQUIDS; ++other )
+	{
+		f->cohesionBetween[index][other] = 0.0f;
+		f->cohesionBetween[other][index] = 0.0f;
+	}
+	UpdateLiquids( f );
+	return ( b2LiquidId ){ index + 1, fluidId.world0, LiquidGeneration( world, f->liquids + index ) };
+}
+
+void b2DestroyLiquid( b2LiquidId liquidId )
+{
+	b2fFluid* f;
+	int index = b2fGetLiquid( liquidId, &f );
+	b2World* world = b2GetWorld( liquidId.world0 );
+	B2_ASSERT( world->locked == false );
+	if ( world->locked )
+	{
+		return;
+	}
+
+	// Springs only join particles of one liquid, so none is left holding a partner that has gone
+	int kept = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		if ( f->liquid[i] != index )
+		{
+			if ( kept != i )
+			{
+				b2fCopyParticle( f, kept, i );
+			}
+			kept += 1;
+		}
+	}
+	for ( int i = kept; i < f->count; ++i )
+	{
+		b2fClearParticle( f, i );
+	}
+	f->count = kept;
+	f->gridValid = false;
+
+	f->liquids[index].alive = false;
+	f->liquids[index].generation += 1;
+	while ( f->liquidCount > 0 && f->liquids[f->liquidCount - 1].alive == false )
+	{
+		f->liquidCount -= 1;
+	}
+	UpdateLiquids( f );
+}
+
+void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
+{
+	b2fFluid* f;
+	int index = b2fGetLiquid( liquidId, &f );
+	f->liquids[index].def = *def;
+	UpdateLiquids( f );
+}
+
+b2LiquidDef b2Liquid_GetDef( b2LiquidId liquidId )
+{
+	b2fFluid* f;
+	int index = b2fGetLiquid( liquidId, &f );
+	return f->liquids[index].def;
+}
+
+int b2Liquid_GetIndex( b2LiquidId liquidId )
+{
+	b2fFluid* f;
+	return b2fGetLiquid( liquidId, &f );
 }
 
 int b2Fluid_GetLiquidCount( b2FluidId fluidId )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->liquidCount;
+	int count = 0;
+	for ( int i = 0; i < f->liquidCount; ++i )
+	{
+		count += f->liquids[i].alive ? 1 : 0;
+	}
+	return count;
 }
 
-void b2Fluid_SetCohesionBetween( b2FluidId fluidId, int a, int b, float cohesion )
+void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB, float cohesion )
 {
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( 0 <= a && a < f->liquidCount && 0 <= b && b < f->liquidCount && a != b )
+	b2fFluid *f, *other;
+	int a = b2fGetLiquid( liquidA, &f ), b = b2fGetLiquid( liquidB, &other );
+	B2_ASSERT( f == other );
+	if ( f == other && a != b )
 	{
 		f->cohesionBetween[a][b] = cohesion;
 		f->cohesionBetween[b][a] = cohesion;

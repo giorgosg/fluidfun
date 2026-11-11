@@ -75,6 +75,17 @@ b2World* b2GetWorld( int index )
 	return world;
 }
 
+b2World* b2FindWorld( int index )
+{
+	if ( index < 0 || B2_MAX_WORLDS <= index )
+	{
+		return NULL;
+	}
+
+	b2World* world = b2_worlds + index;
+	return world->worldId == index ? world : NULL;
+}
+
 b2World* b2GetWorldLocked( int index )
 {
 	B2_ASSERT( 0 <= index && index < B2_MAX_WORLDS );

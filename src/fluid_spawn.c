@@ -34,7 +34,7 @@ static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float 
 static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos upper )
 {
 	const b2LiquidDef* def = &f->liquids[liquid].def;
-	float spacing = f->spacing, ratio = def->adaptiveRatio;
+	float spacing = f->spacing, ratio = def->tuning.adaptiveRatio;
 	float g = -def->gravityScale * b2World_GetGravity( f->worldId ).y;
 	float reach = b2fAdaptiveReach( f, liquid, g, f->h > 0.0f ? f->h : 1.0f / 240.0f );
 	b2fCoord cx = 0.5f * ( lower.x + upper.x ), cy = 0.5f * ( lower.y + upper.y );
@@ -113,15 +113,12 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 	return added;
 }
 
-int b2Fluid_CreateParticlesInBox( b2FluidId fluidId, int liquid, b2Pos lower, b2Pos upper )
+int b2Liquid_CreateParticlesInBox( b2LiquidId liquidId, b2Pos lower, b2Pos upper )
 {
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( liquid < 0 || liquid >= f->liquidCount )
-	{
-		return 0;
-	}
+	b2fFluid* f;
+	int liquid = b2fGetLiquid( liquidId, &f );
 
-	if ( f->liquids[liquid].def.adaptiveRatio > 1.0f )
+	if ( f->liquids[liquid].def.tuning.adaptiveRatio > 1.0f )
 	{
 		return CreateGradedParticles( f, liquid, lower, upper );
 	}

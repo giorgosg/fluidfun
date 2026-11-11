@@ -57,6 +57,14 @@ typedef struct b2FluidId
 	uint16_t generation;
 } b2FluidId;
 
+/// Liquid id references one liquid of a world's fluid. This should be treated as an opaque handle.
+typedef struct b2LiquidId
+{
+	int32_t index1;
+	uint16_t world0;
+	uint16_t generation;
+} b2LiquidId;
+
 /// Shape id references a shape instance. This should be treated as an opaque handle.
 typedef struct b2ShapeId
 {
@@ -108,6 +116,7 @@ typedef struct b2ContactId
 static const b2WorldId b2_nullWorldId = B2_NULL_ID;
 static const b2BodyId b2_nullBodyId = B2_NULL_ID;
 static const b2FluidId b2_nullFluidId = B2_NULL_ID;
+static const b2LiquidId b2_nullLiquidId = B2_NULL_ID;
 static const b2ShapeId b2_nullShapeId = B2_NULL_ID;
 static const b2ChainId b2_nullChainId = B2_NULL_ID;
 static const b2JointId b2_nullJointId = B2_NULL_ID;
