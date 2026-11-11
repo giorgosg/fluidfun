@@ -463,6 +463,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 	float buoyantDensity = def->tuning.buoyancyAssist * def->density * def->gravityScale;
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
+	float spray = 0.4f * f->restDensity;
 
 	for ( int chunk = start; chunk < end; ++chunk )
 	{
@@ -517,6 +518,15 @@ static void CollideTask( int start, int end, int worker, void* context )
 							reaction->wetLength += f->size[i];
 							reaction->wetNormalX += f->size[i] * contacts[c].normalX;
 							reaction->wetNormalY += f->size[i] * contacts[c].normalY;
+						}
+
+						// The level of the liquid on the body, for the state the caller reads. Liquid lying on an
+						// upward face, such as a film or a splash on top of a floating body, is not the level.
+						float facing = contacts[c].normalX * up.x + contacts[c].normalY * up.y;
+						if ( f->rho[i] >= spray && facing < B2F_TOP_FACING )
+						{
+							float top = rx * up.x + ry * up.y + 0.5f * B2F_REST_PITCH * f->size[i] - body->low;
+							reaction->wetTop = top > reaction->wetTop ? top : reaction->wetTop;
 						}
 					}
 
@@ -739,8 +749,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 
 // What b2Fluid_GetBodyState reports, summed over the step: the liquid's push once patches are applied, before added
 // mass shares the body's change of motion with the liquid, and the share of the body under liquid. That share is the
-// one patches use, twice the mean height of the liquid within reach above the body's lowest point over the body's
-// height, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies.
+// liquid's level on the body, its top over the body's height, and all of it with liquid all the way round. Patches use
+// twice the mean height of the liquid within reach instead, which the liquid under a floating body's bottom pulls down. Nothing here feeds back into the liquid or the bodies.
 static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
@@ -768,8 +778,8 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 		float share = 0.0f;
 		if ( height > 0.0f && g > 0.0f )
 		{
-			share = 2.0f * ( total->wetHeight / total->wetMass - body->low ) / height;
-			share = share < 0.0f ? 0.0f : ( share > 1.0f ? 1.0f : share );
+			share = total->wetTop / height;
+			share = share > 1.0f ? 1.0f : share;
 		}
 		body->stepSubmerged += b2Length( OpenSide( f, body, total, up ) ) < 0.1f ? 1.0f : share;
 	}
@@ -946,6 +956,7 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 			t->wetLength += r->wetLength;
 			t->wetNormalX += r->wetNormalX;
 			t->wetNormalY += r->wetNormalY;
+			t->wetTop = r->wetTop > t->wetTop ? r->wetTop : t->wetTop;
 		}
 	}
 
