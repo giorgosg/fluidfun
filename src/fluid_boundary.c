@@ -63,6 +63,7 @@ static int FindBody( b2fFluid* f, b2BodyId id )
 		.id = id,
 		.lastVelocity = b2Body_GetLinearVelocity( id ),
 		.lastAngularVelocity = b2Body_GetAngularVelocity( id ),
+		.adheres = b2Body_GetType( id ) != b2_dynamicBody,
 	};
 	return f->bodyCount++;
 }

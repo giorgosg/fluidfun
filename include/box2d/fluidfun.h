@@ -32,6 +32,12 @@ typedef struct b2fLiquidDef
 	/// set apart from stiffness. In the same units as stiffness. This is the pull within the liquid; the pull between
 	/// two liquids is set with b2fFluid_SetCohesionBetween.
 	float cohesion;
+	/// Pull of static and kinematic shapes on the liquid, after Akinci et al. 2013: particles between half and all of
+	/// the interaction radius from such a shape are drawn towards it. Bodies moved by forces do not pull. It helps a
+	/// light body pressed onto the floor come back up. Zero turns it off. In the units of
+	/// cohesion; above about 0.06 bodies slightly heavier than the liquid stop settling, and by 0.15 thin films creep
+	/// up walls.
+	float adhesion;
 	/// Between two liquids viscosity is the mean of theirs
 	float linearViscosity;
 	float quadraticViscosity;

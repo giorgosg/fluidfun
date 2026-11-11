@@ -166,6 +166,7 @@ static void ApplySettings( b2fFluidDef* def )
 		{ "LAB_FRICTION", &def->liquid.friction },
 		{ "LAB_TENSILE", &def->liquid.tensilePressure },
 		{ "LAB_COHESION", &def->liquid.cohesion },
+		{ "LAB_ADHESION", &def->liquid.adhesion },
 		{ "LAB_GRAVITY", &def->liquid.gravityScale },
 		{ "LAB_VISCOSITY", &def->liquid.linearViscosity },
 		{ "LAB_QUADRATIC", &def->liquid.quadraticViscosity },

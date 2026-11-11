@@ -10,6 +10,7 @@ b2fLiquidDef b2fDefaultLiquidDef( void )
 	def.nearStiffness = 0.1f;
 	def.tensilePressure = 0.5f;
 	def.cohesion = 0.04f;
+	def.adhesion = 0.04f;
 	def.linearViscosity = 0.5f;
 	def.friction = 0.1f;
 	def.gravityScale = 1.0f;

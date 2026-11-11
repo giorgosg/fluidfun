@@ -40,8 +40,11 @@ static inline void Density( b2fFluid* f, int i, float* density, float* nearDensi
 }
 
 // Shapes cannot move out of the way, so the particle takes the whole of the move. Below rest
-// density the pressure part is negative, but a wall does not pull on a particle.
-static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nearPressure )
+// density the pressure part is negative, but a wall does not pull on a particle. Adhesion does: Akinci et al. 2013's
+// spline (Eq. 7), which pulls a particle between h/2 and h from the shape and peaks at 3h/4, scaled so that its peak
+// is 1. Only shapes that forces do not move, static and kinematic, pull: at bodies the pull also lifted crates
+// heavier than the liquid off the floor.
+static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nearPressure, float adhesion, float h )
 {
 	float limit = 0.5f * f->size[i];
 	b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
@@ -49,6 +52,15 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 	{
 		float move = pressure * contacts[c].pressureWeight + nearPressure * contacts[c].nearWeight;
 		move = move < 0.0f ? 0.0f : ( move > limit ? limit : move );
+		if ( adhesion > 0.0f && f->bodies[contacts[c].bodyIndex].adheres )
+		{
+			float d = ( 1.0f - contacts[c].share ) * h;
+			float spline = -4.0f * d * d / h + 6.0f * d - 2.0f * h;
+			if ( d > 0.5f * h && spline > 0.0f )
+			{
+				move -= B2F_ADHESION_SCALE * adhesion * h * sqrtf( sqrtf( spline / ( 0.25f * h ) ) );
+			}
+		}
 		contacts[c].move = move;
 		f->pos[i].x += move * contacts[c].normalX;
 		f->pos[i].y += move * contacts[c].normalY;
@@ -422,7 +434,7 @@ static void ApplyTask( int start, int end, int worker, void* context )
 			const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;
 			float h = adaptive ? 2.0f * f->size[i] : f->radius;
 			float excess = TensileClamp( f->rho[i] - f->restDensity, def->tensilePressure );
-			ApplyWallMoves( f, i, def->stiffness * h * excess, def->nearStiffness * h * f->rhoNear[i] );
+			ApplyWallMoves( f, i, def->stiffness * h * excess, def->nearStiffness * h * f->rhoNear[i], def->adhesion, h );
 		}
 	}
 }
