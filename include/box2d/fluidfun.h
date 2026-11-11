@@ -246,14 +246,15 @@ typedef struct b2FluidBodyState
 	/// row, and false once there has been none for 3 steps in a row, so a drop that splashes past does not begin and
 	/// end it. The other fields are from the last step whatever this says.
 	bool inLiquid;
-	/// Share of the body under liquid, 0 to 1, averaged over the substeps of the last step. It is the solver's own
-	/// estimate, which buoyancyAssist uses: twice the mean height of the liquid within reach above the body's lowest
-	/// point, over the body's height, against gravity; and 1 with liquid all the way round the body. That would be
-	/// exact for a box wet up its sides alone, but the liquid under the body's bottom counts too, so it reads low for
-	/// a body afloat, and more so for a small one: with particles 0.08 apart, an upright crate 1.2 across that is half
-	/// under reads about 0.37, and one 0.6 across that is 0.42 under reads about 0.06. Other shapes are rougher
-	/// still. Use it to tell more from less; inLiquid and force are the better guides. Zero without gravity unless
-	/// liquid is all round.
+	/// Share of the body's height under liquid, 0 to 1, averaged over the substeps of the last step: how high the
+	/// liquid against the body stands above its lowest point, against gravity, over the body's height, and 1 with
+	/// liquid all the way round it. The level is the highest particle within reach that is not spray (density under
+	/// 0.4 of rest) plus half its size. Liquid against a face that looks more up than sideways does not count, so a
+	/// film or a splash lying on top of a floating body leaves it alone; a wave washing down its sides raises it
+	/// while it lasts. It is a share of height, not of area, which differs for shapes other than upright boxes.
+	/// Measured on upright crates, with particles 0.08 apart, against the surface beside them, means over 2 s: a crate
+	/// 0.6 across afloat reads 0.47 at a level of 0.46, and 1.2 across reads 0.49 at 0.47 (0.49 at 0.49 in the Tank
+	/// scene); crates standing in shallow liquid read 0.39 at 0.39. Zero without gravity unless liquid is all round.
 	float submerged;
 	/// The liquid's push on the body, its impulse over the last step divided by the step's time, in Box2D's units of
 	/// force. It counts the particles pushed out of the body and their pressure across its outline, and the buoyancy

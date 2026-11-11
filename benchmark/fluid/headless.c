@@ -660,7 +660,7 @@ int main( int argc, char** argv )
 			}
 			// LAB_STATE: every half second, or every so many frames if it is a number above 1, each moving body's share under liquid and the liquid's push along up over its
 			// weight, which is near 1 for a body afloat, and every frame the fluid's events. Level is the share of the
-			// body's bounds under the surface three spacings to its right, to compare the share with for a box upright.
+			// body's height under the surface found two spacings to the right of its shapes, to compare submerged with.
 			if ( getenv( "LAB_STATE" ) )
 			{
 				b2Vec2 gravity = b2World_GetGravity( worldId );
@@ -678,12 +678,31 @@ int main( int argc, char** argv )
 						}
 						b2FluidBodyState state = b2Fluid_GetBodyState( fluid, scene.bodies[k] );
 						float weight = b2Body_GetMass( scene.bodies[k] ) * g;
-						b2AABB box = b2Body_ComputeBounds( scene.bodies[k] );
-						b2Pos beside = { box.upperBound.x + 3.0f * def.fluid.particleSpacing, box.lowerBound.y }, surface = beside;
-						float level = 0.0f;
-						if ( b2Fluid_GetSurfaceHeight( fluid, beside, &surface ) )
+						// The body's extent from its polygons' corners, since the bounds Box2D keeps are padded
+						b2ShapeId shapes[16];
+						int shapeCount = b2Body_GetShapes( scene.bodies[k], shapes, 16 );
+						b2WorldTransform transform = b2Body_GetTransform( scene.bodies[k] );
+						double low = DBL_MAX, high = -DBL_MAX, right = -DBL_MAX;
+						for ( int s = 0; s < shapeCount; ++s )
 						{
-							level = (float)( surface.y - box.lowerBound.y ) / ( box.upperBound.y - box.lowerBound.y );
+							if ( b2Shape_GetType( shapes[s] ) != b2_polygonShape )
+							{
+								continue;
+							}
+							b2Polygon polygon = b2Shape_GetPolygon( shapes[s] );
+							for ( int v = 0; v < polygon.count; ++v )
+							{
+								b2Pos corner = b2TransformWorldPoint( transform, polygon.vertices[v] );
+								low = corner.y < low ? corner.y : low;
+								high = corner.y > high ? corner.y : high;
+								right = corner.x > right ? corner.x : right;
+							}
+						}
+						float level = 0.0f;
+						b2Pos beside = { right + 2.0f * def.fluid.particleSpacing, low }, surface = beside;
+						if ( high > low && b2Fluid_GetSurfaceHeight( fluid, beside, &surface ) )
+						{
+							level = (float)( ( surface.y - low ) / ( high - low ) );
 							level = level < 0.0f ? 0.0f : ( level > 1.0f ? 1.0f : level );
 						}
 						printf( " | %d: %s submerged %.2f level %.2f force/weight %.2f", k, state.inLiquid ? "in" : "out", (double)state.submerged,

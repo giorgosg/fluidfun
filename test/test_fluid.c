@@ -280,8 +280,7 @@ static int FluidState( void )
 	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
 	b2Liquid_CreateParticlesInBox( waterId, ( b2Pos ){ -halfWidth + 0.05f, 0.05f }, ( b2Pos ){ halfWidth - 0.05f, 0.75f } );
 
-	// A crate of half the water's density, dropped from above on the right. Eight particles across, since the share
-	// under liquid counts the liquid under a body too and reads near zero for a crate only four across.
+	// A crate of half the water's density, dropped from above on the right
 	b2BodyDef crateDef = b2DefaultBodyDef();
 	crateDef.type = b2_dynamicBody;
 	crateDef.position = ( b2Pos ){ 0.7f, 1.8f };
@@ -297,7 +296,7 @@ static int FluidState( void )
 	ENSURE( state.inLiquid == false && state.force.y == 0.0f && B2_IS_NULL( state.liquidId ) );
 
 	int crateBegins = 0, crateEnds = 0, sensorBegins = 0, sensorEnds = 0;
-	float forceSum = 0.0f, submergedSum = 0.0f, areaSum = 0.0f;
+	float forceSum = 0.0f, submergedSum = 0.0f, levelSum = 0.0f, areaSum = 0.0f;
 	int settled = 0;
 	for ( int frame = 0; frame < 240; ++frame )
 	{
@@ -334,6 +333,11 @@ static int FluidState( void )
 			ENSURE( 0.0f <= state.submerged && state.submerged < 1.0f );
 			forceSum += state.force.y;
 			submergedSum += state.submerged;
+
+			// The crate's level, from the surface just beside it
+			b2Pos at = b2Body_GetPosition( crateId ), surface = { 0.0f, 0.0f };
+			ENSURE( b2Fluid_GetSurfaceHeight( fluidId, ( b2Pos ){ at.x + 0.3f + 2.0f * def.particleSpacing, at.y }, &surface ) );
+			levelSum += (float)( surface.y - ( at.y - 0.3f ) ) / 0.6f;
 			areaSum += b2Fluid_GetSensorArea( fluidId, sensorId );
 			settled += 1;
 		}
@@ -341,11 +345,10 @@ static int FluidState( void )
 	ENSURE( crateBegins == 1 && crateEnds == 0 );
 	ENSURE( sensorBegins == 1 && sensorEnds == 0 );
 
-	// Afloat, the liquid holds the crate up with its weight. The crate is about 40% under, but the estimate counts the
-	// liquid under its bottom, which pulls it well below that, so only its range is checked.
-	float force = forceSum / (float)settled, submerged = submergedSum / (float)settled;
+	// Afloat, the liquid holds the crate up with its weight, and the share under is its level
+	float force = forceSum / (float)settled, submerged = submergedSum / (float)settled, level = levelSum / (float)settled;
 	ENSURE( fabsf( force - weight ) < 0.25f * weight );
-	ENSURE( 0.0f < submerged && submerged < 1.0f );
+	ENSURE( fabsf( submerged - level ) < 0.15f );
 
 	// The sensor is under the surface, full of water. Particles cross its edges as the water sloshes, so this is the
 	// mean over the last second.

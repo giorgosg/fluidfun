@@ -122,6 +122,10 @@ typedef struct b2fPatch
 // to nothing at this speed, in m/s
 #define B2F_STILL_SPEED 0.5f
 
+// Liquid against a face whose outward normal is closer to up than this, as a cosine, lies on top of the body rather
+// than standing beside it, so it does not count towards the level a body reports
+#define B2F_TOP_FACING 0.5f
+
 typedef struct b2fBody
 {
 	b2BodyId id;
@@ -209,6 +213,9 @@ typedef struct b2fReaction
 	// The length of the body's outline that liquid is against, and that length times the outline's normal, which
 	// sums to nothing for a body with liquid all the way round
 	float wetLength, wetNormalX, wetNormalY;
+	// For b2Fluid_GetBodyState only, which nothing in the solver reads: how high the liquid against the body stands
+	// above its lowest point, the highest particle that is not spray plus half its size, or zero
+	float wetTop;
 } b2fReaction;
 
 typedef struct b2fLiquid
