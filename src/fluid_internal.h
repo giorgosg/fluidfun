@@ -27,12 +27,15 @@ typedef float b2fCoord;
 #define B2F_SQUEEZE_SURFACE -0.28f
 #define B2F_SQUEEZE_SLOPE 0.11f
 
-// Liquid at rest packs looser than the lattice at particleSpacing that rest density is counted from: near pressure
+// Liquid at rest packs looser than the lattice that rest density is counted from: near pressure
 // pushes neighbours apart until the density term's pull balances it, about 1.13 spacings apart, where a particle's
 // density is 0.72 of rest (B2F_SQUEEZE_SURFACE). This is the area the liquid fills then, as a share of that lattice's.
 // Particle mass, the density a wall counts as and a particle's weight all go by it, so that a volume of liquid weighs
 // its mass density times that volume however tightly depth or particle size has packed it.
 #define B2F_REST_FILL 0.79f
+// The same as a distance: how far apart liquid at rest sits, over the spacing of that lattice. The fluid's
+// particleSpacing is the rest distance, so the lattice the solver works from is this much finer.
+#define B2F_REST_PITCH 1.125f
 // How much the fill grows per unit of density over rest density, from lattices 1 to 1.13 spacings apart
 #define B2F_FILL_SLOPE 0.75f
 #define B2F_WALL_TABLE_SIZE 128
@@ -197,7 +200,10 @@ struct b2fFluid
 {
 	b2WorldId worldId;
 	b2fFluidDef def;
-	float radius;	 // interaction radius h
+	// Spacing of the lattice rest density is counted from, particleSpacing over B2F_REST_PITCH. Particle sizes, the
+	// interaction radius and every length inside the library are in these, not in particleSpacing.
+	float spacing;
+	float radius;	 // interaction radius h, twice the spacing
 	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
 	float margin;	 // collision radius of a particle
 	float mass;	 // of a finest particle of liquid 0, the unit adaptive sizes count mass in
@@ -268,6 +274,10 @@ struct b2fFluid
 	unsigned char* boxLiquid;
 	float *boxDepth, *boxFlow, *boxPressure;
 	int boxCapacity;
+
+	// Particle sizes as the caller sees them, in rest spacings, filled when asked for
+	float* restSizes;
+	int restSizeCapacity;
 
 	b2fProfile profile;
 	float measureTime;

@@ -778,7 +778,7 @@ int main( int argc, char** argv )
 		if ( getenv( "LAB_FILL" ) )
 		{
 			// Mass over area against depth below the top particle, in the middle half of the width, as a share of a
-			// lattice at particleSpacing. Spawned liquid stands at 1 / 1.09^2 throughout.
+			// lattice at particleSpacing, which liquid at rest fills. Spawned liquid stands at 1 / 0.97^2 throughout.
 			const float* ps = b2fFluid_GetSizes( fluid );
 			float surface = -1e9f, left = 1e9f, right = -1e9f;
 			for ( int i = 0; i < n; ++i )

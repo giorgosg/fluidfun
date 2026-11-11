@@ -2,11 +2,13 @@
 // Adding and moving particles.
 #include "fluid_internal.h"
 
-// Liquid rests about 9% wider apart than particleSpacing. Anything spawned tighter than that holds pressure,
-// which a free blob releases all at once, tearing open a void in its middle.
+// Liquid spawns 1.09 of the solver's spacings apart, which is 0.97 of particleSpacing. A settled pool is that much
+// tighter than liquid at rest on average, from its own weight: spawned at particleSpacing, 10 and 25 m pools sank by
+// 3 and 5%, and spawned here they rise by 3 and 1%. Much tighter than this holds pressure, which a free blob
+// releases all at once, tearing open a void in its middle.
 static float SpawnSpacing( const b2fFluid* f )
 {
-	return B2F_SPAWN_SPACING * f->def.particleSpacing;
+	return B2F_SPAWN_SPACING * f->spacing;
 }
 
 static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float size )
@@ -32,7 +34,7 @@ static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float 
 static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos upper )
 {
 	const b2fLiquidDef* def = &f->liquids[liquid].def;
-	float spacing = f->def.particleSpacing, ratio = def->adaptiveRatio;
+	float spacing = f->spacing, ratio = def->adaptiveRatio;
 	float g = -def->gravityScale * b2World_GetGravity( f->worldId ).y;
 	float reach = b2fAdaptiveReach( f, liquid, g, f->h > 0.0f ? f->h : 1.0f / 240.0f );
 	b2fCoord cx = 0.5f * ( lower.x + upper.x ), cy = 0.5f * ( lower.y + upper.y );
@@ -131,7 +133,7 @@ int b2fFluid_CreateParticlesInBox( b2fFluid* f, int liquid, b2Pos lower, b2Pos u
 	{
 		for ( b2fCoord x = lower.x + ( row & 1 ? 0.5f * spacing : 0.0f ); x <= upper.x; x += spacing )
 		{
-			if ( AddParticle( f, liquid, x, y, f->def.particleSpacing ) == false )
+			if ( AddParticle( f, liquid, x, y, f->spacing ) == false )
 			{
 				return added;
 			}
@@ -157,7 +159,7 @@ int b2fFluid_MoveParticles( b2fFluid* f, b2AABB from, b2AABB to, b2Vec2 velocity
 		f->pos[i].y = to.lowerBound.y + spacing * (float)( moved / perRow );
 		f->vx[i] = velocity.x;
 		f->vy[i] = velocity.y;
-		float ratio = f->size[i] / f->def.particleSpacing;
+		float ratio = f->size[i] / f->spacing;
 		f->movedMass += f->liquids[f->liquid[i]].mass * ratio * ratio;
 		moved += 1;
 	}

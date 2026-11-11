@@ -522,7 +522,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float dt = f->h, spacing = f->def.particleSpacing;
+	float dt = f->h, spacing = f->spacing;
 	bool adaptive = f->adaptive;
 	int count = f->count;
 	bool check = f->checkSprings;

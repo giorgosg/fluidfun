@@ -12,7 +12,7 @@
 void b2fBuildWallTable( b2fFluid* f )
 {
 	float h = f->radius;
-	float numberDensity = B2F_REST_FILL / ( 0.8660254f * f->def.particleSpacing * f->def.particleSpacing );
+	float numberDensity = B2F_REST_FILL / ( 0.8660254f * f->spacing * f->spacing );
 	enum { steps = 400 };
 	float cell = h / (float)steps, area = 2.0f * cell * cell;
 	for ( int i = 0; i <= B2F_WALL_TABLE_SIZE; ++i )
@@ -175,7 +175,7 @@ static b2ShapeProxy ShapeProxy( const b2fShape* s )
 // in between.
 static void FindPatches( b2fFluid* f )
 {
-	float range = B2F_PATCH_GAP * f->def.particleSpacing;
+	float range = B2F_PATCH_GAP * f->spacing;
 	f->patchCount = 0;
 	for ( int bodyIndex = 0; bodyIndex < f->bodyCount; ++bodyIndex )
 	{
@@ -449,7 +449,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 	b2fFluid* f = context;
 	float margin = f->margin, h = f->h, inv = 1.0f / h, friction = f->liquids[0].def.friction, m = f->mass;
 	bool adaptive = f->adaptive, multi = f->liquidCount > 1;
-	float baseMass = f->mass, spacing = f->def.particleSpacing, added = f->liquids[0].def.addedMass;
+	float baseMass = f->mass, spacing = f->spacing, added = f->liquids[0].def.addedMass;
 
 	// What a patch needs of the liquid around its body: the density its buoyancy goes by, and how high the liquid
 	// stands on the body, against gravity

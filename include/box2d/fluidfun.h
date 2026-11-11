@@ -92,7 +92,8 @@ typedef struct b2fLiquidDef
 /// Settings the whole fluid shares, and its first liquid
 typedef struct b2fFluidDef
 {
-	/// Rest distance between particles. The interaction radius is twice this.
+	/// How far apart particles of water-like liquid rest, away from the weight of deep liquid. The interaction radius
+	/// is 1.78 times this. A liquid with much more cohesion than the default rests closer.
 	float particleSpacing;
 	/// How far from anything that is not liquid particles reach the coarsest size, in length units. Air, walls
 	/// and bodies all count, so liquid is fine around each of them. Other liquids do not count. Zero or anything
@@ -160,7 +161,8 @@ B2_API const b2Pos* b2fFluid_GetPositions( const b2fFluid* fluid );
 B2_API const float* b2fFluid_GetVelocitiesX( const b2fFluid* fluid );
 B2_API const float* b2fFluid_GetVelocitiesY( const b2fFluid* fluid );
 
-/// The spacing of each particle. Mass is proportional to its square.
+/// The spacing of each particle, in the units of particleSpacing. Mass is proportional to its square. The array is
+/// filled by this call.
 B2_API const float* b2fFluid_GetSizes( const b2fFluid* fluid );
 /// The liquid each particle belongs to
 B2_API const unsigned char* b2fFluid_GetLiquids( const b2fFluid* fluid );
