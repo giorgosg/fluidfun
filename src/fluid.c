@@ -47,7 +47,7 @@ static void UpdateLiquids( b2fFluid* f )
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
 		b2fLiquid* liquid = f->liquids + a;
-		liquid->mass = liquid->def.massDensity * 0.8660254f * spacing * spacing;
+		liquid->mass = liquid->def.massDensity * 0.8660254f * spacing * spacing / B2F_REST_FILL;
 		f->adaptive = f->adaptive || liquid->def.adaptiveRatio > 1.0f;
 		f->cohesionBetween[a][a] = liquid->def.cohesion;
 	}
@@ -171,7 +171,6 @@ void b2fDestroyFluid( b2fFluid* f )
 	free( f->bodies );
 	free( f->reactions );
 	free( f->patches );
-	free( f->patchSamples );
 	free( f->boxMass );
 	free( f->boxPx );
 	free( f->boxPy );

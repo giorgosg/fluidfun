@@ -407,6 +407,7 @@ static void ApplyTask( int start, int end, int worker, void* context )
 	b2fFluid* f = context;
 	float limit = f->moveLimit * f->radius, limit2 = limit * limit, dt = f->h;
 	bool adaptive = f->adaptive;
+	float restRatio = 1.0f + B2F_SQUEEZE_SURFACE, invRest = 1.0f / f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
 		if ( adaptive )
@@ -429,6 +430,19 @@ static void ApplyTask( int start, int end, int worker, void* context )
 		// derived from the change in position at the end of the substep, so only the position needs the change.
 		f->pos[i].x += f->dx[i] + dt * f->viscX[i];
 		f->pos[i].y += f->dy[i] + dt * f->viscY[i];
+
+		// A particle weighs what the area it fills would weigh at rest. Fine particles deep down pack up to a third
+		// tighter than coarse ones or ones near the surface, so by count the liquid would be heavier there, and a
+		// body would float or sink by where it is. Prediction moved the particle by its full weight; this takes back
+		// the share its packing adds. Looser than rest, as in spray, it keeps its full weight.
+		float squeeze = f->rho[i] * invRest - restRatio;
+		if ( squeeze > 0.0f )
+		{
+			float extra = B2F_FILL_SLOPE * squeeze;
+			float lighter = extra / ( B2F_REST_FILL + extra ) * dt * dt * f->liquids[f->liquid[i]].def.gravityScale;
+			f->pos[i].x -= lighter * f->worldGravity.x;
+			f->pos[i].y -= lighter * f->worldGravity.y;
+		}
 		if ( f->contactCount[i] > 0 )
 		{
 			const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;

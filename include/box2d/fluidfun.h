@@ -16,8 +16,8 @@ typedef struct b2fFluid b2fFluid;
 /// their own settings. Liquids do not mix: each pulls only on itself unless b2fFluid_SetCohesionBetween says otherwise.
 typedef struct b2fLiquidDef
 {
-	/// Mass per unit area, to compare with b2ShapeDef::material density. Between liquids the lighter one takes more
-	/// of each push, which makes it float.
+	/// Mass per unit area of the liquid at rest, to compare with b2ShapeDef::material density: a body lighter than
+	/// this floats. Between liquids the lighter one takes more of each push, which makes it float.
 	float massDensity;
 	/// Displacement per substep per unit of density error, as a fraction of the interaction radius
 	float stiffness;
@@ -45,10 +45,12 @@ typedef struct b2fLiquidDef
 	/// 1, no slip. It does not grow with how hard the particle is pressed.
 	float friction;
 	float gravityScale;
-	/// Pressure on faces shut off from the liquid by a contact, as a fraction of the hydrostatic pressure at the
-	/// depth of the contact's ends. Particles cannot enter a closed gap, so this stands in for liquid seeping under a
-	/// resting body. At 1 a body lighter than the liquid lifts off the floor and a heavier one stays down, though
-	/// bodies within about a tenth of the liquid's density may do either.
+	/// Share of its buoyancy a body is made up to where the particles' push falls short of it. Still liquid pushes on
+	/// a body with the weight of the liquid it displaces. Particles cannot fill a gap narrower than a few of them, so a
+	/// body touching a surface, or within three particle spacings of one, gets the missing push along the direction
+	/// away from that surface. A nearly still body with liquid all the way round gets it up or down, since settled
+	/// particles can otherwise hold it in place. At 1 a body lighter than the liquid lifts off the floor and rises, and
+	/// a heavier one sinks and stays down. Zero turns both off.
 	float contactPressure;
 	/// Share of the liquid within reach of a body that moves with it when the body speeds up or slows down, from 0
 	/// to 1. Without it a light body takes the liquid's push alone, so one much lighter than the liquid shoots out of
@@ -68,7 +70,8 @@ typedef struct b2fLiquidDef
 	/// Stretch or squeeze a spring takes, as a share of its rest length, before plasticity changes its rest length
 	float yieldRatio;
 	/// Spacing of the coarsest particles over the fluid's particleSpacing, which is the finest. One keeps this liquid
-	/// fine everywhere. Particles are fine at the surface and coarser with depth, and split and merge as they move.
+	/// fine everywhere. Particles are fine at the surface and coarser with depth, growing more gently away from a
+	/// moving body than from anything else, and they split and merge as they move.
 	/// Merges only join particles of the same liquid.
 	float adaptiveRatio;
 	/// Particles moving at this speed stay fine. They turn fine quickly and relax slowly. Zero turns this off.

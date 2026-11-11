@@ -50,6 +50,7 @@ typedef struct LabScene
 	float liquidWidth;
 	float liquidHeight;
 	int crateCount;
+	float crateHalfSize;
 
 	// Colour of liquid 0 in the sample, red, green and blue from 0 to 255, or all zero for the usual blue
 	float color[3];

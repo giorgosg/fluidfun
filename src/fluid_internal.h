@@ -26,6 +26,15 @@ typedef float b2fCoord;
 // over the finest. Read backwards it gives depth from the weight of what is above, which walls do not hide.
 #define B2F_SQUEEZE_SURFACE -0.28f
 #define B2F_SQUEEZE_SLOPE 0.11f
+
+// Liquid at rest packs looser than the lattice at particleSpacing that rest density is counted from: near pressure
+// pushes neighbours apart until the density term's pull balances it, about 1.13 spacings apart, where a particle's
+// density is 0.72 of rest (B2F_SQUEEZE_SURFACE). This is the area the liquid fills then, as a share of that lattice's.
+// Particle mass, the density a wall counts as and a particle's weight all go by it, so that a volume of liquid weighs
+// its mass density times that volume however tightly depth or particle size has packed it.
+#define B2F_REST_FILL 0.79f
+// How much the fill grows per unit of density over rest density, from lattices 1 to 1.13 spacings apart
+#define B2F_FILL_SLOPE 0.75f
 #define B2F_WALL_TABLE_SIZE 128
 
 // Neighbours the density pass keeps per particle for the move pass. A particle with more keeps none, and the
@@ -92,14 +101,19 @@ typedef struct b2fShape
 	b2fCoord minX, minY, maxX, maxY;
 } b2fShape;
 
-// A flat contact between a body and something else, which shuts liquid out of the gap
+// Something a body touches or nearly touches, closer than liquid can fill the gap between them
 typedef struct b2fPatch
 {
-	b2fCoord x[2], y[2];
-	float normalX, normalY;	 // pushes this body away from what it touches
-	float length;
-	int bodyIndex;
+	float normalX, normalY;	 // pushes this body away from the other
+	int bodyIndex, otherIndex;
 } b2fPatch;
+
+// A gap narrower than this many particle spacings counts as one liquid has not filled
+#define B2F_PATCH_GAP 3.0f
+
+// A body slower than this, with liquid all the way round, gets exactly its buoyancy from the liquid; the share falls
+// to nothing at this speed, in m/s
+#define B2F_STILL_SPEED 0.5f
 
 typedef struct b2fBody
 {
@@ -121,6 +135,11 @@ typedef struct b2fBody
 	bool sharing;
 	// Static and kinematic bodies pull on the liquid with adhesion; bodies moved by forces do not
 	bool adheres;
+	// Area of the body's shapes near the liquid, and how far they reach below and above its centre of mass, against
+	// gravity, this substep
+	float area, low, high;
+	// Centre of that area, as its sum weighted by area in the body's frame, and where it is from the centre of mass
+	b2Vec2 areaCenter, buoyancyArm;
 } b2fBody;
 
 // A shape within the interaction radius of a particle
@@ -149,6 +168,12 @@ typedef struct b2fReaction
 {
 	float x, y, angular;
 	float mass, momentX, momentY, inertia;
+	// Of the liquid within reach: its mass, that mass times the density its buoyancy goes by, and times its height
+	// above the body's centre of mass
+	float wetMass, wetDensity, wetHeight;
+	// The length of the body's outline that liquid is against, and that length times the outline's normal, which
+	// sums to nothing for a body with liquid all the way round
+	float wetLength, wetNormalX, wetNormalY;
 } b2fReaction;
 
 typedef struct b2fLiquid
@@ -231,11 +256,6 @@ struct b2fFluid
 	int reactionCapacity;
 	b2fPatch* patches;
 	int patchCount, patchCapacity;
-	// Per patch end and chunk, the mass of liquid sampled near the end and its mass weighted pressure over g
-	float* patchSamples;
-	int patchSampleCapacity;
-	// Squeeze per metre of depth, per liquid, for this substep
-	float squeezePerMetre[B2F_MAX_LIQUIDS];
 
 	// Set per substep. Gravity is liquid 0's, after its gravity scale.
 	float h, gravityX, gravityY;
