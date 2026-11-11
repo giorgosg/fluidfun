@@ -453,7 +453,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 
 	// What a patch needs of the liquid around its body: the density its buoyancy goes by, and how high the liquid
 	// stands on the body, against gravity
-	const b2fLiquidDef* def = &f->liquids[0].def;
+	const b2LiquidDef* def = &f->liquids[0].def;
 	float buoyantDensity = def->contactPressure * def->massDensity * def->gravityScale;
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;

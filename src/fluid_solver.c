@@ -98,7 +98,7 @@ static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* n
 
 static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 {
-	const b2fLiquidDef* def = &f->liquids[0].def;
+	const b2LiquidDef* def = &f->liquids[0].def;
 	float k = def->stiffness, kn = def->nearStiffness, rest = f->restDensity;
 	float tensile = def->tensilePressure, cohesion = def->cohesion;
 	float sigma = def->linearViscosity, beta = def->quadraticViscosity, dt = f->h;
@@ -287,7 +287,7 @@ static void DensityTask( int start, int end, int worker, void* context )
 		for ( int i = start; i < end; ++i )
 		{
 			AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
-			const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;
+			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 			float hi2 = 4.0f * f->size[i] * f->size[i];
 			f->pressure[i] = def->stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tensilePressure );
 			f->nearPressure[i] = def->nearStiffness * hi2 * f->rhoNear[i];
@@ -338,7 +338,7 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 		return;
 	}
 
-	const b2fLiquidDef* def = &f->liquids[0].def;
+	const b2LiquidDef* def = &f->liquids[0].def;
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
 	float scale = def->stiffness * h, nearScale = def->nearStiffness * h, rest = 2.0f * f->restDensity;
 	float tensile = def->tensilePressure, single = f->restDensity, pullScale = def->cohesion * h;
@@ -445,7 +445,7 @@ static void ApplyTask( int start, int end, int worker, void* context )
 		}
 		if ( f->contactCount[i] > 0 )
 		{
-			const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;
+			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 			float h = adaptive ? 2.0f * f->size[i] : f->radius;
 			float excess = TensileClamp( f->rho[i] - f->restDensity, def->tensilePressure );
 			ApplyWallMoves( f, i, def->stiffness * h * excess, def->nearStiffness * h * f->rhoNear[i], def->adhesion, h );
@@ -530,7 +530,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 	{
 		float moveX = 0.0f, moveY = 0.0f;
 		b2fSprings* sp = f->springs + i;
-		const b2fLiquidDef* def = &f->liquids[f->liquid[i]].def;
+		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 		if ( def->springStiffness > 0.0f )
 		{
 			b2fCoord x = f->pos[i].x, y = f->pos[i].y;

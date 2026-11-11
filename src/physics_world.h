@@ -170,6 +170,10 @@ typedef struct b2World
 
 	b2SubStepFcn* subStepFcn;
 	void* subStepContext;
+
+	// The world's fluid, if it has one, and how many it has had, which a fluid id carries
+	struct b2fFluid* fluid;
+	int fluidSerial;
 	bool enableRestitutionPropagation;
 	float maxLinearSpeed;
 	float contactSpeed;

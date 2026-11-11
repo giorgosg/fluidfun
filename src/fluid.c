@@ -2,9 +2,13 @@
 // Creating a liquid, its settings, what it reports, and the order of passes in each substep.
 #include "fluid_internal.h"
 
-b2fLiquidDef b2fDefaultLiquidDef( void )
+#include "core.h"
+#include "fluid.h"
+#include "physics_world.h"
+
+b2LiquidDef b2DefaultLiquidDef( void )
 {
-	b2fLiquidDef def = { 0 };
+	b2LiquidDef def = { 0 };
 	def.massDensity = 1.0f;
 	def.stiffness = 0.04f;
 	def.nearStiffness = 0.1f;
@@ -28,14 +32,14 @@ b2fLiquidDef b2fDefaultLiquidDef( void )
 	return def;
 }
 
-b2fFluidDef b2fDefaultFluidDef( void )
+b2FluidDef b2DefaultFluidDef( void )
 {
-	b2fFluidDef def = { 0 };
+	b2FluidDef def = { 0 };
 	def.particleSpacing = 0.08f;
 	def.adaptiveDepth = 12.0f;
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;
-	def.liquid = b2fDefaultLiquidDef();
+	def.liquid = b2DefaultLiquidDef();
 	return def;
 }
 
@@ -74,10 +78,10 @@ static void UpdateLiquids( b2fFluid* f )
 
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
-		const b2fLiquidDef* da = &f->liquids[a].def;
+		const b2LiquidDef* da = &f->liquids[a].def;
 		for ( int b = 0; b < f->liquidCount; ++b )
 		{
-			const b2fLiquidDef* db = &f->liquids[b].def;
+			const b2LiquidDef* db = &f->liquids[b].def;
 			float sum = da->massDensity + db->massDensity;
 			f->liquidPairs[a][b] = ( b2fLiquidPair ){
 				.cohesion = f->cohesionBetween[a][b],
@@ -110,10 +114,24 @@ static float LatticeDensity( float spacing, float radius )
 	return sum;
 }
 
-static void Substep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, void* userContext );
-
-b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def )
+// The world holds its one fluid. An id is good while the world is and until the fluid is destroyed.
+b2fFluid* b2fGetFluid( b2FluidId fluidId )
 {
+	b2World* world = b2GetWorld( fluidId.world0 );
+	B2_ASSERT( world->fluid != NULL && fluidId.index1 == world->fluidSerial && fluidId.generation == world->generation );
+	return world->fluid;
+}
+
+b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
+{
+	b2World* world = b2GetWorldFromId( worldId );
+	B2_ASSERT( world->locked == false );
+	B2_ASSERT( world->fluid == NULL );
+	if ( world->locked || world->fluid != NULL )
+	{
+		return b2_nullFluidId;
+	}
+
 	b2fFluid* f = calloc( 1, sizeof( b2fFluid ) );
 	f->worldId = worldId;
 	f->def = *def;
@@ -141,17 +159,26 @@ b2fFluid* b2fCreateFluid( b2WorldId worldId, const b2fFluidDef* def )
 	f->pairs = malloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
 	b2fBuildWallTable( f );
 
-	b2World_SetSubStepCallback( worldId, Substep, f );
-	return f;
+	world->fluid = f;
+	world->fluidSerial += 1;
+	return ( b2FluidId ){ world->fluidSerial, world->worldId, world->generation };
 }
 
-void b2fDestroyFluid( b2fFluid* f )
+void b2DestroyFluid( b2FluidId fluidId )
 {
-	if ( b2World_IsValid( f->worldId ) )
+	b2World* world = b2GetWorld( fluidId.world0 );
+	B2_ASSERT( world->locked == false );
+	if ( world->locked )
 	{
-		b2World_SetSubStepCallback( f->worldId, NULL, NULL );
+		return;
 	}
 
+	b2FreeFluid( b2fGetFluid( fluidId ) );
+	world->fluid = NULL;
+}
+
+void b2FreeFluid( b2fFluid* f )
+{
 #define B2F_FREE_FIELD( type, name ) free( f->name );
 #define B2F_FREE_SORTED( type, name ) free( f->sorted.name );
 	B2F_PARTICLE_FIELDS( B2F_FREE_FIELD )
@@ -185,8 +212,9 @@ void b2fDestroyFluid( b2fFluid* f )
 	free( f );
 }
 
-void b2fFluid_SetDef( b2fFluid* f, const b2fFluidDef* def )
+void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	float spacing = f->def.particleSpacing;
 	int capacity = f->def.capacity;
 	f->def = *def;
@@ -196,8 +224,9 @@ void b2fFluid_SetDef( b2fFluid* f, const b2fFluidDef* def )
 	UpdateLiquids( f );
 }
 
-int b2fFluid_CreateLiquid( b2fFluid* f, const b2fLiquidDef* def )
+int b2Fluid_CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( f->liquidCount == B2F_MAX_LIQUIDS )
 	{
 		return -1;
@@ -208,8 +237,9 @@ int b2fFluid_CreateLiquid( b2fFluid* f, const b2fLiquidDef* def )
 	return index;
 }
 
-void b2fFluid_SetLiquid( b2fFluid* f, int liquid, const b2fLiquidDef* def )
+void b2Fluid_SetLiquid( b2FluidId fluidId, int liquid, const b2LiquidDef* def )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( 0 <= liquid && liquid < f->liquidCount )
 	{
 		f->liquids[liquid].def = *def;
@@ -217,13 +247,15 @@ void b2fFluid_SetLiquid( b2fFluid* f, int liquid, const b2fLiquidDef* def )
 	}
 }
 
-int b2fFluid_GetLiquidCount( const b2fFluid* f )
+int b2Fluid_GetLiquidCount( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->liquidCount;
 }
 
-void b2fFluid_SetCohesionBetween( b2fFluid* f, int a, int b, float cohesion )
+void b2Fluid_SetCohesionBetween( b2FluidId fluidId, int a, int b, float cohesion )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( 0 <= a && a < f->liquidCount && 0 <= b && b < f->liquidCount && a != b )
 	{
 		f->cohesionBetween[a][b] = cohesion;
@@ -232,31 +264,36 @@ void b2fFluid_SetCohesionBetween( b2fFluid* f, int a, int b, float cohesion )
 	}
 }
 
-float b2fFluid_GetMovedMass( const b2fFluid* f )
+float b2Fluid_GetMovedMass( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->movedMass;
 }
 
-int b2fFluid_GetParticleCount( const b2fFluid* f )
+int b2Fluid_GetParticleCount( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->count;
 }
-const b2Pos* b2fFluid_GetPositions( const b2fFluid* f )
+const b2Pos* b2Fluid_GetPositions( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->pos;
 }
-const float* b2fFluid_GetVelocitiesX( const b2fFluid* f )
+const float* b2Fluid_GetVelocitiesX( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->vx;
 }
-const float* b2fFluid_GetVelocitiesY( const b2fFluid* f )
+const float* b2Fluid_GetVelocitiesY( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->vy;
 }
-const float* b2fFluid_GetSizes( const b2fFluid* fluid )
+const float* b2Fluid_GetSizes( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	// Inside, a size is a spacing of the solver's lattice; the caller gets how far apart such particles rest
-	b2fFluid* f = (b2fFluid*)fluid;
 	if ( f->restSizeCapacity < f->count )
 	{
 		f->restSizeCapacity = f->capacity;
@@ -268,24 +305,28 @@ const float* b2fFluid_GetSizes( const b2fFluid* fluid )
 	}
 	return f->restSizes;
 }
-const unsigned char* b2fFluid_GetLiquids( const b2fFluid* f )
+const unsigned char* b2Fluid_GetLiquids( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->liquid;
 }
-const float* b2fFluid_GetDensities( const b2fFluid* f )
+const float* b2Fluid_GetDensities( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->rho;
 }
-float b2fFluid_GetRestDensity( const b2fFluid* f )
+float b2Fluid_GetRestDensity( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->restDensity;
 }
-b2fProfile b2fFluid_GetProfile( const b2fFluid* f )
+b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	return f->profile;
 }
 
-void b2fFluid_Prepare( b2fFluid* f )
+void b2PrepareFluid( b2fFluid* f )
 {
 	uint64_t ticks = b2GetTicks();
 
@@ -299,10 +340,9 @@ void b2fFluid_Prepare( b2fFluid* f )
 	f->profile.measure = f->measureTime;
 }
 
-static void Substep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, void* userContext )
+void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, b2fFluid* f )
 {
 	(void)subStepCount;
-	b2fFluid* f = userContext;
 	f->checkSprings = subStepIndex == 0;
 	if ( f->count == 0 )
 	{

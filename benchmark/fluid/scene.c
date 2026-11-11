@@ -75,10 +75,10 @@ static b2BodyId AddWheel( LabScene* scene, b2WorldId worldId, b2BodyId anchorBod
 #define LAB_WHEEL_GAP 0.8f
 #define LAB_WHEEL_SINK_END 22.0f
 
-static b2fFluid* AddLiquid( b2WorldId worldId, const b2fFluidDef* def, b2Vec2 lower, b2Vec2 upper )
+static b2FluidId AddLiquid( b2WorldId worldId, const b2FluidDef* def, b2Vec2 lower, b2Vec2 upper )
 {
-	b2fFluid* fluid = b2fCreateFluid( worldId, def );
-	b2fFluid_CreateParticlesInBox( fluid, 0, b2ToPos( lower ), b2ToPos( upper ) );
+	b2FluidId fluid = b2CreateFluid( worldId, def );
+	b2Fluid_CreateParticlesInBox( fluid, 0, b2ToPos( lower ), b2ToPos( upper ) );
 	return fluid;
 }
 
@@ -289,7 +289,7 @@ LabScene LabDefaultScene( LabSceneType type )
 	return s;
 }
 
-void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
+void LabSceneSettings( LabSceneType type, b2FluidDef* def )
 {
 	switch ( type )
 	{
@@ -348,7 +348,7 @@ void LabSceneSettings( LabSceneType type, b2fFluidDef* def )
 	}
 }
 
-static b2fFluid* CreateTank( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateTank( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	static const float densities[] = { 0.5f, 0.25f, 0.75f, 0.1f, 2.0f };
 	for ( int i = 0; i < scene->crateCount; ++i )
@@ -368,7 +368,7 @@ static b2fFluid* CreateTank( b2WorldId worldId, LabScene* scene, const b2fFluidD
 
 // A reservoir drains through a hole onto two slopes and into a basin. A slot in the basin floor
 // feeds a sump, and the sump is pumped back to the top of the reservoir.
-static b2fFluid* CreateHole( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateHole( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 
@@ -400,7 +400,7 @@ static b2fFluid* CreateHole( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	return AddLiquid( worldId, def, (b2Vec2){ -5.9f, 14.4f }, (b2Vec2){ 5.9f, 19.5f } );
 }
 
-static b2fFluid* CreateBoat( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateBoat( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	AddBox( ground, 0.0f, -1.0f, 32.0f, 1.0f, 0.0f, 0.0f );
@@ -424,7 +424,7 @@ static b2fFluid* CreateBoat( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	return AddLiquid( worldId, def, (b2Vec2){ -29.9f, 0.05f }, (b2Vec2){ 29.9f, 3.1f } );
 }
 
-static b2fFluid* CreateDrum( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateDrum( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	float half = 5.0f, wall = 0.6f;
 	b2BodyId drum = AddBody( scene, worldId, b2_kinematicBody, 0.0f, 8.0f );
@@ -458,7 +458,7 @@ static b2fFluid* CreateDrum( b2WorldId worldId, LabScene* scene, const b2fFluidD
 // A free wheel turned only by water, in a closed room so that splash stays in. The room drains through
 // a gap under its right wall, where the head of water pushes out a jet, and a wide sink below catches
 // the jet and feeds the stream at a steady rate.
-static b2fFluid* CreateWheel( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateWheel( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float gap = LAB_WHEEL_GAP;
@@ -477,7 +477,7 @@ static b2fFluid* CreateWheel( b2WorldId worldId, LabScene* scene, const b2fFluid
 	return AddLiquid( worldId, def, (b2Vec2){ -9.4f, -6.7f }, (b2Vec2){ LAB_WHEEL_SINK_END - 0.7f, -4.2f } );
 }
 
-static b2fFluid* CreateWaves( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateWaves( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	AddBox( ground, 0.0f, -1.0f, 25.0f, 1.0f, 0.0f, 0.0f );
@@ -500,20 +500,20 @@ static b2fFluid* CreateWaves( b2WorldId worldId, LabScene* scene, const b2fFluid
 	AddCrate( scene, worldId, 0.0f, 4.0f, 0.5f, 0.5f );
 	AddCrate( scene, worldId, 4.0f, 4.0f, 0.5f, 0.7f );
 
-	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ start + 0.7f, 0.05f }, (b2Vec2){ toe, depth } );
+	b2FluidId fluid = AddLiquid( worldId, def, (b2Vec2){ start + 0.7f, 0.05f }, (b2Vec2){ toe, depth } );
 	float column = 0.5f;
 	for ( float x = toe + 2.0f * def->particleSpacing; x + column < toe + depth / slope; x += column + def->particleSpacing )
 	{
 		float bottom = slope * ( x + column - toe ) + 2.0f * def->particleSpacing;
 		if ( bottom < depth )
 		{
-			b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ x, bottom }, (b2Pos){ x + column, depth } );
+			b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ x, bottom }, (b2Pos){ x + column, depth } );
 		}
 	}
 	return fluid;
 }
 
-static b2fFluid* CreateSplash( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateSplash( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	AddBox( ground, 0.0f, -1.0f, 12.0f, 1.0f, 0.0f, 0.0f );
@@ -526,13 +526,13 @@ static b2fFluid* CreateSplash( b2WorldId worldId, LabScene* scene, const b2fFlui
 	shapeDef.density = scene->control;
 	b2CreateCircleShape( scene->driven, &shapeDef, &ball );
 
-	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ -9.9f, 0.05f }, (b2Vec2){ 9.9f, 3.0f } );
-	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -5.5f, 8.5f }, (b2Pos){ -2.5f, 11.5f } );
+	b2FluidId fluid = AddLiquid( worldId, def, (b2Vec2){ -9.9f, 0.05f }, (b2Vec2){ 9.9f, 3.0f } );
+	b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -5.5f, 8.5f }, (b2Pos){ -2.5f, 11.5f } );
 	return fluid;
 }
 
 // A deep pool over a small hole, with the sump pumped back to the surface so that it keeps flowing.
-static b2fFluid* CreateDrain( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateDrain( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float half = 0.5f * scene->control, width = 6.0f;
@@ -552,7 +552,7 @@ static b2fFluid* CreateDrain( b2WorldId worldId, LabScene* scene, const b2fFluid
 }
 
 // A still pool and nothing else, to see how deep it can get before it stops being still
-static b2fFluid* CreatePool( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreatePool( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float width = 5.0f, depth = scene->control, wall = 0.5f * depth + 2.0f;
@@ -564,7 +564,7 @@ static b2fFluid* CreatePool( b2WorldId worldId, LabScene* scene, const b2fFluidD
 
 // A square of thick liquid over a low tray. Tension rounds it as it falls. The Gravity slider scales the world's
 // gravity, down to none, where it floats.
-static b2fFluid* CreateDrop( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateDrop( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	AddBox( ground, 0.0f, -0.5f, 9.5f, 0.5f, 0.0f, 0.0f );
@@ -576,7 +576,7 @@ static b2fFluid* CreateDrop( b2WorldId worldId, LabScene* scene, const b2fFluidD
 // Three liquids stacked the wrong way up: light oil at the bottom, water, then heavy syrup on top. They turn over,
 // and a crate between oil and water in density comes to rest where they meet. Water is liquid 0 and takes the
 // fluid's settings; the others change density, viscosity and cohesion.
-static b2fFluid* CreateLayers( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateLayers( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId tank = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float w = 4.0f, layer = 1.6f, t = 0.5f, s = def->particleSpacing;
@@ -585,18 +585,18 @@ static b2fFluid* CreateLayers( b2WorldId worldId, LabScene* scene, const b2fFlui
 	AddBox( tank, w + t, 4.0f, t, 4.0f + t, 0.0f, 0.0f );
 	AddCrate( scene, worldId, 1.5f, 7.0f, 0.4f, 0.8f );
 
-	b2fFluid* fluid = b2fCreateFluid( worldId, def );
-	b2fLiquidDef oil = def->liquid, syrup = def->liquid;
+	b2FluidId fluid = b2CreateFluid( worldId, def );
+	b2LiquidDef oil = def->liquid, syrup = def->liquid;
 	oil.massDensity = 0.6f * def->liquid.massDensity;
 	syrup.massDensity = 1.6f * def->liquid.massDensity;
 	oil.cohesion = 0.1f;
 	syrup.cohesion = 0.1f;
 	syrup.linearViscosity = 4.0f;
-	int light = b2fFluid_CreateLiquid( fluid, &oil );
-	int heavy = b2fFluid_CreateLiquid( fluid, &syrup );
-	b2fFluid_CreateParticlesInBox( fluid, light, (b2Pos){ -w + s, s }, (b2Pos){ w - s, layer } );
-	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -w + s, layer + s }, (b2Pos){ w - s, 2.0f * layer } );
-	b2fFluid_CreateParticlesInBox( fluid, heavy, (b2Pos){ -w + s, 2.0f * layer + s }, (b2Pos){ w - s, 3.0f * layer } );
+	int light = b2Fluid_CreateLiquid( fluid, &oil );
+	int heavy = b2Fluid_CreateLiquid( fluid, &syrup );
+	b2Fluid_CreateParticlesInBox( fluid, light, (b2Pos){ -w + s, s }, (b2Pos){ w - s, layer } );
+	b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -w + s, layer + s }, (b2Pos){ w - s, 2.0f * layer } );
+	b2Fluid_CreateParticlesInBox( fluid, heavy, (b2Pos){ -w + s, 2.0f * layer + s }, (b2Pos){ w - s, 3.0f * layer } );
 	return fluid;
 }
 
@@ -607,7 +607,7 @@ static b2fFluid* CreateLayers( b2WorldId worldId, LabScene* scene, const b2fFlui
 #define LAB_CHAIN_FINE 60
 #define LAB_CHAIN_COARSE 6
 
-static b2fFluid* CreateChain( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateChain( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, LAB_CHAIN_RADIUS );
 	b2Vec2 points[LAB_CHAIN_FINE + LAB_CHAIN_COARSE + 4];
@@ -651,11 +651,11 @@ static b2fFluid* CreateChain( b2WorldId worldId, LabScene* scene, const b2fFluid
 #define LAB_TAP_BASIN 1.2f
 
 // Particles merge and split, so liquid is counted by area
-static float BasinArea( b2fFluid* fluid )
+static float BasinArea( b2FluidId fluid )
 {
-	int n = b2fFluid_GetParticleCount( fluid );
-	const b2Pos* pos = b2fFluid_GetPositions( fluid );
-	const float* size = b2fFluid_GetSizes( fluid );
+	int n = b2Fluid_GetParticleCount( fluid );
+	const b2Pos* pos = b2Fluid_GetPositions( fluid );
+	const float* size = b2Fluid_GetSizes( fluid );
 	float area = 0.0f;
 	for ( int i = 0; i < n; ++i )
 	{
@@ -664,7 +664,7 @@ static float BasinArea( b2fFluid* fluid )
 	return area;
 }
 
-static b2fFluid* CreateTap( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateTap( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 
@@ -683,15 +683,15 @@ static b2fFluid* CreateTap( b2WorldId worldId, LabScene* scene, const b2fFluidDe
 	AddBox( ground, -half - wall, floor - 0.35f, wall, 0.3f, 0.0f, 0.0f );
 	AddBox( ground, half + wall, floor - 0.35f, wall, 0.3f, 0.0f, 0.0f );
 
-	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ -3.9f, 0.05f }, (b2Vec2){ 3.9f, LAB_TAP_BASIN } );
+	b2FluidId fluid = AddLiquid( worldId, def, (b2Vec2){ -3.9f, 0.05f }, (b2Vec2){ 3.9f, LAB_TAP_BASIN } );
 	scene->keep = BasinArea( fluid );
-	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -1.9f, floor + 0.15f }, (b2Pos){ 1.9f, floor + 1.5f } );
+	b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -1.9f, floor + 0.15f }, (b2Pos){ 1.9f, floor + 1.5f } );
 	return fluid;
 }
 
 // One lane of the race: a shelf with a block of liquid on it, a ramp of about 12 degrees, and a floor with a wall at
 // the end
-static void AddLane( b2fFluid* fluid, b2BodyId ground, int liquid, float x0 )
+static void AddLane( b2FluidId fluid, b2BodyId ground, int liquid, float x0 )
 {
 	float top = 1.7f;
 	AddBox( ground, x0 + 5.7f, -0.2f, 5.9f, 0.2f, 0.0f, 0.0f );
@@ -699,16 +699,16 @@ static void AddLane( b2fFluid* fluid, b2BodyId ground, int liquid, float x0 )
 	AddBox( ground, x0 - 0.2f, 0.5f * ( top + 3.0f ), 0.2f, 0.5f * ( top + 3.0f ), 0.0f, 0.0f );
 	AddBox( ground, x0 + 1.0f, top, 1.0f, 0.2f, 0.0f, 0.0f );
 	AddPlank( ground, (b2Vec2){ x0 + 1.9f, top + 0.05f }, (b2Vec2){ x0 + 10.0f, -0.1f }, 0.2f );
-	b2fFluid_CreateParticlesInBox( fluid, liquid, (b2Pos){ x0 + 0.05f, top + 0.25f }, (b2Pos){ x0 + 1.95f, top + 1.7f } );
+	b2Fluid_CreateParticlesInBox( fluid, liquid, (b2Pos){ x0 + 0.05f, top + 0.25f }, (b2Pos){ x0 + 1.95f, top + 1.7f } );
 }
 
 // Water and honey run down two lanes from the same start. The Honey viscosity slider changes the honey as it runs.
-static b2fFluid* CreateHoney( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateHoney( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
-	b2fFluid* fluid = b2fCreateFluid( worldId, def );
+	b2FluidId fluid = b2CreateFluid( worldId, def );
 
-	b2fLiquidDef honey = def->liquid;
+	b2LiquidDef honey = def->liquid;
 	honey.massDensity = 1.4f * def->liquid.massDensity;
 	// Viscosity here only damps neighbours closing in, not shear, so on its own it does not slow honey down. Grip on
 	// the ramp and high cohesion make it hold together as a dome, where water spreads and runs.
@@ -716,7 +716,7 @@ static b2fFluid* CreateHoney( b2WorldId worldId, LabScene* scene, const b2fFluid
 	honey.friction = 0.3f;
 	honey.linearViscosity = scene->control;
 	scene->second = honey;
-	int liquid = b2fFluid_CreateLiquid( fluid, &honey );
+	int liquid = b2Fluid_CreateLiquid( fluid, &honey );
 
 	AddLane( fluid, ground, 0, -12.0f );
 	AddLane( fluid, ground, liquid, 0.5f );
@@ -729,7 +729,7 @@ static b2fFluid* CreateHoney( b2WorldId worldId, LabScene* scene, const b2fFluid
 #define LAB_LAVA_HEAVY 1.6f
 #define LAB_LAVA_RAMP 2.0f
 
-static b2fFluid* CreateLava( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateLava( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float w = 1.5f, h = 8.0f, t = 0.3f, s = def->particleSpacing;
@@ -738,20 +738,20 @@ static b2fFluid* CreateLava( b2WorldId worldId, LabScene* scene, const b2fFluidD
 	AddBox( ground, -w - t, 0.5f * h, t, 0.5f * h, 0.0f, 0.0f );
 	AddBox( ground, w + t, 0.5f * h, t, 0.5f * h, 0.0f, 0.0f );
 
-	b2fFluid* fluid = b2fCreateFluid( worldId, def );
-	b2fLiquidDef wax = def->liquid;
+	b2FluidId fluid = b2CreateFluid( worldId, def );
+	b2LiquidDef wax = def->liquid;
 	wax.cohesion = 0.15f;
 	wax.linearViscosity = 2.0f;
 	wax.massDensity = LAB_LAVA_LIGHT * def->liquid.massDensity;
-	int rising = b2fFluid_CreateLiquid( fluid, &wax );
+	int rising = b2Fluid_CreateLiquid( fluid, &wax );
 	scene->second = wax;
 	wax.massDensity = LAB_LAVA_HEAVY * def->liquid.massDensity;
-	int sinking = b2fFluid_CreateLiquid( fluid, &wax );
+	int sinking = b2Fluid_CreateLiquid( fluid, &wax );
 	scene->keep = def->liquid.massDensity;
 
-	b2fFluid_CreateParticlesInBox( fluid, rising, (b2Pos){ -w + s, s }, (b2Pos){ w - s, 0.8f } );
-	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -w + s, 0.8f + s }, (b2Pos){ w - s, h - 1.2f } );
-	b2fFluid_CreateParticlesInBox( fluid, sinking, (b2Pos){ -w + s, h - 1.2f + s }, (b2Pos){ w - s, h - 0.4f } );
+	b2Fluid_CreateParticlesInBox( fluid, rising, (b2Pos){ -w + s, s }, (b2Pos){ w - s, 0.8f } );
+	b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -w + s, 0.8f + s }, (b2Pos){ w - s, h - 1.2f } );
+	b2Fluid_CreateParticlesInBox( fluid, sinking, (b2Pos){ -w + s, h - 1.2f + s }, (b2Pos){ w - s, h - 0.4f } );
 	return fluid;
 }
 
@@ -766,7 +766,7 @@ static b2Vec2 SpaceDrop( int i )
 	return (b2Vec2){ 3.5f * cosf( a ), 3.5f * sinf( a ) };
 }
 
-static b2fFluid* CreateSpace( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateSpace( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float w = 9.0f, h = 6.0f, t = 0.3f;
@@ -775,11 +775,11 @@ static b2fFluid* CreateSpace( b2WorldId worldId, LabScene* scene, const b2fFluid
 	AddBox( ground, -w - t, 0.0f, t, h, 0.0f, 0.0f );
 	AddBox( ground, w + t, 0.0f, t, h, 0.0f, 0.0f );
 
-	b2fFluid* fluid = b2fCreateFluid( worldId, def );
+	b2FluidId fluid = b2CreateFluid( worldId, def );
 	for ( int i = 0; i < LAB_SPACE_DROPS; ++i )
 	{
 		b2Vec2 c = SpaceDrop( i );
-		b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ c.x - LAB_SPACE_HALF, c.y - LAB_SPACE_HALF },
+		b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ c.x - LAB_SPACE_HALF, c.y - LAB_SPACE_HALF },
 									   (b2Pos){ c.x + LAB_SPACE_HALF, c.y + LAB_SPACE_HALF } );
 	}
 	return fluid;
@@ -789,23 +789,23 @@ static b2fFluid* CreateSpace( b2WorldId worldId, LabScene* scene, const b2fFluid
 // dropped back in from above, to watch how it splashes at different cohesions
 #define LAB_PLUNGE_EVERY 6.0f
 
-static b2fFluid* CreatePlunge( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreatePlunge( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float w = 5.0f, t = 0.3f;
 	AddBox( ground, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
 	AddBox( ground, -w - t, 3.5f, t, 3.5f, 0.0f, 0.0f );
 	AddBox( ground, w + t, 3.5f, t, 3.5f, 0.0f, 0.0f );
-	b2fFluid* fluid = AddLiquid( worldId, def, (b2Vec2){ -w + def->particleSpacing, def->particleSpacing }, (b2Vec2){ w - def->particleSpacing, 1.8f } );
+	b2FluidId fluid = AddLiquid( worldId, def, (b2Vec2){ -w + def->particleSpacing, def->particleSpacing }, (b2Vec2){ w - def->particleSpacing, 1.8f } );
 
 	// The first drop starts in the air, and later ones come from the pool
 	float half = 0.5f * scene->control;
-	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -half, 5.0f }, (b2Pos){ half, 5.0f + scene->control } );
+	b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -half, 5.0f }, (b2Pos){ half, 5.0f + scene->control } );
 	return fluid;
 }
 
 // A tray of mercury with metal blocks dropped in: steel, brass and lead float on it, gold sinks
-static b2fFluid* CreateMercury( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateMercury( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float w = 4.5f, t = 0.25f;
@@ -828,7 +828,7 @@ static b2fFluid* CreateMercury( b2WorldId worldId, LabScene* scene, const b2fFlu
 #define LAB_SLIME_EVERY 15.0f
 #define LAB_SLIME_STEPS 7
 
-static b2fFluid* CreateSlime( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateSlime( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	// The room is one chain loop: down the left wall, a landing at the top, steps 0.8 m deep and 0.5 m high down to the
 	// floor, up the right wall and back across the top. Chains collide on their right side, so it is reversed below to
@@ -870,7 +870,7 @@ static b2fFluid* CreateSlime( b2WorldId worldId, LabScene* scene, const b2fFluid
 
 // Two blocks with springs, after Clavet et al. 2005: jelly on the left, whose springs keep their rest length, and dough
 // on the right, whose springs give way past a 10% stretch. A crate lands on each a second later.
-static b2fFluid* CreateJelly( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+static b2FluidId CreateJelly( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	AddBox( ground, 0.0f, -0.25f, 8.25f, 0.25f, 0.0f, 0.0f );
@@ -880,19 +880,19 @@ static b2fFluid* CreateJelly( b2WorldId worldId, LabScene* scene, const b2fFluid
 	AddCrate( scene, worldId, -3.5f, 8.0f, 0.5f, 2.0f );
 	AddCrate( scene, worldId, 3.5f, 8.0f, 0.5f, 2.0f );
 
-	b2fFluid* fluid = b2fCreateFluid( worldId, def );
-	b2fLiquidDef dough = def->liquid;
+	b2FluidId fluid = b2CreateFluid( worldId, def );
+	b2LiquidDef dough = def->liquid;
 	dough.springStiffness = 10000.0f;
 	dough.plasticity = 1.0f;
 	dough.yieldRatio = 0.1f;
-	int doughLiquid = b2fFluid_CreateLiquid( fluid, &dough );
+	int doughLiquid = b2Fluid_CreateLiquid( fluid, &dough );
 
-	b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -4.5f, 2.0f }, (b2Pos){ -2.5f, 4.0f } );
-	b2fFluid_CreateParticlesInBox( fluid, doughLiquid, (b2Pos){ 2.5f, 2.0f }, (b2Pos){ 4.5f, 4.0f } );
+	b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -4.5f, 2.0f }, (b2Pos){ -2.5f, 4.0f } );
+	b2Fluid_CreateParticlesInBox( fluid, doughLiquid, (b2Pos){ 2.5f, 2.0f }, (b2Pos){ 4.5f, 4.0f } );
 	return fluid;
 }
 
-b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef* def )
+b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const b2FluidDef* def )
 {
 	scene->bodyCount = 0;
 	scene->time = 0.0f;
@@ -943,7 +943,7 @@ b2fFluid* LabCreateScene( b2WorldId worldId, LabScene* scene, const b2fFluidDef*
 	}
 }
 
-void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
+void LabStepScene( LabScene* scene, b2FluidId fluid, float timeStep )
 {
 	float t = scene->time;
 	scene->time += timeStep;
@@ -954,7 +954,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			// Only the bottom of the sump, so the liquid is seen falling through the slot first
 			b2AABB sump = { { 3.8f, -3.4f }, { 9.2f, -2.4f } };
 			b2AABB source = { { -5.0f, 19.0f }, { 5.0f, 20.0f } };
-			b2fFluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -2.0f }, 60 );
+			b2Fluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -2.0f }, 60 );
 		}
 		break;
 
@@ -963,7 +963,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			b2AABB sump = { { -3.8f, -4.1f }, { 3.8f, -0.8f } };
 			// Above the highest the surface gets, since liquid put down onto liquid shoots particles out over the walls
 			b2AABB source = { { -5.0f, 15.0f }, { 5.0f, 16.0f } };
-			int moved = b2fFluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -2.0f }, 80 );
+			int moved = b2Fluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -2.0f }, 80 );
 			scene->pumped += moved;
 			scene->stall = moved > 0 ? 0 : scene->stall + 1;
 			scene->longestStall = scene->stall > scene->longestStall && t > 5.0f ? scene->stall : scene->longestStall;
@@ -982,7 +982,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 		{
 			b2AABB sump = { { -9.5f, -6.8f }, { LAB_WHEEL_SINK_END - 0.6f, -4.0f } };
 			b2AABB source = { { 1.0f, 13.0f }, { 2.2f, 13.6f } };
-			b2fFluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -4.0f }, (int)scene->control );
+			b2Fluid_MoveParticles( fluid, sump, source, (b2Vec2){ 0.0f, -4.0f }, (int)scene->control );
 		}
 		break;
 
@@ -996,7 +996,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 		case lab_layers:
 			for ( int a = 0; a < 3; ++a )
 			{
-				b2fFluid_SetCohesionBetween( fluid, a, ( a + 1 ) % 3, scene->control );
+				b2Fluid_SetCohesionBetween( fluid, a, ( a + 1 ) % 3, scene->control );
 			}
 			break;
 
@@ -1009,7 +1009,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 				{
 					b2AABB bottom = { { -4.0f, 0.0f }, { 4.0f, 0.3f } };
 					b2AABB top = { { -1.8f, 8.6f }, { 1.8f, 8.8f } };
-					b2fFluid_MoveParticles( fluid, bottom, top, (b2Vec2){ 0.0f, -1.0f }, 10 );
+					b2Fluid_MoveParticles( fluid, bottom, top, (b2Vec2){ 0.0f, -1.0f }, 10 );
 				}
 			}
 			break;
@@ -1018,7 +1018,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			if ( scene->second.linearViscosity != scene->control )
 			{
 				scene->second.linearViscosity = scene->control;
-				b2fFluid_SetLiquid( fluid, 1, &scene->second );
+				b2Fluid_SetLiquid( fluid, 1, &scene->second );
 			}
 			break;
 
@@ -1035,10 +1035,10 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 				float step = ( heavy - light ) * timeStep / LAB_LAVA_RAMP;
 				now = target > now ? b2MinFloat( now + step, target ) : b2MaxFloat( now - step, target );
 				scene->second.massDensity = now;
-				b2fFluid_SetLiquid( fluid, 1, &scene->second );
-				b2fLiquidDef other = scene->second;
+				b2Fluid_SetLiquid( fluid, 1, &scene->second );
+				b2LiquidDef other = scene->second;
 				other.massDensity = light + heavy - now;
-				b2fFluid_SetLiquid( fluid, 2, &other );
+				b2Fluid_SetLiquid( fluid, 2, &other );
 			}
 		}
 		break;
@@ -1053,7 +1053,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 					b2Vec2 c = SpaceDrop( i );
 					b2Vec2 v = b2RotateVector( b2MakeRot( 0.15f ), b2MulSV( -scene->control / 3.5f, c ) );
 					b2AABB box = { { c.x - LAB_SPACE_HALF - 0.1f, c.y - LAB_SPACE_HALF - 0.1f }, { c.x + LAB_SPACE_HALF + 0.1f, c.y + LAB_SPACE_HALF + 0.1f } };
-					b2fFluid_MoveParticles( fluid, box, box, v, 100000 );
+					b2Fluid_MoveParticles( fluid, box, box, v, 100000 );
 				}
 			}
 			break;
@@ -1062,11 +1062,11 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			if ( fmodf( t, LAB_PLUNGE_EVERY ) < timeStep && t > 1.0f )
 			{
 				// A square drop, so as many rows as fit across it
-				float half = 0.5f * scene->control, spacing = 1.09f * b2fFluid_GetSizes( fluid )[0];
+				float half = 0.5f * scene->control, spacing = 1.09f * b2Fluid_GetSizes( fluid )[0];
 				int perRow = (int)( scene->control / spacing ) + 1;
 				b2AABB floor = { { -4.9f, 0.0f }, { 4.9f, 0.3f } };
 				b2AABB drop = { { -half, 5.0f }, { half, 5.0f + scene->control } };
-				b2fFluid_MoveParticles( fluid, floor, drop, b2Vec2_zero, perRow * perRow );
+				b2Fluid_MoveParticles( fluid, floor, drop, b2Vec2_zero, perRow * perRow );
 			}
 			break;
 
@@ -1075,7 +1075,7 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 			{
 				b2AABB all = { { -6.0f, 0.0f }, { 6.0f, 6.0f } };
 				b2AABB start = { { -5.9f, 4.1f }, { -4.6f, 6.0f } };
-				b2fFluid_MoveParticles( fluid, all, start, b2Vec2_zero, b2fFluid_GetParticleCount( fluid ) );
+				b2Fluid_MoveParticles( fluid, all, start, b2Vec2_zero, b2Fluid_GetParticleCount( fluid ) );
 			}
 			break;
 
@@ -1099,5 +1099,5 @@ void LabStepScene( LabScene* scene, b2fFluid* fluid, float timeStep )
 	// Anything that gets out of a scene is put back and counted, so that a leak shows up as a number
 	b2AABB below = { { -1e6f, -1e6f }, { 1e6f, -30.0f } };
 	b2AABB top = { { scene->viewCenter.x - 1.0f, scene->viewCenter.y }, { scene->viewCenter.x + 1.0f, scene->viewCenter.y + 1.0f } };
-	scene->leaked += b2fFluid_MoveParticles( fluid, below, top, b2Vec2_zero, 200 );
+	scene->leaked += b2Fluid_MoveParticles( fluid, below, top, b2Vec2_zero, 200 );
 }

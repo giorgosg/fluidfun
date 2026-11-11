@@ -22,8 +22,13 @@ fluidfun is not part of Box2D and is not made by its author.
 
 ## Changes to Box2D
 
-Besides the liquid code (`src/fluid*.c`, `include/box2d/fluidfun.h`), the fork adds one thing to Box2D: a callback
-that runs at the end of every solver sub-step, with access to the step's workers and to body motion.
+Besides the liquid code (`src/fluid*.c`, `include/box2d/fluidfun.h`), the fork changes Box2D in two ways.
+
+The world owns its fluid: `b2World_Step` prepares it before the step and runs it at the end of every solver sub-step,
+and `b2DestroyWorld` frees it. A fluid is named by a `b2FluidId`, as bodies and shapes are by theirs.
+
+There is also a callback that runs at the end of every solver sub-step, after the fluid, with access to the step's
+workers and to body motion. The fluid is built on the same three `b2SubStep_` functions.
 
 ```c
 b2World_SetSubStepCallback( worldId, fcn, context );
@@ -62,29 +67,29 @@ ctest --test-dir build/benchmark/fluid
 ```c
 #include "box2d/fluidfun.h"
 
-b2fFluidDef def = b2fDefaultFluidDef();
-def.particleSpacing = 0.07f;
-b2fFluid* fluid = b2fCreateFluid( worldId, &def );
-b2fFluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f } );
+b2FluidDef def = b2DefaultFluidDef();
+def.particleSpacing = 0.08f;
+b2FluidId fluid = b2CreateFluid( worldId, &def );
+b2Fluid_CreateParticlesInBox( fluid, 0, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f } );
 
 // A second liquid, lighter than the first
-b2fLiquidDef oil = b2fDefaultLiquidDef();
+b2LiquidDef oil = b2DefaultLiquidDef();
 oil.massDensity = 0.6f;
-int oilIndex = b2fFluid_CreateLiquid( fluid, &oil );
-b2fFluid_CreateParticlesInBox( fluid, oilIndex, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f } );
+int oilIndex = b2Fluid_CreateLiquid( fluid, &oil );
+b2Fluid_CreateParticlesInBox( fluid, oilIndex, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f } );
 
-// Each frame
-b2fFluid_Prepare( fluid );
+// Each frame. The world steps its fluid with the bodies.
 b2World_Step( worldId, 1.0f / 60.0f, 4 );
 
-int count = b2fFluid_GetParticleCount( fluid );
-const b2Pos* positions = b2fFluid_GetPositions( fluid );
-const float* sizes = b2fFluid_GetSizes( fluid );
+int count = b2Fluid_GetParticleCount( fluid );
+const b2Pos* positions = b2Fluid_GetPositions( fluid );
+const float* sizes = b2Fluid_GetSizes( fluid );
 
-b2fDestroyFluid( fluid );
+// Destroying the world destroys its fluid too
+b2DestroyWorld( worldId );
 ```
 
-One fluid holds all of a world's liquids, up to 16 of them. Every setting is described in `include/box2d/fluidfun.h`.
+A world has one fluid, which holds all of its liquids, up to 16 of them. Every setting is described in `include/box2d/fluidfun.h`.
 
 ## License
 

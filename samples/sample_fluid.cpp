@@ -18,7 +18,7 @@ public:
 			for ( int i = 0; i < lab_sceneCount; ++i )
 			{
 				s_scenes[i] = LabDefaultScene( (LabSceneType)i );
-				s_defs[i] = b2fDefaultFluidDef();
+				s_defs[i] = b2DefaultFluidDef();
 				s_defs[i].capacity = 2000000;
 				LabSceneSettings( (LabSceneType)i, s_defs + i );
 			}
@@ -43,7 +43,7 @@ public:
 
 	~SampleFluid() override
 	{
-		b2fDestroyFluid( m_fluid );
+		b2DestroyFluid( m_fluid );
 	}
 
 	void Step() override
@@ -51,17 +51,16 @@ public:
 		if ( m_context->pause == false || m_context->singleStep > 0 )
 		{
 			LabStepScene( m_scene, m_fluid, 1.0f / m_context->hertz );
-			b2fFluid_Prepare( m_fluid );
 		}
 
 		Sample::Step();
 
-		int n = b2fFluid_GetParticleCount( m_fluid );
-		const b2Pos* pos = b2fFluid_GetPositions( m_fluid );
-		const float* vx = b2fFluid_GetVelocitiesX( m_fluid );
-		const float* vy = b2fFluid_GetVelocitiesY( m_fluid );
-		const float* size = b2fFluid_GetSizes( m_fluid );
-		const unsigned char* liquid = b2fFluid_GetLiquids( m_fluid );
+		int n = b2Fluid_GetParticleCount( m_fluid );
+		const b2Pos* pos = b2Fluid_GetPositions( m_fluid );
+		const float* vx = b2Fluid_GetVelocitiesX( m_fluid );
+		const float* vy = b2Fluid_GetVelocitiesY( m_fluid );
+		const float* size = b2Fluid_GetSizes( m_fluid );
+		const unsigned char* liquid = b2Fluid_GetLiquids( m_fluid );
 
 		// Liquid 0 is blue, then amber and red. Speed lightens each toward white.
 		static const float tints[3][3] = { { 40.0f, 110.0f, 255.0f }, { 230.0f, 170.0f, 40.0f }, { 200.0f, 40.0f, 60.0f } };
@@ -83,8 +82,8 @@ public:
 
 	bool DrawControls() override
 	{
-		ImGui::Text( "Particles %d", b2fFluid_GetParticleCount( m_fluid ) );
-		b2fProfile p = b2fFluid_GetProfile( m_fluid );
+		ImGui::Text( "Particles %d", b2Fluid_GetParticleCount( m_fluid ) );
+		b2FluidProfile p = b2Fluid_GetProfile( m_fluid );
 		ImGui::Text( "Fluid %.2f ms", p.total );
 		ImGui::Text( "sort %.2f", p.sort );
 		ImGui::Text( "density %.2f collide %.2f", p.density, p.collide );
@@ -115,7 +114,7 @@ public:
 		changed |= ImGui::SliderFloat( "Yield ratio", &m_def->liquid.yieldRatio, 0.0f, 0.5f, "%.2f" );
 		if ( changed )
 		{
-			b2fFluid_SetDef( m_fluid, m_def );
+			b2Fluid_SetDef( m_fluid, m_def );
 		}
 
 		ImGui::SliderFloat( "Dot size", &m_pointSize, 1.0f, 12.0f, "%.1f" );
@@ -150,12 +149,12 @@ public:
 		return new SampleFluid( context, type );
 	}
 
-	static inline b2fFluidDef s_defs[lab_sceneCount];
+	static inline b2FluidDef s_defs[lab_sceneCount];
 	static inline LabScene s_scenes[lab_sceneCount];
 
 	LabScene* m_scene;
-	b2fFluidDef* m_def;
-	b2fFluid* m_fluid;
+	b2FluidDef* m_def;
+	b2FluidId m_fluid;
 	float m_pointSize = 4.0f;
 };
 

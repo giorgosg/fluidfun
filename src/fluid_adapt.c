@@ -6,7 +6,7 @@
 // Depth at which particles of a liquid reach its coarsest size
 float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h )
 {
-	const b2fLiquidDef* def = &f->liquids[liquid].def;
+	const b2LiquidDef* def = &f->liquids[liquid].def;
 	float coarse = def->adaptiveRatio * f->spacing;
 	float reach = g > 0.0f && h > 0.0f ? 0.5f * B2F_DEPTH_LIMIT_SCALE * def->stiffness * coarse * coarse / ( g * h * h ) : FLT_MAX;
 	return f->def.adaptiveDepth > 0.0f && f->def.adaptiveDepth < reach ? f->def.adaptiveDepth : reach;
@@ -291,7 +291,7 @@ void b2fAdaptSizes( b2fFluid* f )
 	bool wantFlow = false;
 	for ( int l = 0; l < f->liquidCount; ++l )
 	{
-		const b2fLiquidDef* def = &f->liquids[l].def;
+		const b2LiquidDef* def = &f->liquids[l].def;
 		float ratio = def->adaptiveRatio > 1.0f ? def->adaptiveRatio : 1.0f;
 		float g = -def->gravityScale * f->worldGravity.y;
 		float reach = b2fAdaptiveReach( f, l, g, f->h );

@@ -33,7 +33,7 @@ static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float 
 // distance asks, with its particles spread evenly around it.
 static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos upper )
 {
-	const b2fLiquidDef* def = &f->liquids[liquid].def;
+	const b2LiquidDef* def = &f->liquids[liquid].def;
 	float spacing = f->spacing, ratio = def->adaptiveRatio;
 	float g = -def->gravityScale * b2World_GetGravity( f->worldId ).y;
 	float reach = b2fAdaptiveReach( f, liquid, g, f->h > 0.0f ? f->h : 1.0f / 240.0f );
@@ -113,8 +113,9 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 	return added;
 }
 
-int b2fFluid_CreateParticlesInBox( b2fFluid* f, int liquid, b2Pos lower, b2Pos upper )
+int b2Fluid_CreateParticlesInBox( b2FluidId fluidId, int liquid, b2Pos lower, b2Pos upper )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( liquid < 0 || liquid >= f->liquidCount )
 	{
 		return 0;
@@ -143,8 +144,9 @@ int b2fFluid_CreateParticlesInBox( b2fFluid* f, int liquid, b2Pos lower, b2Pos u
 	return added;
 }
 
-int b2fFluid_MoveParticles( b2fFluid* f, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount )
+int b2Fluid_MoveParticles( b2FluidId fluidId, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount )
 {
+	b2fFluid* f = b2fGetFluid( fluidId );
 	float spacing = SpawnSpacing( f );
 	int perRow = (int)( ( to.upperBound.x - to.lowerBound.x ) / spacing ) + 1;
 	int moved = 0;
