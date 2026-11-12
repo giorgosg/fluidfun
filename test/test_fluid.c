@@ -655,6 +655,48 @@ static b2Vec2 TotalVelocity( b2FluidId fluidId )
 	return sum;
 }
 
+// The mean speed away from the centre, after one step, of the particles an explosion in the middle of a still blob
+// pushed, at a particle spacing
+static float BlastSpeed( float spacing, const b2ExplosionDef* blast )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.particleSpacing = spacing;
+	def.capacity = 1000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	int count = b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.0f, 0.0f }, 0.6f, b2Vec2_zero );
+	bool* pushed = calloc( (size_t)count, sizeof( bool ) );
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		float d = b2Distance( b2ToVec2( particles.positions[i] ), b2ToVec2( blast->position ) );
+		pushed[particles.ids[i]] = d < blast->radius + blast->falloff;
+	}
+	b2World_Explode( worldId, blast );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+
+	float sum = 0.0f;
+	int n = 0;
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		b2Vec2 offset = b2Sub( b2ToVec2( particles.positions[i] ), b2ToVec2( blast->position ) );
+		if ( pushed[particles.ids[i]] && b2Length( offset ) > 0.0f )
+		{
+			sum += b2Dot( ( b2Vec2 ){ particles.velocitiesX[i], particles.velocitiesY[i] }, b2Normalize( offset ) );
+			n += 1;
+		}
+	}
+	free( pushed );
+	b2DestroyWorld( worldId );
+	return n > 0 ? sum / (float)n : 0.0f;
+}
+
 // Changing velocity in a box or a shape, blending it toward a velocity, and explosions, in a world without gravity
 static int FluidPush( void )
 {
@@ -779,8 +821,8 @@ static int FluidPush( void )
 	free( inside );
 
 	// An explosion in the middle of a still blob throws particles out from the centre, by impulsePerLength over
-	// 0.866 s density within the radius, less through the falloff, and none past it. A new fluid, so ids start at
-	// zero again.
+	// density times radius + falloff / 2 within the radius, less through the falloff, and none past it. A new fluid,
+	// so ids start at zero again.
 	b2DestroyFluid( fluidId );
 	fluidId = b2CreateFluid( worldId, &def );
 	waterId = b2CreateLiquid( fluidId, &water );
@@ -791,8 +833,8 @@ static int FluidPush( void )
 	blast.position = ( b2Pos ){ 0.01f, 0.02f };
 	blast.radius = 0.2f;
 	blast.falloff = 0.2f;
-	blast.impulsePerLength = 0.05f;
-	float reach = blast.radius + blast.falloff;
+	blast.impulsePerLength = 0.5f;
+	float reach = blast.radius + blast.falloff, length = blast.radius + 0.5f * blast.falloff;
 	int expectedCount = 0;
 	particles = b2Fluid_GetParticles( fluidId );
 	for ( int i = 0; i < count; ++i )
@@ -808,9 +850,9 @@ static int FluidPush( void )
 	{
 		b2Vec2 offset = b2Sub( b2ToVec2( particles.positions[i] ), b2ToVec2( blast.position ) );
 		b2Vec2 velocity = { particles.velocitiesX[i], particles.velocitiesY[i] };
-		float d = b2Length( offset ), s = particles.sizes[i];
+		float d = b2Length( offset );
 		float scale = d <= blast.radius ? 1.0f : b2MaxFloat( ( reach - d ) / blast.falloff, 0.0f );
-		float expected = blast.impulsePerLength * scale / ( 0.8660254f * s * water.density );
+		float expected = blast.impulsePerLength * scale / ( water.density * length );
 		ENSURE( fabsf( b2Length( velocity ) - expected ) < 1e-3f * expected + 1e-6f );
 		ENSURE( d >= reach ? b2Length( velocity ) == 0.0f : b2Dot( velocity, offset ) > 0.999f * b2Length( velocity ) * d );
 		nearSpeed += d < blast.radius ? b2Length( velocity ) : 0.0f;
@@ -851,6 +893,10 @@ static int FluidPush( void )
 	free( before );
 	free( after );
 	b2DestroyWorld( worldId );
+
+	// The same explosion throws the same blob as hard at any particle spacing
+	float fine = BlastSpeed( 0.08f, &blast ), coarse = BlastSpeed( 0.12f, &blast );
+	ENSURE( fine > 0.0f && fabsf( coarse - fine ) < 0.05f * fine );
 	return 0;
 }
 

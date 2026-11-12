@@ -252,19 +252,22 @@ B2_API int b2Fluid_BlendVelocityInBox( b2FluidId fluidId, b2LiquidId liquidId, b
 B2_API int b2Fluid_BlendVelocityInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocity, float share );
 
 /// Throw the liquid away from a point, as an explosion throws bodies. b2World_Explode calls this for the world's fluid,
-/// so an explosion throws liquid and bodies with one call; call this to throw only the liquid. Each particle is pushed
-/// as Box2D pushes a shape as wide as the particle's size s: away from the centre, with impulsePerLength times s at
-/// full strength within radius, fading in a line to nothing over falloff, past which nothing is pushed. Its mass is
-/// 0.866 s^2 times its liquid's density, so its change of speed is impulsePerLength over 0.866 s density at full
-/// strength: 14 m/s for water with particles 0.08 apart and an impulsePerLength of 1.
+/// so an explosion throws liquid and bodies with one call; call this to throw only the liquid. Every particle within
+/// radius + falloff is pushed away from the centre, at full strength within radius and fading in a line to nothing
+/// over falloff, and changes speed as a body as wide as the blast would: by impulsePerLength over its liquid's density
+/// times L at full strength, where L = radius + falloff / 2, the distance at which the push has fallen to half. So the
+/// push does not depend on particleSpacing or particle sizes, and a blob of liquid as wide as L is thrown as hard as a
+/// body as wide as L of the same density; Box2D throws a narrower body harder, by L over its width, and a narrower blob
+/// no harder. Summed over its area, liquid filling the blast takes 1.05 to 1.57 times the impulse a body filling it
+/// takes, 1.22 for falloff equal to radius. With radius 0.3 and falloff 0.3, an impulsePerLength of 1 throws water at
+/// 2.2 m/s.
 ///
 /// Liquid casts no shadow, as bodies cast none in Box2D, so particles deep in a pool get the same push as those facing
-/// the blast. A pool in reach therefore takes impulsePerLength times its area over 0.866 s, where a body of its size
-/// takes impulsePerLength times its width. The solver moves no particle more than 0.89 particleSpacing a substep,
-/// about 17 m/s at 60 Hz and 4 substeps with particles 0.08 apart, so a larger push throws the liquid at that speed and
-/// the rest of it is lost. Liquid that fast can pass through walls thinner than one such move, as any liquid that fast
-/// can. Every liquid is thrown whatever maskBits says, since liquids have no categories yet. Returns how many
-/// particles it pushed. Call between steps.
+/// the blast. The solver moves no particle more than 0.89 particleSpacing a substep, about 17 m/s at 60 Hz and 4
+/// substeps with particles 0.08 apart, so a larger push throws the liquid at that speed and the rest of it is lost.
+/// Liquid that fast can pass through walls thinner than one such move, as any liquid that fast can. Every liquid is
+/// thrown whatever maskBits says, since liquids have no categories yet. Returns how many particles it pushed. Call
+/// between steps.
 B2_API int b2Fluid_Explode( b2FluidId fluidId, const b2ExplosionDef* def );
 
 /// The most emitters one fluid can hold
