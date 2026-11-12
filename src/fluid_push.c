@@ -97,32 +97,44 @@ int b2Fluid_BlendVelocityInShape( b2FluidId fluidId, b2LiquidId liquidId, b2Shap
 	return PushInShape( fluidId, liquidId, shapeId, ( Push ){ b2Vec2_zero, velocity, share } );
 }
 
-// An explosion as Box2D gives one to a shape (ExplosionCallback in physics_world.c), for a particle. Box2D finds the
+// An explosion as Box2D gives one to a shape (ExplosionCallback in physics_world.c), for the liquid. Box2D finds the
 // distance d from the centre to the shape and the direction from the centre to its closest point, and gives the body
 // an impulse along that direction of
 //
-//   J = impulsePerLength * L * scale,  scale = 1 for d <= radius, ( radius + falloff - d ) / falloff beyond, 0 past it
+//   J = impulsePerLength * W * scale,  scale = 1 for d <= radius, ( radius + falloff - d ) / falloff beyond, 0 past it
 //
-// where L is the shape's width across that direction (b2GetShapeProjectedPerimeter). A particle stands for the cell
-// of liquid around it, a hexagon of the triangular lattice, s across its flats for a particle that rests s from its
-// neighbours, where s is the size b2FluidParticles::sizes gives. Its mass is that cell's area, 0.866 s^2, times its
-// liquid's density, which is the mass the solver gives it (liquid mass times size squared). Taking:
+// where W is the shape's width across that direction (b2GetShapeProjectedPerimeter). A body of width W and mass
+// density rho, about W^2 rho in mass, so changes speed by about impulsePerLength * scale / ( rho W ).
 //
-// - L = s, the width across the flats; across the corners it is 1.15 s, and the mean over directions 1.10 s.
-// - d the distance to the particle's centre rather than to the edge of its cell, so that nothing past
-//   radius + falloff is pushed. This gives a particle in the falloff s / ( 2 falloff ) less of the full push than
-//   the edge would.
-// - The direction from the centre to the particle's centre, and +x for a particle at the centre, as Box2D does for a
-//   shape the centre is inside.
+// Taking W as each particle's own size would make the push grow as particles shrink: halving particleSpacing would
+// throw the same pool twice as hard, and liquid would leave a blast far faster than a body of its size. So every
+// particle instead changes speed as a body as wide as the blast would, with the length
 //
-// the particle's change of velocity is
+//   L = radius + falloff / 2,  the distance at which the push has fallen to half,
 //
-//   dv = J / m = impulsePerLength * scale / ( 0.866 s density ).
+//   dv = impulsePerLength * scale / ( rho L ),
+//
+// along the direction from the centre to the particle's centre (+x for a particle at the centre, as Box2D does for a
+// shape the centre is inside). d is to the particle's centre, so nothing past radius + falloff moves. This depends on
+// no particle size, so it is the same at any particleSpacing and with adaptive sizes, and a blob of liquid as wide as
+// L is thrown as hard as a body as wide as L. A smaller blob, or a smaller body, is the case where the two differ: the
+// body is thrown harder, by L over its width.
+//
+// The liquid filling the blast takes, summed over its area A with mass rho per unit area,
+//
+//   integral of rho dv dA = ( impulsePerLength / L ) * pi * ( radius^2 + radius falloff + falloff^2 / 3 )
+//
+// (the disc within radius at full push, plus the ring of the falloff, integral from 0 to falloff of
+// ( 1 - u / falloff ) 2 pi ( radius + u ) du). A body filling the blast, 2 ( radius + falloff ) wide, takes
+// impulsePerLength * 2 ( radius + falloff ). The liquid's over the body's is
+//
+//   pi ( radius^2 + radius falloff + falloff^2 / 3 ) / ( 2 ( radius + falloff ) ( radius + falloff / 2 ) ),
+//
+// 1.22 for falloff equal to radius, pi / 2 = 1.57 with no falloff, and pi / 3 = 1.05 with no radius. The liquid's
+// impulse points out all round and the body's one way, so this compares how hard each is pushed, not net momentum.
 //
 // Box2D casts no shadows, and neither does this: every particle within reach gets its push, however much liquid is
-// between it and the centre. So a pool takes far more momentum from a blast than a body of the same size would:
-// impulsePerLength times its area over 0.866 s, rather than times its width. A liquid with no density has no mass to
-// push and is left alone.
+// between it and the centre. A liquid with no density has no mass to push and is left alone.
 int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 {
 	float radius = def->radius, falloff = def->falloff, reach = radius + falloff;
@@ -133,7 +145,7 @@ int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 		return 0;
 	}
 
-	float inverseSpacing2 = 1.0f / ( f->spacing * f->spacing );
+	float length = radius + 0.5f * falloff;
 	int pushed = 0;
 	for ( int i = 0; i < f->count; ++i )
 	{
@@ -149,8 +161,8 @@ int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 		{
 			scale = b2ClampFloat( ( reach - d ) / falloff, 0.0f, 1.0f );
 		}
-		float size = f->size[i], mass = f->liquids[f->liquid[i]].mass * size * size * inverseSpacing2;
-		if ( scale == 0.0f || mass <= 0.0f )
+		float density = f->liquids[f->liquid[i]].def.density;
+		if ( scale == 0.0f || density <= 0.0f )
 		{
 			continue;
 		}
@@ -160,7 +172,7 @@ int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 		{
 			direction = ( b2Vec2 ){ dx / d, dy / d };
 		}
-		float change = def->impulsePerLength * B2F_REST_PITCH * size * scale / mass;
+		float change = def->impulsePerLength * scale / ( density * length );
 		f->vx[i] += change * direction.x;
 		f->vy[i] += change * direction.y;
 		pushed += 1;
