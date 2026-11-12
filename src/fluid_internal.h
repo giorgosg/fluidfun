@@ -106,6 +106,10 @@ typedef struct b2fShape
 	b2Polygon polygon;
 	// World bounds this substep, grown by the particle radius
 	b2fCoord minX, minY, maxX, maxY;
+	// The shape's filter, and a bit for each liquid it collides with, by index. A shape no liquid collides with is not
+	// gathered at all, so this only matters when b2fFluid::shapesFiltered says some shape leaves some liquid out.
+	uint64_t categoryBits, maskBits;
+	uint32_t liquids;
 } b2fShape;
 
 // Something a body touches or nearly touches, closer than liquid can fill the gap between them
@@ -179,6 +183,8 @@ typedef struct b2fSensor
 	b2ShapeId id;
 	float area;
 	bool gathered;
+	// A bit for each liquid the sensor counts, by index, from the filters when last gathered
+	uint32_t liquids;
 } b2fSensor;
 
 // A shape within the interaction radius of a particle
@@ -278,6 +284,16 @@ struct b2fFluid
 	bool adaptive;	 // some liquid has adaptive sizes
 	float cohesionBetween[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
 	b2fLiquidPair liquidPairs[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
+	// For each liquid a bit for every liquid it pushes on, itself always included, and whether some pair of live
+	// liquids passes through each other. Only then do the passes look at these, so default filters cost nothing.
+	uint32_t liquidSees[B2F_MAX_LIQUIDS];
+	bool liquidsFiltered;
+	// A bit for each live liquid, and whether some gathered shape leaves out some live liquid this step. Shapes no
+	// liquid collides with are not gathered, so with one liquid this stays false and the passes are as without filters.
+	uint32_t liveLiquids;
+	bool shapesFiltered;
+	// Some shape near the liquid was left out this step since no liquid collides with it
+	bool shapesDropped;
 
 	B2F_PARTICLE_FIELDS( B2F_DECLARE_FIELD )
 	// The same fields in the order the next sort writes, swapped in afterwards
@@ -429,9 +445,12 @@ bool b2fWorldLocked( b2FluidId fluidId );
 int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId );
 // Marks in adaptUsed the particles of that liquid, or of every liquid for -1, whose centres are inside the outline,
 // and clears the mark on the rest. Returns how many it marked. Between steps only, as adaptUsed is the size pass's.
+// The outline is a region, so filters play no part.
 int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline );
 // The id of the liquid in a slot
 b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index );
+// A bit for each live liquid that collides with a shape of this filter: each one's mask includes the other's category
+uint32_t b2fLiquidsCollidingWith( const b2fFluid* f, b2Filter filter );
 
 // grid.c
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
@@ -463,7 +482,8 @@ bool b2fMakeOutline( b2ShapeId shapeId, b2fOutline* outline );
 b2fOutline b2fMakeBoxOutline( b2Pos lower, b2Pos upper );
 b2fOutline b2fMakeCircleOutline( b2Pos center, float radius );
 bool b2fInsideOutline( const b2fOutline* outline, b2Pos p );
-void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId );
+// Notes a sensor shape near the liquid this step, which counts the liquids in the mask. One that counts none is left out.
+void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId, uint32_t liquids );
 void b2fFinishStep( b2fFluid* f );
 void b2fFreeState( b2fFluid* f );
 

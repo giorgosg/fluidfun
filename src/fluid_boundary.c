@@ -74,9 +74,19 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 {
 	b2fFluid* f = context;
 	// The liquid passes through sensors, which only count the liquid in them once a step
+	b2Filter filter = b2Shape_GetFilter( shapeId );
+	uint32_t liquids = b2fLiquidsCollidingWith( f, filter );
 	if ( b2Shape_IsSensor( shapeId ) )
 	{
-		b2fGatherSensor( f, shapeId );
+		b2fGatherSensor( f, shapeId, liquids );
+		return true;
+	}
+
+	// A shape no liquid collides with is not there for the liquid. Left out here, it is in none of the passes, nor is
+	// its body unless another of its shapes is, so with one liquid a filter costs the passes nothing.
+	if ( liquids == 0 )
+	{
+		f->shapesDropped = true;
 		return true;
 	}
 
@@ -89,6 +99,9 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 	b2fShape* shape = f->shapes + f->shapeCount;
 	memset( shape, 0, sizeof( b2fShape ) );
 	shape->type = b2Shape_GetType( shapeId );
+	shape->categoryBits = filter.categoryBits;
+	shape->maskBits = filter.maskBits;
+	shape->liquids = liquids;
 	shape->bodyIndex = FindBody( f, b2Shape_GetBody( shapeId ) );
 	float area = 0.0f;
 	b2Vec2 center = b2Vec2_zero;
@@ -148,6 +161,7 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 	f->bodies[shape->bodyIndex].area += area;
 	f->bodies[shape->bodyIndex].areaCenter = b2MulAdd( f->bodies[shape->bodyIndex].areaCenter, area, center );
 	f->shapeCount += 1;
+	f->shapesFiltered = f->shapesFiltered || liquids != f->liveLiquids;
 	return true;
 }
 
@@ -230,6 +244,12 @@ static void FindPatches( b2fFluid* f )
 		for ( int i = 0; i < count; ++i )
 		{
 			const b2Manifold* manifold = &contacts[i].manifold;
+			// Liquid fills the space of a shape it passes through, so a touch there leaves no gap it misses
+			if ( f->shapesDropped && ( b2fLiquidsCollidingWith( f, b2Shape_GetFilter( contacts[i].shapeIdA ) ) == 0 ||
+									   b2fLiquidsCollidingWith( f, b2Shape_GetFilter( contacts[i].shapeIdB ) ) == 0 ) )
+			{
+				continue;
+			}
 			b2BodyId bodyA = b2Shape_GetBody( contacts[i].shapeIdA ), bodyB = b2Shape_GetBody( contacts[i].shapeIdB );
 			bool first = B2_ID_EQUALS( bodyA, body->id );
 			b2BodyId otherId = first ? bodyB : bodyA;
@@ -251,6 +271,8 @@ void b2fGatherShapes( b2fFluid* f )
 {
 	f->shapeCount = 0;
 	f->bodyCount = 0;
+	f->shapesFiltered = false;
+	f->shapesDropped = false;
 	for ( int i = 0; i < f->sensorCount; ++i )
 	{
 		f->sensors[i].gathered = false;
@@ -375,7 +397,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float h = f->radius, tableScale = (float)B2F_WALL_TABLE_SIZE / h;
-	bool adaptive = f->adaptive;
+	bool adaptive = f->adaptive, filtered = f->shapesFiltered;
 	for ( int i = start; i < end; ++i )
 	{
 		if ( adaptive )
@@ -392,6 +414,13 @@ static void ContactTask( int start, int end, int worker, void* context )
 		{
 			const b2fShape* s = f->shapes + si;
 			if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
+			{
+				continue;
+			}
+
+			// A shape this particle's liquid passes through makes no contact, so wall density, the wall moves,
+			// adhesion, the reaction on the body, added mass, patches and the body's state never see the pair
+			if ( filtered && ( s->liquids >> f->liquid[i] & 1u ) == 0 )
 			{
 				continue;
 			}
@@ -454,7 +483,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float margin = f->margin, h = f->h, inv = 1.0f / h, friction = f->liquids[0].def.friction, m = f->mass;
-	bool adaptive = f->adaptive, multi = f->liquidCount > 1;
+	bool adaptive = f->adaptive, multi = f->liquidCount > 1, filtered = f->shapesFiltered;
 	float baseMass = f->mass, spacing = f->spacing, added = f->liquids[0].def.tuning.addedMass;
 
 	// What a patch needs of the liquid around its body: the density its buoyancy goes by, and how high the liquid
@@ -547,6 +576,13 @@ static void CollideTask( int start, int end, int worker, void* context )
 				const b2fShape* s = f->shapes + si;
 				b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 				if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
+				{
+					continue;
+				}
+
+				// The push out of the shape, friction and their reaction on the body find shapes themselves rather
+				// than from the contacts, so they skip a shape the particle's liquid passes through here
+				if ( filtered && ( s->liquids >> f->liquid[i] & 1u ) == 0 )
 				{
 					continue;
 				}

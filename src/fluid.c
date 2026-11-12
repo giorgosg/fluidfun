@@ -29,6 +29,8 @@ b2LiquidDef b2DefaultLiquidDef( void )
 	def.tuning.adaptiveTolerance = 0.3f;
 	def.tuning.adaptiveLimit = 3.0f;
 	def.tuning.adaptiveRate = 0.05f;
+	def.categoryBits = B2_DEFAULT_CATEGORY_BITS;
+	def.maskBits = B2_DEFAULT_MASK_BITS;
 	return def;
 }
 
@@ -147,6 +149,46 @@ static void UpdateLiquids( b2fFluid* f )
 			};
 		}
 	}
+
+	// Which liquids push on which. A destroyed slot sees everything, which nothing reads since no particle is of it.
+	f->liveLiquids = 0;
+	f->liquidsFiltered = false;
+	for ( int a = 0; a < B2F_MAX_LIQUIDS; ++a )
+	{
+		f->liquidSees[a] = UINT32_MAX;
+		if ( a < f->liquidCount && f->liquids[a].alive )
+		{
+			f->liveLiquids |= 1u << a;
+		}
+	}
+	for ( int a = 0; a < f->liquidCount; ++a )
+	{
+		const b2LiquidDef* da = &f->liquids[a].def;
+		for ( int b = 0; b < f->liquidCount; ++b )
+		{
+			const b2LiquidDef* db = &f->liquids[b].def;
+			bool live = f->liquids[a].alive && f->liquids[b].alive;
+			if ( live && a != b && ( ( da->maskBits & db->categoryBits ) == 0 || ( da->categoryBits & db->maskBits ) == 0 ) )
+			{
+				f->liquidSees[a] &= ~( 1u << b );
+				f->liquidsFiltered = true;
+			}
+		}
+	}
+}
+
+uint32_t b2fLiquidsCollidingWith( const b2fFluid* f, b2Filter filter )
+{
+	uint32_t liquids = 0;
+	for ( int l = 0; l < f->liquidCount; ++l )
+	{
+		const b2LiquidDef* def = &f->liquids[l].def;
+		if ( f->liquids[l].alive && ( def->maskBits & filter.categoryBits ) != 0 && ( def->categoryBits & filter.maskBits ) != 0 )
+		{
+			liquids |= 1u << l;
+		}
+	}
+	return liquids;
 }
 
 static float LatticeDensity( float spacing, float radius )

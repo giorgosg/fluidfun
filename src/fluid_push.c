@@ -139,8 +139,14 @@ int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 {
 	float radius = def->radius, falloff = def->falloff, reach = radius + falloff;
 	b2fOutline circle = b2fMakeCircleOutline( def->position, reach );
-	// Liquids have no categories yet; once they do, def->maskBits picks the liquids thrown here
-	if ( reach <= 0.0f || f->count == 0 || b2fMarkInside( f, -1, &circle ) == 0 )
+
+	// As Box2D throws the shapes whose category the mask includes, this throws those liquids
+	uint32_t thrown = 0;
+	for ( int l = 0; l < f->liquidCount; ++l )
+	{
+		thrown |= f->liquids[l].alive && ( f->liquids[l].def.categoryBits & def->maskBits ) != 0 ? 1u << l : 0u;
+	}
+	if ( reach <= 0.0f || f->count == 0 || thrown == 0 || b2fMarkInside( f, -1, &circle ) == 0 )
 	{
 		return 0;
 	}
@@ -149,7 +155,7 @@ int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 	int pushed = 0;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		if ( f->adaptUsed[i] == 0 )
+		if ( f->adaptUsed[i] == 0 || ( thrown >> f->liquid[i] & 1u ) == 0 )
 		{
 			continue;
 		}

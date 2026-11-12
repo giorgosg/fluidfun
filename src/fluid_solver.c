@@ -96,6 +96,36 @@ static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* n
 	*nearDensity = b + f->wallNearDensity[i];
 }
 
+// The same, for several liquids some of which pass through each other: a neighbour of a liquid this particle's
+// liquid does not push on is not counted and not kept, so no pair move, viscosity or cohesion acts between them either
+static inline void FilteredDensity( b2fFluid* f, int i, float* density, float* nearDensity )
+{
+	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
+	float si = f->size[i], a = 0.0f, b = 0.0f;
+	uint32_t sees = f->liquidSees[f->liquid[i]];
+	b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+	int n = 0;
+	FOR_NEIGHBOURS( f, i, j )
+	{
+		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+		if ( d2 < h * h && j != i && ( sees >> f->liquid[j] & 1u ) != 0 )
+		{
+			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
+			float l = sqrtf( d2 ), q = 1.0f - l / h;
+			a += w * q * q;
+			b += w * q * q * q;
+			if ( n < B2F_PAIRS_PER_PARTICLE )
+			{
+				pairs[n] = ( b2fPair ){ j, l };
+			}
+			n += 1;
+		}
+	}
+	f->pairCount[i] = n <= B2F_PAIRS_PER_PARTICLE ? n : -1;
+	*density = a + f->wallDensity[i];
+	*nearDensity = b + f->wallNearDensity[i];
+}
+
 static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
 {
 	const b2LiquidDef* def = &f->liquids[0].def;
@@ -174,6 +204,9 @@ static void MultiAccumulate( b2fFluid* f, int start, int end )
 		float pressure = f->pressure[i], nearPressure = f->nearPressure[i];
 		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
 		const b2fLiquidPair* row = f->liquidPairs[f->liquid[i]];
+		// The density pass kept only neighbours this particle's liquid pushes on; a particle with too many to keep
+		// scans the grid, and skips the others here. Every bit is set when no liquids pass through each other.
+		uint32_t sees = f->liquidSees[f->liquid[i]];
 #define B2F_MULTI_PAIR( j, l )                                                                                       \
 	{                                                                                                                  \
 		const b2fLiquidPair* pair = row + f->liquid[j];                                                                \
@@ -210,7 +243,7 @@ static void MultiAccumulate( b2fFluid* f, int start, int end )
 			FOR_NEIGHBOURS( f, i, j )
 			{
 				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = si + f->size[j];
-				if ( d2 < reach * reach && d2 > 1e-12f && j != i )
+				if ( d2 < reach * reach && d2 > 1e-12f && j != i && ( sees >> f->liquid[j] & 1u ) != 0 )
 				{
 					float l = sqrtf( d2 );
 					B2F_MULTI_PAIR( j, l )
@@ -284,9 +317,17 @@ static void DensityTask( int start, int end, int worker, void* context )
 	if ( f->liquidCount > 1 )
 	{
 		float rest = f->restDensity;
+		bool filtered = f->liquidsFiltered;
 		for ( int i = start; i < end; ++i )
 		{
-			AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
+			if ( filtered )
+			{
+				FilteredDensity( f, i, f->rho + i, f->rhoNear + i );
+			}
+			else
+			{
+				AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
+			}
 			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 			float hi2 = 4.0f * f->size[i] * f->size[i];
 			f->pressure[i] = def->tuning.stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tuning.tensilePressure );

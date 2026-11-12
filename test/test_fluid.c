@@ -5,6 +5,7 @@
 #include "box2d/box2d.h"
 #include "box2d/fluidfun.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -900,6 +901,205 @@ static int FluidPush( void )
 	return 0;
 }
 
+// The highest particle of a liquid, or of every liquid for -1, and how many particles of it there are
+static float TopOfLiquid( b2FluidId fluidId, int liquid, int* count )
+{
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	float top = -FLT_MAX;
+	*count = 0;
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		if ( liquid < 0 || particles.liquids[i] == liquid )
+		{
+			top = (float)particles.positions[i].y > top ? (float)particles.positions[i].y : top;
+			*count += 1;
+		}
+	}
+	return top;
+}
+
+// Two liquids in one box over a floor, which pass through each other or not
+static b2FluidId PoolOfTwo( b2WorldId worldId, bool apart, b2LiquidId* liquids )
+{
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon floor = b2MakeOffsetBox( 0.7f, 0.1f, ( b2Vec2 ){ 0.0f, -0.1f }, b2Rot_identity );
+	b2Polygon left = b2MakeOffsetBox( 0.1f, 0.8f, ( b2Vec2 ){ -0.6f, 0.8f }, b2Rot_identity );
+	b2Polygon right = b2MakeOffsetBox( 0.1f, 0.8f, ( b2Vec2 ){ 0.6f, 0.8f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &floor );
+	b2CreatePolygonShape( groundId, &shapeDef, &left );
+	b2CreatePolygonShape( groundId, &shapeDef, &right );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 400;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef first = b2DefaultLiquidDef(), second = b2DefaultLiquidDef();
+	first.tuning.adaptiveRatio = second.tuning.adaptiveRatio = 1.0f;
+	first.categoryBits = 0x2;
+	second.categoryBits = 0x4;
+	if ( apart )
+	{
+		first.maskBits = ~(uint64_t)0x4;
+		second.maskBits = ~(uint64_t)0x2;
+	}
+	liquids[0] = b2CreateLiquid( fluidId, &first );
+	liquids[1] = b2CreateLiquid( fluidId, &second );
+
+	// Liquids that push on each other cannot start in one place, so those go one above the other. Those that pass
+	// through each other share the box, the second shifted a little so that no two particles start at one point.
+	float shift = apart ? 0.0f : 0.3f;
+	b2Liquid_SpawnBox( liquids[0], ( b2Pos ){ -0.45f, 0.05f }, ( b2Pos ){ 0.45f, 0.35f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( liquids[1], ( b2Pos ){ -0.43f, 0.06f + shift }, ( b2Pos ){ 0.47f, 0.36f + shift }, b2Vec2_zero );
+	return fluidId;
+}
+
+// What the liquid collides with: a grate it falls through, a crate it ignores and then lifts, two liquids that pass
+// through each other, a sensor that counts one of them, and an explosion that throws only one
+static int FluidFilter( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon floor = b2MakeOffsetBox( 1.0f, 0.1f, ( b2Vec2 ){ 0.0f, -0.1f }, b2Rot_identity );
+	b2Polygon left = b2MakeOffsetBox( 0.1f, 1.0f, ( b2Vec2 ){ -0.9f, 1.0f }, b2Rot_identity );
+	b2Polygon right = b2MakeOffsetBox( 0.1f, 1.0f, ( b2Vec2 ){ 0.9f, 1.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &floor );
+	b2CreatePolygonShape( groundId, &shapeDef, &left );
+	b2CreatePolygonShape( groundId, &shapeDef, &right );
+
+	// A grate across the tank that the liquid, category 2, passes through, and that the crate passes through too
+	float grateY = 0.7f;
+	b2ShapeDef grateDef = b2DefaultShapeDef();
+	grateDef.filter.categoryBits = 0x8;
+	grateDef.filter.maskBits = ~(uint64_t)0x2;
+	b2Polygon grate = b2MakeOffsetBox( 0.8f, 0.05f, ( b2Vec2 ){ 0.0f, grateY }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &grateDef, &grate );
+
+	// A crate of half the liquid's density on the floor, which at first ignores the liquid
+	b2BodyDef crateDef = b2DefaultBodyDef();
+	crateDef.type = b2_dynamicBody;
+	crateDef.position = ( b2Pos ){ 0.0f, 0.1f };
+	b2BodyId crateId = b2CreateBody( worldId, &crateDef );
+	b2ShapeDef crateShape = b2DefaultShapeDef();
+	crateShape.density = 0.5f;
+	crateShape.filter.categoryBits = 0x4;
+	crateShape.filter.maskBits = ~(uint64_t)( 0x2 | 0x8 );
+	b2Polygon crateBox = b2MakeBox( 0.1f, 0.1f );
+	b2ShapeId crateShapeId = b2CreatePolygonShape( crateId, &crateShape, &crateBox );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 400;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 1.0f;
+	ENSURE( water.categoryBits == B2_DEFAULT_CATEGORY_BITS && water.maskBits == B2_DEFAULT_MASK_BITS );
+	water.categoryBits = 0x2;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -0.75f, grateY + 0.1f }, ( b2Pos ){ 0.75f, grateY + 0.4f }, b2Vec2_zero );
+
+	// The liquid falls through the grate onto the floor and over the crate, which feels nothing of it
+	for ( int frame = 0; frame < 90; ++frame )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		b2FluidBodyState state = b2Fluid_GetBodyState( fluidId, crateId );
+		ENSURE( state.inLiquid == false && state.force.x == 0.0f && state.force.y == 0.0f );
+	}
+	int count;
+	float top = TopOfLiquid( fluidId, -1, &count );
+	ENSURE( top < grateY - 0.1f );
+	b2FluidAmount amount = b2Fluid_MeasureBox( fluidId, ( b2Pos ){ -0.8f, 0.0f }, ( b2Pos ){ 0.8f, grateY } );
+	ENSURE( amount.count == count );
+	ENSURE( b2Body_GetPosition( crateId ).y < 0.12f );
+
+	// Let it collide with the liquid, still not with the grate, and it rises
+	b2Filter filter = crateShape.filter;
+	filter.maskBits = ~(uint64_t)0x8;
+	b2Shape_SetFilter( crateShapeId, filter );
+	float lift = 0.0f;
+	for ( int frame = 0; frame < 60; ++frame )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		lift = b2Fluid_GetBodyState( fluidId, crateId ).force.y > lift ? b2Fluid_GetBodyState( fluidId, crateId ).force.y : lift;
+	}
+	ENSURE( b2Fluid_GetBodyState( fluidId, crateId ).inLiquid );
+	ENSURE( lift > 0.0f );
+	ENSURE( b2Body_GetPosition( crateId ).y > 0.2f );
+	b2DestroyWorld( worldId );
+
+	// Two liquids of the same density, apart and together. Apart, each settles to the depth it would have alone and
+	// they overlap; together they stack to about twice that.
+	float tops[2];
+	for ( int apart = 0; apart < 2; ++apart )
+	{
+		worldId = b2CreateWorld( &worldDef );
+		b2LiquidId liquids[2];
+		fluidId = PoolOfTwo( worldId, apart, liquids );
+		for ( int frame = 0; frame < 90; ++frame )
+		{
+			b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		}
+		int counts[2];
+		float first = TopOfLiquid( fluidId, 0, counts ), second = TopOfLiquid( fluidId, 1, counts + 1 );
+		tops[apart] = first > second ? first : second;
+		if ( apart )
+		{
+			ENSURE( fabsf( first - second ) < 2.0f * def.particleSpacing );
+
+			// A sensor over the pool that only the second liquid collides with holds just that
+			b2BodyId sensorBody = b2CreateBody( worldId, &bodyDef );
+			b2ShapeDef sensorDef = b2DefaultShapeDef();
+			sensorDef.isSensor = true;
+			sensorDef.filter.maskBits = ~(uint64_t)0x2;
+			b2Polygon sensorBox = b2MakeOffsetBox( 0.5f, 0.5f, ( b2Vec2 ){ 0.0f, 0.5f }, b2Rot_identity );
+			b2ShapeId sensorId = b2CreatePolygonShape( sensorBody, &sensorDef, &sensorBox );
+			b2World_Step( worldId, 1.0f / 60.0f, 4 );
+			b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+			float area = 0.0f;
+			for ( int i = 0; i < particles.count; ++i )
+			{
+				area += particles.liquids[i] == 1 ? 0.8660254f * particles.sizes[i] * particles.sizes[i] : 0.0f;
+			}
+			ENSURE( fabsf( b2Fluid_GetSensorArea( fluidId, sensorId ) - area ) < 1e-3f * area );
+
+			// An explosion whose mask leaves out the first liquid throws only the second
+			b2Vec2* before = malloc( (size_t)particles.count * sizeof( b2Vec2 ) );
+			b2Vec2* after = malloc( (size_t)particles.count * sizeof( b2Vec2 ) );
+			VelocitiesById( fluidId, before );
+			b2ExplosionDef blast = b2DefaultExplosionDef();
+			blast.position = ( b2Pos ){ 0.0f, 0.1f };
+			blast.radius = 0.15f;
+			blast.falloff = 0.1f;
+			blast.impulsePerLength = 1.0f;
+			blast.maskBits = 0x4;
+			int pushed = b2Fluid_Explode( fluidId, &blast );
+			VelocitiesById( fluidId, after );
+			particles = b2Fluid_GetParticles( fluidId );
+			int moved = 0;
+			for ( int i = 0; i < particles.count; ++i )
+			{
+				int id = particles.ids[i];
+				bool changed = before[id].x != after[id].x || before[id].y != after[id].y;
+				ENSURE( particles.liquids[i] == 1 || changed == false );
+				moved += changed ? 1 : 0;
+			}
+			ENSURE( pushed > 0 && moved == pushed && pushed < counts[1] );
+			blast.maskBits = 0x10;
+			ENSURE( b2Fluid_Explode( fluidId, &blast ) == 0 );
+			free( before );
+			free( after );
+		}
+		b2DestroyWorld( worldId );
+	}
+
+	// The liquid alone would stand 0.3 deep
+	ENSURE( tops[1] < 0.42f );
+	ENSURE( tops[0] > 0.52f );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -907,5 +1107,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidState );
 	RUN_SUBTEST( FluidSpawnAndRemove );
 	RUN_SUBTEST( FluidPush );
+	RUN_SUBTEST( FluidFilter );
 	return 0;
 }
