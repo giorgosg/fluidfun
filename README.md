@@ -81,8 +81,11 @@ b2LiquidDef water = b2DefaultLiquidDef();
 b2LiquidId waterId = b2CreateLiquid( fluid, &water );
 b2Liquid_SpawnBox( waterId, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f }, b2Vec2_zero );
 
-// A second liquid, lighter than the first. There are also honey, mercury, slime, jelly and dough.
+// A second liquid, lighter than the first. There are also honey, mercury, slime, jelly and dough. Liquids collide
+// with shapes and with each other by category and mask bits, as shapes do: this one passes through any shape whose
+// filter.maskBits leaves out 0x2, a grate say.
 b2LiquidDef oil = b2MakeOilDef();
+oil.categoryBits = 0x2;
 b2LiquidId oilId = b2CreateLiquid( fluid, &oil );
 b2Liquid_SpawnBox( oilId, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f }, b2Vec2_zero );
 

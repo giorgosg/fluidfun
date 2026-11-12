@@ -98,6 +98,18 @@ typedef struct b2LiquidDef
 	/// Stretch or squeeze a spring takes, as a share of its rest length, before plasticity changes its rest length
 	float yieldRatio;
 
+	/// What this liquid is, as category bits, and what it collides with, as mask bits, as b2Filter has for shapes. A
+	/// shape and a liquid collide when each one's mask includes the other's category. A shape the liquid does not
+	/// collide with is not there for it: no push either way, no friction or adhesion, and the body does not count as in
+	/// this liquid. Two liquids push on each other by the same rule; two that do not collide pass through each other
+	/// and share the space freely, with no pressure, viscosity or cohesion between them. A liquid always pushes on
+	/// itself, whatever its own bits say. Liquids have no group index, so b2Filter::groupIndex has no part here.
+	/// The defaults are b2DefaultFilter's, category 1 and every mask bit, so everything collides with everything.
+	/// Sensor shapes count the liquids they would collide with by the same rule. A change takes effect at the next
+	/// step.
+	uint64_t categoryBits;
+	uint64_t maskBits;
+
 	/// The solver's settings, for those who need them
 	b2LiquidTuning tuning;
 } b2LiquidDef;
@@ -225,7 +237,8 @@ B2_API int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotat
 B2_API int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound );
 
 /// The same for the outline of a Box2D shape where it is now, which may be a sensor: a drain is a sensor shape the
-/// caller empties each step. A circle, capsule or polygon; segments and chains have no inside and remove nothing.
+/// caller empties each step. A circle, capsule or polygon; segments and chains have no inside and remove nothing. The
+/// shape is only a region here, so its filter and the liquids' filters play no part.
 B2_API int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId );
 
 /// Pushing the liquid. These change the velocity of the particles whose centres are inside a region, of one liquid,
@@ -240,7 +253,7 @@ B2_API int b2Fluid_AccelerateInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Po
 
 /// The same inside the outline of a Box2D shape where it is now, which may be a sensor: a fan or a current is a sensor
 /// shape the caller pushes the liquid in each step. A circle, capsule or polygon; segments and chains have no inside
-/// and change nothing.
+/// and change nothing. As with b2Fluid_RemoveInShape, the shape is only a region and filters play no part.
 B2_API int b2Fluid_AccelerateInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocityChange );
 
 /// Move the velocity of every particle in a box toward a velocity, by a share from 0, no change, to 1, which sets it.
@@ -265,9 +278,9 @@ B2_API int b2Fluid_BlendVelocityInShape( b2FluidId fluidId, b2LiquidId liquidId,
 /// Liquid casts no shadow, as bodies cast none in Box2D, so particles deep in a pool get the same push as those facing
 /// the blast. The solver moves no particle more than 0.89 particleSpacing a substep, about 17 m/s at 60 Hz and 4
 /// substeps with particles 0.08 apart, so a larger push throws the liquid at that speed and the rest of it is lost.
-/// Liquid that fast can pass through walls thinner than one such move, as any liquid that fast can. Every liquid is
-/// thrown whatever maskBits says, since liquids have no categories yet. Returns how many particles it pushed. Call
-/// between steps.
+/// Liquid that fast can pass through walls thinner than one such move, as any liquid that fast can. Only liquids whose
+/// b2LiquidDef::categoryBits the explosion's maskBits includes are thrown, as Box2D throws only shapes whose category
+/// it includes. Returns how many particles it pushed. Call between steps.
 B2_API int b2Fluid_Explode( b2FluidId fluidId, const b2ExplosionDef* def );
 
 /// The most emitters one fluid can hold
@@ -361,7 +374,8 @@ B2_API b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId );
 typedef struct b2FluidBodyState
 {
 	/// Whether liquid has been within reach of the body: within the interaction radius of its outline, 1.78 particle
-	/// spacings for particles at the finest size. It turns true once there has been liquid in reach for 3 steps in a
+	/// spacings for particles at the finest size. Only liquid that collides with the body's shapes counts
+	/// (b2LiquidDef::categoryBits), and the fields below come from that liquid alone. It turns true once there has been liquid in reach for 3 steps in a
 	/// row, and false once there has been none for 3 steps in a row, so a drop that splashes past does not begin and
 	/// end it. The other fields are from the last step whatever this says.
 	bool inLiquid;
@@ -424,7 +438,8 @@ typedef struct b2FluidSensorEndEvent
 /// fluid and are good until the next b2World_Step.
 ///
 /// Sensors count liquid in every sensor shape near the liquid, by whether each particle's centre is inside the
-/// shape's outline, once a step after the substeps. Sensor shapes made from segments hold nothing. Sensors have no
+/// shape's outline, once a step after the substeps. A sensor counts only the liquids it would collide with were it not
+/// a sensor, by b2LiquidDef::categoryBits and maskBits and the sensor shape's filter. Sensor shapes made from segments hold nothing. Sensors have no
 /// delay, unlike bodies: a sensor that one drop passes through begins and ends with it.
 typedef struct b2FluidEvents
 {

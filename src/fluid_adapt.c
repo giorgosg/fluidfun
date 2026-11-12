@@ -58,7 +58,9 @@ static double BoxSum( const double* table, int stride, int x0, int y0, int x1, i
 	return table[y1 * stride + x1] - table[y0 * stride + x1] - table[y1 * stride + x0] + table[y0 * stride + x0];
 }
 
-static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach, const float* perMetre, bool wantFlow )
+// Boxes count the particles of the liquids in counted, a bit per liquid, and give depths to those in measured.
+static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach, const float* perMetre, bool wantFlow,
+						uint32_t counted, uint32_t measured )
 {
 	b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
 	float largest = 0.0f;
@@ -106,6 +108,10 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	float inverse = 1.0f / ( spacing * spacing );
 	for ( int i = 0; i < f->count; ++i )
 	{
+		if ( ( counted >> f->liquid[i] & 1u ) == 0 )
+		{
+			continue;
+		}
 		int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
 		int c = ( cy + 1 ) * stride + cx + 1;
 		double m = f->mass * f->size[i] * f->size[i] * inverse;
@@ -125,6 +131,10 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		memset( f->boxMixed, 0, (size_t)nodes * sizeof( double ) );
 		for ( int i = 0; i < f->count; ++i )
 		{
+			if ( ( counted >> f->liquid[i] & 1u ) == 0 )
+			{
+				continue;
+			}
 			int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
 			int c = ( cy + 1 ) * stride + cx + 1;
 			unsigned char seen = f->boxLiquid[c];
@@ -248,6 +258,10 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	// Blended between cells, so a target does not step as a particle crosses one
 	for ( int i = 0; i < f->count; ++i )
 	{
+		if ( ( measured >> f->liquid[i] & 1u ) == 0 )
+		{
+			continue;
+		}
 		float u = (float)( f->pos[i].x - originX ) / cell - 0.5f, v = (float)( f->pos[i].y - originY ) / cell - 0.5f;
 		int cx = (int)floorf( u ), cy = (int)floorf( v );
 		float fx = u - (float)cx, fy = v - (float)cy;
@@ -314,8 +328,32 @@ void b2fAdaptSizes( b2fFluid* f )
 		}
 	}
 
+	// Depth goes by the liquid a particle's liquid pushes on: liquid it passes through neither holds it up nor makes an
+	// interface with it, so with liquids that pass through each other the boxes are measured once for each set of
+	// liquids that push on the same liquids, counting those alone
 	uint64_t ticks = b2GetTicks();
-	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, deepest, perMetre, wantFlow );
+	if ( f->liquidsFiltered == false )
+	{
+		BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, deepest, perMetre, wantFlow, UINT32_MAX, UINT32_MAX );
+	}
+	else
+	{
+		uint32_t done = 0;
+		for ( int l = 0; l < f->liquidCount; ++l )
+		{
+			if ( f->liquids[l].alive == false || ( done >> l & 1u ) != 0 )
+			{
+				continue;
+			}
+			uint32_t measured = 0;
+			for ( int k = l; k < f->liquidCount; ++k )
+			{
+				measured |= f->liquids[k].alive && f->liquidSees[k] == f->liquidSees[l] ? 1u << k : 0u;
+			}
+			BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, deepest, perMetre, wantFlow, f->liquidSees[l], measured );
+			done |= measured;
+		}
+	}
 	f->measureTime = b2GetMilliseconds( ticks );
 
 	float memoryDecay = powf( 0.5f, 1.0f / ( 60.0f * B2F_SPEED_MEMORY ) );
@@ -333,11 +371,13 @@ void b2fAdaptSizes( b2fFluid* f )
 		float slope = ( liquid->ratio - 1.0f ) / liquid->reach;
 		float near = slope > 0.0f ? ( sqrtf( target / fineMass ) - 1.0f ) / slope : 0.0f;
 		b2Pos p = f->pos[i];
+		bool filtered = f->shapesFiltered;
 		for ( int si = 0; si < f->shapeCount; ++si )
 		{
 			const b2fShape* shape = f->shapes + si;
 			const b2fBody* body = f->bodies + shape->bodyIndex;
-			if ( body->adheres || p.x < shape->minX - near || p.x > shape->maxX + near || p.y < shape->minY - near || p.y > shape->maxY + near )
+			// A body the liquid passes through is not there for it
+			if ( ( filtered && ( shape->liquids >> f->liquid[i] & 1u ) == 0 ) || body->adheres || p.x < shape->minX - near || p.x > shape->maxX + near || p.y < shape->minY - near || p.y > shape->maxY + near )
 			{
 				continue;
 			}
@@ -507,7 +547,7 @@ void b2fAdaptSizes( b2fFluid* f )
 		{
 			const b2fShape* shape = f->shapes + si;
 			float reachOut = radius + child;
-			if ( x + reachOut < shape->minX || x - reachOut > shape->maxX || y + reachOut < shape->minY || y - reachOut > shape->maxY )
+			if ( ( f->shapesFiltered && ( shape->liquids >> f->liquid[i] & 1u ) == 0 ) || x + reachOut < shape->minX || x - reachOut > shape->maxX || y + reachOut < shape->minY || y - reachOut > shape->maxY )
 			{
 				continue;
 			}

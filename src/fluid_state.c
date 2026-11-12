@@ -255,19 +255,26 @@ static void UpdateBodies( b2fFluid* f )
 	}
 }
 
-void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId )
+void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId, uint32_t liquids )
 {
+	// A sensor no liquid collides with holds nothing. If it held liquid last step, not gathering it ends that.
+	if ( liquids == 0 )
+	{
+		return;
+	}
+
 	for ( int i = 0; i < f->sensorCount; ++i )
 	{
 		if ( B2_ID_EQUALS( f->sensors[i].id, shapeId ) )
 		{
 			f->sensors[i].gathered = true;
+			f->sensors[i].liquids = liquids;
 			return;
 		}
 	}
 
 	b2fSensor* sensor = Push( (void**)&f->sensors, &f->sensorCount, &f->sensorCapacity, sizeof( b2fSensor ) );
-	*sensor = ( b2fSensor ){ shapeId, 0.0f, true };
+	*sensor = ( b2fSensor ){ shapeId, 0.0f, true, liquids };
 }
 
 // A sensor's outline, and the area of liquid in it
@@ -276,6 +283,7 @@ typedef struct b2fSensorShape
 	b2fOutline outline;
 	double area;
 	int sensor;
+	uint32_t liquids;
 } b2fSensorShape;
 
 static void GrowBounds( b2fOutline* s, b2WorldTransform t, b2Vec2 local, float radius )
@@ -355,7 +363,8 @@ bool b2fInsideOutline( const b2fOutline* s, b2Pos p )
 }
 
 // The area at rest of the liquid whose particles are inside each sensor near it. A particle is in a sensor when its
-// centre is inside the sensor's outline, tested only for particles inside its bounds.
+// centre is inside the sensor's outline, tested only for particles inside its bounds, and its liquid collides with the
+// sensor by their filters.
 static void MeasureSensors( b2fFluid* f )
 {
 	int count = 0;
@@ -380,7 +389,7 @@ static void MeasureSensors( b2fFluid* f )
 		}
 
 		b2fSensorShape* s = shapes + shapeCount;
-		*s = ( b2fSensorShape ){ .sensor = i };
+		*s = ( b2fSensorShape ){ .sensor = i, .liquids = f->sensors[i].liquids };
 		if ( b2fMakeOutline( f->sensors[i].id, &s->outline ) == false )
 		{
 			continue;
@@ -405,7 +414,7 @@ static void MeasureSensors( b2fFluid* f )
 		for ( int k = 0; k < shapeCount; ++k )
 		{
 			b2fSensorShape* s = shapes + k;
-			if ( b2fInsideOutline( &s->outline, p ) )
+			if ( ( s->liquids >> f->liquid[i] & 1u ) != 0 && b2fInsideOutline( &s->outline, p ) )
 			{
 				float size = pitch * f->size[i];
 				s->area += 0.8660254 * size * size;
