@@ -352,7 +352,12 @@ jobs:
         	b2FluidId fluid = b2CreateFluid( worldId, &fluidDef );
         	b2LiquidDef liquidDef = b2DefaultLiquidDef();
         	b2LiquidId liquid = b2CreateLiquid( fluid, &liquidDef );
-        	b2Liquid_CreateParticlesInBox( liquid, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 1.0f, 1.0f } );
+        	b2Liquid_SpawnBox( liquid, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 1.0f, 1.0f }, b2Vec2_zero );
+        	b2Liquid_SpawnCircle( liquid, ( b2Pos ){ 0.0f, 2.0f }, 0.3f, ( b2Vec2 ){ 1.0f, 0.0f } );
+        	b2EmitterDef emitterDef = b2DefaultEmitterDef();
+        	emitterDef.velocity = ( b2Vec2 ){ 0.0f, -1.0f };
+        	b2CreateEmitter( liquid, &emitterDef );
+        	b2Fluid_RemoveInBox( fluid, b2_nullLiquidId, ( b2Pos ){ -1.0f, 0.0f }, ( b2Pos ){ 0.0f, 0.5f } );
 
         	for ( int i = 0; i < 60; ++i )
         	{

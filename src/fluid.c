@@ -92,6 +92,7 @@ b2FluidDef b2DefaultFluidDef( void )
 	def.adaptiveDepth = 12.0f;
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;
+	def.maxCapacity = 1000000;
 	return def;
 }
 
@@ -190,7 +191,8 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	b2fFluid* f = calloc( 1, sizeof( b2fFluid ) );
 	f->worldId = worldId;
 	f->def = *def;
-	f->capacity = def->capacity;
+	f->capacity = def->capacity > 0 ? def->capacity : 0;
+	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
 	f->spacing = def->particleSpacing / B2F_REST_PITCH;
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
@@ -275,6 +277,190 @@ void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
 	f->def = *def;
 	f->def.particleSpacing = spacing;
 	f->def.capacity = capacity;
+	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
+}
+
+int b2Fluid_GetCapacity( b2FluidId fluidId )
+{
+	b2fFluid* f = b2fGetFluid( fluidId );
+	return f->capacity;
+}
+
+// Resizes an array of count + 1 values to newCount + 1, zeroing the new part when the array started zeroed
+static void* Resize( void* array, int count, int newCount, size_t size, bool zero )
+{
+	char* p = realloc( array, ( (size_t)newCount + 1 ) * size );
+	B2_ASSERT( p != NULL );
+	if ( zero )
+	{
+		memset( p + ( (size_t)count + 1 ) * size, 0, (size_t)( newCount - count ) * size );
+	}
+	return p;
+}
+
+// Every per-particle array is carried at the new size with what it holds, and the new room is as b2CreateFluid
+// leaves it, so a fluid that grew is the same as one made that large. Nothing reads capacity in the passes, so the
+// liquid moves the same.
+bool b2fGrow( b2fFluid* f, int needed )
+{
+	if ( needed <= f->capacity )
+	{
+		return true;
+	}
+	if ( needed > f->maxCapacity )
+	{
+		return false;
+	}
+
+	int64_t grown = f->capacity > 0 ? f->capacity : 64;
+	while ( grown < needed )
+	{
+		grown *= 2;
+	}
+	int old = f->capacity, capacity = grown < f->maxCapacity ? (int)grown : f->maxCapacity;
+
+#define B2F_GROW_FIELD( type, name ) f->name = Resize( f->name, old, capacity, sizeof( type ), true );
+#define B2F_GROW_SORTED( type, name ) f->sorted.name = Resize( f->sorted.name, old, capacity, sizeof( type ), true );
+	B2F_PARTICLE_FIELDS( B2F_GROW_FIELD )
+	B2F_PARTICLE_FIELDS( B2F_GROW_SORTED )
+	B2F_WORK_FIELDS( B2F_GROW_FIELD )
+#undef B2F_GROW_FIELD
+#undef B2F_GROW_SORTED
+	f->contacts = Resize( f->contacts, old, capacity, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ), true );
+	f->pairs = Resize( f->pairs, old, capacity, B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ), false );
+	f->restSizes = Resize( f->restSizes, old, capacity, sizeof( float ), true );
+
+	// The spring arrays, made once some liquid has springs, and the id table, which is cleared before each use
+	if ( f->springs != NULL )
+	{
+		f->springs = Resize( f->springs, old, capacity, sizeof( b2fSprings ), true );
+		f->sortedSprings = Resize( f->sortedSprings, old, capacity, sizeof( b2fSprings ), true );
+		f->newIndex = Resize( f->newIndex, old, capacity, sizeof( int ), true );
+		size_t n = (size_t)capacity + 1, slots = 1;
+		while ( slots < 2 * n )
+		{
+			slots *= 2;
+		}
+		free( f->idMap );
+		f->idMap = malloc( slots * sizeof( b2fIdSlot ) );
+	}
+
+	f->capacity = capacity;
+	return true;
+}
+
+// Compaction keeps the order, so each cell's run of particles stays a run and the grid from the last sort holds with
+// its starts moved down. The size pass then still runs at the next step, which reads the grid, the cells and search
+// windows, and the densities of the last substep, so those go with each particle here.
+int b2fRemoveMarked( b2fFluid* f )
+{
+	int n = f->count, kept = 0;
+	bool keepGrid = f->gridValid && n > 0;
+	int* before = keepGrid ? malloc( ( (size_t)n + 1 ) * sizeof( int ) ) : NULL;
+	for ( int i = 0; i < n; ++i )
+	{
+		if ( keepGrid )
+		{
+			before[i] = kept;
+		}
+		if ( f->adaptUsed[i] )
+		{
+			continue;
+		}
+		if ( kept != i )
+		{
+			b2fCopyParticle( f, kept, i );
+			f->rho[kept] = f->rho[i];
+			f->cell[kept] = f->cell[i];
+			f->window[kept] = f->window[i];
+		}
+		kept += 1;
+	}
+
+	int removed = n - kept;
+	if ( removed > 0 )
+	{
+		for ( int i = kept; i < n; ++i )
+		{
+			b2fClearParticle( f, i );
+		}
+		f->count = kept;
+		f->restSizesStale = true;
+
+		if ( keepGrid )
+		{
+			before[n] = kept;
+			int entries = f->gridWidth * f->gridHeight + 2;
+			for ( int c = 0; c < entries; ++c )
+			{
+				f->cellStart[c] = before[f->cellStart[c]];
+			}
+		}
+	}
+	free( before );
+	return removed;
+}
+
+static bool WorldLocked( b2FluidId fluidId )
+{
+	b2World* world = b2GetWorld( fluidId.world0 );
+	B2_ASSERT( world->locked == false );
+	return world->locked;
+}
+
+// The liquid to remove from, or -1 for every liquid
+static int RemovalLiquid( b2fFluid* f, b2LiquidId liquidId )
+{
+	if ( B2_IS_NULL( liquidId ) )
+	{
+		return -1;
+	}
+	b2fFluid* other;
+	int liquid = b2fGetLiquid( liquidId, &other );
+	B2_ASSERT( other == f );
+	(void)f;
+	return liquid;
+}
+
+int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper )
+{
+	b2fFluid* f = b2fGetFluid( fluidId );
+	if ( WorldLocked( fluidId ) )
+	{
+		return 0;
+	}
+
+	int liquid = RemovalLiquid( f, liquidId );
+	for ( int i = 0; i < f->count; ++i )
+	{
+		b2Pos p = f->pos[i];
+		bool inside = p.x >= lower.x && p.x <= upper.x && p.y >= lower.y && p.y <= upper.y;
+		f->adaptUsed[i] = inside && ( liquid < 0 || f->liquid[i] == liquid ) ? 1 : 0;
+	}
+	return b2fRemoveMarked( f );
+}
+
+int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId )
+{
+	b2fFluid* f = b2fGetFluid( fluidId );
+	if ( WorldLocked( fluidId ) )
+	{
+		return 0;
+	}
+
+	int liquid = RemovalLiquid( f, liquidId );
+	b2fOutline outline;
+	if ( b2fMakeOutline( shapeId, &outline ) == false )
+	{
+		return 0;
+	}
+
+	for ( int i = 0; i < f->count; ++i )
+	{
+		bool inside = ( liquid < 0 || f->liquid[i] == liquid ) && b2fInsideOutline( &outline, f->pos[i] );
+		f->adaptUsed[i] = inside ? 1 : 0;
+	}
+	return b2fRemoveMarked( f );
 }
 
 // A liquid id carries a count that changes with the world in the slot, the fluid the world has, and each liquid
@@ -359,26 +545,12 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 		return;
 	}
 
-	// Springs only join particles of one liquid, so none is left holding a partner that has gone
-	int kept = 0;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		if ( f->liquid[i] != index )
-		{
-			if ( kept != i )
-			{
-				b2fCopyParticle( f, kept, i );
-			}
-			kept += 1;
-		}
+		f->adaptUsed[i] = f->liquid[i] == index ? 1 : 0;
 	}
-	for ( int i = kept; i < f->count; ++i )
-	{
-		b2fClearParticle( f, i );
-	}
-	f->count = kept;
-	f->gridValid = false;
-	f->restSizesStale = true;
+	b2fRemoveMarked( f );
+	b2fDestroyEmitters( f, index );
 
 	f->liquids[index].alive = false;
 	f->liquids[index].generation += 1;
@@ -480,12 +652,14 @@ b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId )
 	return f->profile;
 }
 
-void b2PrepareFluid( b2fFluid* f )
+void b2PrepareFluid( b2fFluid* f, float timeStep )
 {
 	uint64_t ticks = b2GetTicks();
 
 	// This reads where shapes and bodies were last substep, so it has to come before they are gathered again
 	b2fAdaptSizes( f );
+	// After the sizes, which need every particle to have a grid cell from the last sort, as new ones have not
+	b2fStepEmitters( f, timeStep );
 	f->restSizesStale = true;
 	b2fGatherShapes( f );
 

@@ -489,7 +489,8 @@ void b2fAdaptSizes( b2fFluid* f )
 		float mass = fineMass * s * s;
 		int children = (int)ceilf( mass / f->adaptTarget[i] );
 		children = children < B2F_MAX_CHILDREN ? children : B2F_MAX_CHILDREN;
-		if ( children < 2 || f->count + children - 1 > f->capacity )
+		// This runs between steps, so the fluid can grow here; it stays whole only at maxCapacity
+		if ( children < 2 || b2fGrow( f, f->count + children - 1 ) == false )
 		{
 			continue;
 		}
