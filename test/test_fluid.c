@@ -954,6 +954,96 @@ static b2FluidId PoolOfTwo( b2WorldId worldId, bool apart, b2LiquidId* liquids )
 	return fluidId;
 }
 
+// The final state of a scene that uses every filter at once, run with some number of workers: water and oil with
+// adaptive sizes that pass through each other, and honey that pushes on both, so the several-liquid passes and three
+// sets of depth boxes run; a shelf the oil passes through above the floor; and a crate the water passes through,
+// dropped into the liquid. Particles 0.05 apart make 889 at the start and 937 after a second, so each pass that reads
+// neighbours (512 particles a block at the least) is split in two. Returns the particle count and copies of positions
+// and velocities, which the caller frees.
+typedef struct FilterRun
+{
+	int count;
+	b2Pos* positions;
+	float *velocitiesX, *velocitiesY;
+	b2Pos crate;
+	b2Rot crateRotation;
+} FilterRun;
+
+static FilterRun RunFilterScene( int workerCount, int frames )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.workerCount = workerCount;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon floor = b2MakeOffsetBox( 1.7f, 0.1f, ( b2Vec2 ){ 0.0f, -0.1f }, b2Rot_identity );
+	b2Polygon left = b2MakeOffsetBox( 0.1f, 1.5f, ( b2Vec2 ){ -1.6f, 1.5f }, b2Rot_identity );
+	b2Polygon right = b2MakeOffsetBox( 0.1f, 1.5f, ( b2Vec2 ){ 1.6f, 1.5f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &floor );
+	b2CreatePolygonShape( groundId, &shapeDef, &left );
+	b2CreatePolygonShape( groundId, &shapeDef, &right );
+	b2ShapeDef shelfDef = b2DefaultShapeDef();
+	shelfDef.filter.categoryBits = 0x10;
+	shelfDef.filter.maskBits = ~(uint64_t)0x4;
+	b2Polygon shelf = b2MakeOffsetBox( 1.5f, 0.05f, ( b2Vec2 ){ 0.0f, 0.8f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shelfDef, &shelf );
+
+	b2BodyDef crateDef = b2DefaultBodyDef();
+	crateDef.type = b2_dynamicBody;
+	crateDef.position = ( b2Pos ){ 0.7f, 1.9f };
+	crateDef.linearVelocity = ( b2Vec2 ){ -1.0f, -2.0f };
+	b2BodyId crateId = b2CreateBody( worldId, &crateDef );
+	b2ShapeDef crateShape = b2DefaultShapeDef();
+	crateShape.density = 0.5f;
+	crateShape.filter.maskBits = ~(uint64_t)( 0x2 | 0x10 );
+	b2Polygon crateBox = b2MakeBox( 0.15f, 0.15f );
+	b2CreatePolygonShape( crateId, &crateShape, &crateBox );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.particleSpacing = 0.05f;
+	def.capacity = 4000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef(), oil = b2MakeOilDef(), honey = b2MakeHoneyDef();
+	water.categoryBits = 0x2;
+	water.maskBits = ~(uint64_t)0x4;
+	oil.categoryBits = 0x4;
+	oil.maskBits = ~(uint64_t)0x2;
+	honey.categoryBits = 0x8;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2LiquidId oilId = b2CreateLiquid( fluidId, &oil );
+	b2LiquidId honeyId = b2CreateLiquid( fluidId, &honey );
+	b2Liquid_SpawnBox( honeyId, ( b2Pos ){ -1.45f, 0.05f }, ( b2Pos ){ 1.45f, 0.35f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.45f, 0.9f }, ( b2Pos ){ 0.0f, 1.5f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( oilId, ( b2Pos ){ -1.4f, 0.95f }, ( b2Pos ){ 0.3f, 1.45f }, b2Vec2_zero );
+
+	for ( int frame = 0; frame < frames; ++frame )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	FilterRun run = { 0 };
+	run.count = particles.count;
+	run.positions = malloc( (size_t)run.count * sizeof( b2Pos ) );
+	run.velocitiesX = malloc( (size_t)run.count * sizeof( float ) );
+	run.velocitiesY = malloc( (size_t)run.count * sizeof( float ) );
+	memcpy( run.positions, particles.positions, (size_t)run.count * sizeof( b2Pos ) );
+	memcpy( run.velocitiesX, particles.velocitiesX, (size_t)run.count * sizeof( float ) );
+	memcpy( run.velocitiesY, particles.velocitiesY, (size_t)run.count * sizeof( float ) );
+	run.crate = b2Body_GetPosition( crateId );
+	run.crateRotation = b2Body_GetRotation( crateId );
+	b2DestroyWorld( worldId );
+	return run;
+}
+
+static void FreeFilterRun( FilterRun* run )
+{
+	free( run->positions );
+	free( run->velocitiesX );
+	free( run->velocitiesY );
+}
+
 // What the liquid collides with: a grate it falls through, a crate it ignores and then lifts, two liquids that pass
 // through each other, a sensor that counts one of them, and an explosion that throws only one
 static int FluidFilter( void )
@@ -1097,6 +1187,17 @@ static int FluidFilter( void )
 	// The liquid alone would stand 0.3 deep
 	ENSURE( tops[1] < 0.42f );
 	ENSURE( tops[0] > 0.52f );
+
+	// With every filter in use, one worker and four give the same liquid and crate, bit for bit
+	FilterRun one = RunFilterScene( 1, 60 ), four = RunFilterScene( 4, 60 );
+	ENSURE( one.count == four.count );
+	ENSURE( memcmp( one.positions, four.positions, (size_t)one.count * sizeof( b2Pos ) ) == 0 );
+	ENSURE( memcmp( one.velocitiesX, four.velocitiesX, (size_t)one.count * sizeof( float ) ) == 0 );
+	ENSURE( memcmp( one.velocitiesY, four.velocitiesY, (size_t)one.count * sizeof( float ) ) == 0 );
+	ENSURE( memcmp( &one.crate, &four.crate, sizeof( b2Pos ) ) == 0 );
+	ENSURE( memcmp( &one.crateRotation, &four.crateRotation, sizeof( b2Rot ) ) == 0 );
+	FreeFilterRun( &one );
+	FreeFilterRun( &four );
 	return 0;
 }
 
