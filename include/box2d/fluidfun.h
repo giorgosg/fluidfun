@@ -228,6 +228,45 @@ B2_API int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lo
 /// caller empties each step. A circle, capsule or polygon; segments and chains have no inside and remove nothing.
 B2_API int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId );
 
+/// Pushing the liquid. These change the velocity of the particles whose centres are inside a region, of one liquid,
+/// or of every liquid if liquidId is null, and return how many they changed. They act once, between steps, and the
+/// next step moves the particles from their new velocities; there is no lasting force, so a fan or a current is a
+/// call the caller makes before every step. They push particles only, not bodies: a fan blowing liquid at a crate
+/// moves the crate only through the liquid that reaches it. Call between steps.
+///
+/// Add a velocity to every particle in a box, edges included. Called once it is an impulse; called every step with
+/// an acceleration times the step's time it is a steady force, such as wind.
+B2_API int b2Fluid_AccelerateInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocityChange );
+
+/// The same inside the outline of a Box2D shape where it is now, which may be a sensor: a fan or a current is a sensor
+/// shape the caller pushes the liquid in each step. A circle, capsule or polygon; segments and chains have no inside
+/// and change nothing.
+B2_API int b2Fluid_AccelerateInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocityChange );
+
+/// Move the velocity of every particle in a box toward a velocity, by a share from 0, no change, to 1, which sets it.
+/// A share below 1 called every step is a drag toward that velocity: a current, or still air. The share is per call,
+/// so the same share at a different step time drags at a different rate.
+B2_API int b2Fluid_BlendVelocityInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocity, float share );
+
+/// The same inside the outline of a shape
+B2_API int b2Fluid_BlendVelocityInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocity, float share );
+
+/// Throw the liquid away from a point, as an explosion throws bodies. b2World_Explode calls this for the world's fluid,
+/// so an explosion throws liquid and bodies with one call; call this to throw only the liquid. Each particle is pushed
+/// as Box2D pushes a shape as wide as the particle's size s: away from the centre, with impulsePerLength times s at
+/// full strength within radius, fading in a line to nothing over falloff, past which nothing is pushed. Its mass is
+/// 0.866 s^2 times its liquid's density, so its change of speed is impulsePerLength over 0.866 s density at full
+/// strength: 14 m/s for water with particles 0.08 apart and an impulsePerLength of 1.
+///
+/// Liquid casts no shadow, as bodies cast none in Box2D, so particles deep in a pool get the same push as those facing
+/// the blast. A pool in reach therefore takes impulsePerLength times its area over 0.866 s, where a body of its size
+/// takes impulsePerLength times its width. The solver moves no particle more than 0.89 particleSpacing a substep,
+/// about 17 m/s at 60 Hz and 4 substeps with particles 0.08 apart, so a larger push throws the liquid at that speed and
+/// the rest of it is lost. Liquid that fast can pass through walls thinner than one such move, as any liquid that fast
+/// can. Every liquid is thrown whatever maskBits says, since liquids have no categories yet. Returns how many
+/// particles it pushed. Call between steps.
+B2_API int b2Fluid_Explode( b2FluidId fluidId, const b2ExplosionDef* def );
+
 /// The most emitters one fluid can hold
 #define B2_MAX_EMITTERS 32
 

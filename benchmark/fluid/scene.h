@@ -96,6 +96,9 @@ typedef struct LabScene
 	b2EmitterId emitter;
 	b2ShapeId drain;
 	int drained;
+
+	// A sensor the scene blows the liquid along in each step, as a fan would
+	b2ShapeId fan;
 } LabScene;
 
 LabScene LabDefaultScene( LabSceneType type );
