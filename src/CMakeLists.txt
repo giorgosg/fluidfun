@@ -83,6 +83,7 @@ set(FLUIDFUN_SOURCE_FILES
 	fluid_adapt.c
 	fluid_boundary.c
 	fluid_grid.c
+	fluid_push.c
 	fluid_solver.c
 	fluid_spawn.c
 	fluid_state.c

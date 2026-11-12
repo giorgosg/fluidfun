@@ -400,7 +400,9 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 
 #define FOR_NEIGHBOURS( f, i, j ) FOR_NEIGHBOURS_WITHIN( f, i, j, f->uniformWindow > 0 ? f->uniformWindow : f->window[i] )
 
-// A shape's outline where it is now, and its bounds in the world, for testing whether particle centres are inside it
+// A shape's outline where it is now, and its bounds in the world, for testing whether particle centres are inside it.
+// The calls that pick particles in a region use it for boxes and circles too: a box has the type b2_shapeTypeCount
+// and is its bounds alone.
 typedef struct b2fOutline
 {
 	b2WorldTransform transform;
@@ -421,6 +423,13 @@ bool b2fGrow( b2fFluid* f, int needed );
 int b2fRemoveMarked( b2fFluid* f );
 // The liquid's index in its fluid
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
+// For the calls that act between steps: asserts the world is not locked, and returns whether it is
+bool b2fWorldLocked( b2FluidId fluidId );
+// The liquid a call that picks particles acts on, or -1 for every liquid when the id is null
+int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId );
+// Marks in adaptUsed the particles of that liquid, or of every liquid for -1, whose centres are inside the outline,
+// and clears the mark on the rest. Returns how many it marked. Between steps only, as adaptUsed is the size pass's.
+int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline );
 // The id of the liquid in a slot
 b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index );
 
@@ -450,6 +459,9 @@ void b2fDestroyEmitters( b2fFluid* f, int liquid );
 // state.c
 // Returns false for shapes with no inside, segments and chains
 bool b2fMakeOutline( b2ShapeId shapeId, b2fOutline* outline );
+// A box between two corners, and a circle
+b2fOutline b2fMakeBoxOutline( b2Pos lower, b2Pos upper );
+b2fOutline b2fMakeCircleOutline( b2Pos center, float radius );
 bool b2fInsideOutline( const b2fOutline* outline, b2Pos p );
 void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId );
 void b2fFinishStep( b2fFluid* f );

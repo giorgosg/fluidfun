@@ -401,15 +401,14 @@ int b2fRemoveMarked( b2fFluid* f )
 	return removed;
 }
 
-static bool WorldLocked( b2FluidId fluidId )
+bool b2fWorldLocked( b2FluidId fluidId )
 {
 	b2World* world = b2GetWorld( fluidId.world0 );
 	B2_ASSERT( world->locked == false );
 	return world->locked;
 }
 
-// The liquid to remove from, or -1 for every liquid
-static int RemovalLiquid( b2fFluid* f, b2LiquidId liquidId )
+int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId )
 {
 	if ( B2_IS_NULL( liquidId ) )
 	{
@@ -422,44 +421,47 @@ static int RemovalLiquid( b2fFluid* f, b2LiquidId liquidId )
 	return liquid;
 }
 
+int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline )
+{
+	int marked = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		bool inside = ( liquid < 0 || f->liquid[i] == liquid ) && b2fInsideOutline( outline, f->pos[i] );
+		f->adaptUsed[i] = inside ? 1 : 0;
+		marked += inside ? 1 : 0;
+	}
+	return marked;
+}
+
 int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( WorldLocked( fluidId ) )
+	if ( b2fWorldLocked( fluidId ) )
 	{
 		return 0;
 	}
 
-	int liquid = RemovalLiquid( f, liquidId );
-	for ( int i = 0; i < f->count; ++i )
-	{
-		b2Pos p = f->pos[i];
-		bool inside = p.x >= lower.x && p.x <= upper.x && p.y >= lower.y && p.y <= upper.y;
-		f->adaptUsed[i] = inside && ( liquid < 0 || f->liquid[i] == liquid ) ? 1 : 0;
-	}
+	b2fOutline box = b2fMakeBoxOutline( lower, upper );
+	b2fMarkInside( f, b2fPickLiquid( f, liquidId ), &box );
 	return b2fRemoveMarked( f );
 }
 
 int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( WorldLocked( fluidId ) )
+	if ( b2fWorldLocked( fluidId ) )
 	{
 		return 0;
 	}
 
-	int liquid = RemovalLiquid( f, liquidId );
+	int liquid = b2fPickLiquid( f, liquidId );
 	b2fOutline outline;
 	if ( b2fMakeOutline( shapeId, &outline ) == false )
 	{
 		return 0;
 	}
 
-	for ( int i = 0; i < f->count; ++i )
-	{
-		bool inside = ( liquid < 0 || f->liquid[i] == liquid ) && b2fInsideOutline( &outline, f->pos[i] );
-		f->adaptUsed[i] = inside ? 1 : 0;
-	}
+	b2fMarkInside( f, liquid, &outline );
 	return b2fRemoveMarked( f );
 }
 

@@ -17,5 +17,8 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCou
 // the liquid in sensors
 void b2FinishFluid( struct b2fFluid* fluid );
 
+// Throws the liquid as b2World_Explode throws bodies, between steps. Returns how many particles it pushed.
+int b2fExplode( struct b2fFluid* fluid, const b2ExplosionDef* def );
+
 // Frees a fluid the world is done with
 void b2FreeFluid( struct b2fFluid* fluid );

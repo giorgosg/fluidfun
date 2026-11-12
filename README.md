@@ -18,6 +18,8 @@ fluidfun is not part of Box2D and is not made by its author.
   float on heavy ones.
 - **Asking the liquid**: whether a body is in liquid, how much of it is under, and how hard the liquid pushes it;
   events when bodies and sensor shapes gain or lose liquid; how much liquid is in a box, and where its surface is.
+- **Pushing the liquid**: a change of velocity, or a blend toward one, in a box or a shape, for wind, fans and
+  currents, and `b2World_Explode` throws liquid as well as bodies.
 - **Deterministic**: the same scene gives the same result bit for bit at any worker count.
 - **Large worlds**: particle positions are `b2Pos`, so they are doubles when Box2D is built with
   `BOX2D_DOUBLE_PRECISION`.
@@ -27,7 +29,8 @@ fluidfun is not part of Box2D and is not made by its author.
 Besides the liquid code (`src/fluid*.c`, `include/box2d/fluidfun.h`), the fork changes Box2D in two ways.
 
 The world owns its fluid: `b2World_Step` prepares it before the step, runs it at the end of every solver sub-step and
-has it work out body states and events after the step, and `b2DestroyWorld` frees it. A fluid is named by a `b2FluidId`, as bodies and shapes are by theirs.
+has it work out body states and events after the step, and `b2DestroyWorld` frees it. `b2World_Explode` throws the
+world's liquid as well as its bodies. A fluid is named by a `b2FluidId`, as bodies and shapes are by theirs.
 
 There is also a callback that runs at the end of every solver sub-step, after the fluid, with access to the step's
 workers and to body motion. The fluid is built on the same three `b2SubStep_` functions.
@@ -91,8 +94,10 @@ tap.point2 = (b2Pos){ 0.5f, 6.0f };
 tap.velocity = (b2Vec2){ 0.0f, -2.0f };
 b2EmitterId tapId = b2CreateEmitter( waterId, &tap );
 
-// Each frame. A drain is a sensor shape emptied between steps; then the world steps its fluid with the bodies.
+// Each frame. A drain is a sensor shape emptied between steps, and a fan one whose liquid is pushed along at
+// 5 m/s^2; then the world steps its fluid with the bodies.
 b2Fluid_RemoveInShape( fluid, b2_nullLiquidId, drainShapeId );
+b2Fluid_AccelerateInShape( fluid, b2_nullLiquidId, fanShapeId, (b2Vec2){ 5.0f / 60.0f, 0.0f } );
 b2World_Step( worldId, 1.0f / 60.0f, 4 );
 
 // What the fluid gives back is good until the next step or change to the fluid. Particles change order every step;

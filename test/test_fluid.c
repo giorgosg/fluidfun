@@ -634,11 +634,232 @@ static int FluidSpawnAndRemove( void )
 	return 0;
 }
 
+// Each particle's velocity, by id, in an array as long as the count; ids start at zero and none is removed here
+static void VelocitiesById( b2FluidId fluidId, b2Vec2* velocities )
+{
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		velocities[particles.ids[i]] = ( b2Vec2 ){ particles.velocitiesX[i], particles.velocitiesY[i] };
+	}
+}
+
+static b2Vec2 TotalVelocity( b2FluidId fluidId )
+{
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	b2Vec2 sum = b2Vec2_zero;
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		sum = b2Add( sum, ( b2Vec2 ){ particles.velocitiesX[i], particles.velocitiesY[i] } );
+	}
+	return sum;
+}
+
+// Changing velocity in a box or a shape, blending it toward a velocity, and explosions, in a world without gravity
+static int FluidPush( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 1000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+
+	// Uniform sizes, so every particle has the same mass and the total velocity stands for momentum
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	int count = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.0f, -0.5f }, ( b2Pos ){ 1.0f, 0.5f }, b2Vec2_zero );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == count );
+
+	b2Vec2* before = malloc( (size_t)count * sizeof( b2Vec2 ) );
+	b2Vec2* after = malloc( (size_t)count * sizeof( b2Vec2 ) );
+	bool* inside = malloc( (size_t)count * sizeof( bool ) );
+
+	// The right of the blob, with one edge through it, which no particle is on
+	float left = 0.0123f, right = 2.0f, bottom = -2.0f, top = 2.0f;
+	b2Pos lower = { left, bottom }, upper = { right, top };
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	int inBox = 0;
+	for ( int i = 0; i < count; ++i )
+	{
+		b2Pos p = particles.positions[i];
+		ENSURE( fabsf( (float)p.x - left ) > 1e-4f );
+		inside[particles.ids[i]] = p.x >= left;
+		inBox += p.x >= left ? 1 : 0;
+	}
+	ENSURE( 0 < inBox && inBox < count );
+
+	// Exactly the particles inside change, by exactly the change
+	b2Vec2 change = { 0.5f, 0.25f };
+	VelocitiesById( fluidId, before );
+	ENSURE( b2Fluid_AccelerateInBox( fluidId, b2_nullLiquidId, lower, upper, change ) == inBox );
+	VelocitiesById( fluidId, after );
+	for ( int id = 0; id < count; ++id )
+	{
+		b2Vec2 expected = inside[id] ? b2Add( before[id], change ) : before[id];
+		ENSURE( after[id].x == expected.x && after[id].y == expected.y );
+	}
+
+	// A sensor box over the same region takes the same particles: taking the change off again leaves the velocities
+	// as they were, to rounding
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef sensorDef = b2DefaultShapeDef();
+	sensorDef.isSensor = true;
+	b2Polygon region = b2MakeOffsetBox( 0.5f * ( right - left ), 0.5f * ( top - bottom ),
+										( b2Vec2 ){ 0.5f * ( left + right ), 0.5f * ( bottom + top ) }, b2Rot_identity );
+	b2ShapeId regionId = b2CreatePolygonShape( groundId, &sensorDef, &region );
+	ENSURE( b2Fluid_AccelerateInShape( fluidId, b2_nullLiquidId, regionId, b2Neg( change ) ) == inBox );
+	VelocitiesById( fluidId, after );
+	for ( int id = 0; id < count; ++id )
+	{
+		ENSURE( b2Distance( after[id], before[id] ) < 1e-6f );
+	}
+
+	// Naming a liquid picks only its particles
+	b2LiquidDef oil = b2MakeOilDef();
+	b2LiquidId oilId = b2CreateLiquid( fluidId, &oil );
+	ENSURE( b2Fluid_AccelerateInBox( fluidId, oilId, lower, upper, change ) == 0 );
+	ENSURE( b2Fluid_AccelerateInBox( fluidId, waterId, lower, upper, b2Vec2_zero ) == inBox );
+	b2DestroyLiquid( oilId );
+
+	// A share of 1 sets the velocity, and a half halves the difference
+	b2Vec2 target = { 1.0f, 0.0f };
+	VelocitiesById( fluidId, before );
+	ENSURE( b2Fluid_BlendVelocityInBox( fluidId, b2_nullLiquidId, lower, upper, ( b2Vec2 ){ 0.0f, 2.0f }, 0.5f ) == inBox );
+	VelocitiesById( fluidId, after );
+	for ( int id = 0; id < count; ++id )
+	{
+		b2Vec2 expected = inside[id] ? b2Lerp( before[id], ( b2Vec2 ){ 0.0f, 2.0f }, 0.5f ) : before[id];
+		ENSURE( b2Distance( after[id], expected ) < 1e-6f );
+	}
+	ENSURE( b2Fluid_BlendVelocityInShape( fluidId, b2_nullLiquidId, regionId, target, 1.0f ) == inBox );
+	VelocitiesById( fluidId, after );
+	for ( int id = 0; id < count; ++id )
+	{
+		ENSURE( inside[id] == false || ( after[id].x == target.x && after[id].y == target.y ) );
+	}
+
+	// The next step moves them the way they were pushed
+	b2Pos* start = malloc( (size_t)count * sizeof( b2Pos ) );
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		start[particles.ids[i]] = particles.positions[i];
+	}
+	float timeStep = 1.0f / 60.0f, pushedMove = 0.0f, otherMove = 0.0f;
+	b2World_Step( worldId, timeStep, 4 );
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		float dx = (float)( particles.positions[i].x - start[particles.ids[i]].x );
+		pushedMove += inside[particles.ids[i]] ? dx : 0.0f;
+		otherMove += inside[particles.ids[i]] ? 0.0f : dx;
+	}
+	ENSURE( pushedMove / (float)inBox > 0.5f * target.x * timeStep );
+	ENSURE( fabsf( otherMove / (float)( count - inBox ) ) < 0.5f * pushedMove / (float)inBox );
+
+	// Momentum given to the blob is kept as the liquid works it through, to a few percent
+	b2Fluid_BlendVelocityInBox( fluidId, b2_nullLiquidId, ( b2Pos ){ -2.0f, -2.0f }, ( b2Pos ){ 2.0f, 2.0f }, b2Vec2_zero, 1.0f );
+	ENSURE( b2Length( TotalVelocity( fluidId ) ) == 0.0f );
+	b2Fluid_AccelerateInBox( fluidId, b2_nullLiquidId, ( b2Pos ){ -2.0f, -2.0f }, ( b2Pos ){ 0.0f, 2.0f }, ( b2Vec2 ){ 1.0f, 0.0f } );
+	b2Vec2 given = TotalVelocity( fluidId );
+	ENSURE( given.x > 0.25f * (float)count );
+	for ( int i = 0; i < 10; ++i )
+	{
+		b2World_Step( worldId, timeStep, 4 );
+	}
+	b2Vec2 kept = TotalVelocity( fluidId );
+	ENSURE( fabsf( kept.x - given.x ) < 0.03f * given.x && fabsf( kept.y ) < 0.03f * given.x );
+	free( start );
+	free( before );
+	free( after );
+	free( inside );
+
+	// An explosion in the middle of a still blob throws particles out from the centre, by impulsePerLength over
+	// 0.866 s density within the radius, less through the falloff, and none past it. A new fluid, so ids start at
+	// zero again.
+	b2DestroyFluid( fluidId );
+	fluidId = b2CreateFluid( worldId, &def );
+	waterId = b2CreateLiquid( fluidId, &water );
+	count = b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.0f, 0.0f }, 0.6f, b2Vec2_zero );
+	before = malloc( (size_t)count * sizeof( b2Vec2 ) );
+	after = malloc( (size_t)count * sizeof( b2Vec2 ) );
+	b2ExplosionDef blast = b2DefaultExplosionDef();
+	blast.position = ( b2Pos ){ 0.01f, 0.02f };
+	blast.radius = 0.2f;
+	blast.falloff = 0.2f;
+	blast.impulsePerLength = 0.05f;
+	float reach = blast.radius + blast.falloff;
+	int expectedCount = 0;
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		expectedCount += b2Distance( b2ToVec2( particles.positions[i] ), b2ToVec2( blast.position ) ) < reach ? 1 : 0;
+	}
+	ENSURE( b2Fluid_Explode( fluidId, &blast ) == expectedCount );
+
+	float nearSpeed = 0.0f, farSpeed = 0.0f;
+	int nearCount = 0, farCount = 0;
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		b2Vec2 offset = b2Sub( b2ToVec2( particles.positions[i] ), b2ToVec2( blast.position ) );
+		b2Vec2 velocity = { particles.velocitiesX[i], particles.velocitiesY[i] };
+		float d = b2Length( offset ), s = particles.sizes[i];
+		float scale = d <= blast.radius ? 1.0f : b2MaxFloat( ( reach - d ) / blast.falloff, 0.0f );
+		float expected = blast.impulsePerLength * scale / ( 0.8660254f * s * water.density );
+		ENSURE( fabsf( b2Length( velocity ) - expected ) < 1e-3f * expected + 1e-6f );
+		ENSURE( d >= reach ? b2Length( velocity ) == 0.0f : b2Dot( velocity, offset ) > 0.999f * b2Length( velocity ) * d );
+		nearSpeed += d < blast.radius ? b2Length( velocity ) : 0.0f;
+		nearCount += d < blast.radius ? 1 : 0;
+		farSpeed += d > blast.radius && d < reach ? b2Length( velocity ) : 0.0f;
+		farCount += d > blast.radius && d < reach ? 1 : 0;
+	}
+	ENSURE( nearCount > 0 && farCount > 0 && nearSpeed / (float)nearCount > 1.5f * farSpeed / (float)farCount );
+
+	// b2World_Explode throws the liquid the same way, adding the same again
+	VelocitiesById( fluidId, before );
+	b2World_Explode( worldId, &blast );
+	VelocitiesById( fluidId, after );
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		int id = particles.ids[i];
+		float d = b2Distance( b2ToVec2( particles.positions[i] ), b2ToVec2( blast.position ) );
+		b2Vec2 expected = d < reach ? b2MulSV( 2.0f, before[id] ) : before[id];
+		ENSURE( b2Distance( after[id], expected ) < 1e-5f );
+	}
+
+	// And a step carries the particles out from the centre
+	float spread = 0.0f, spreadBefore = 0.0f;
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		spreadBefore += b2Distance( b2ToVec2( particles.positions[i] ), b2ToVec2( blast.position ) );
+	}
+	b2World_Step( worldId, timeStep, 4 );
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < count; ++i )
+	{
+		spread += b2Distance( b2ToVec2( particles.positions[i] ), b2ToVec2( blast.position ) );
+	}
+	ENSURE( spread > spreadBefore );
+
+	free( before );
+	free( after );
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
 	RUN_SUBTEST( FluidParticles );
 	RUN_SUBTEST( FluidState );
 	RUN_SUBTEST( FluidSpawnAndRemove );
+	RUN_SUBTEST( FluidPush );
 	return 0;
 }

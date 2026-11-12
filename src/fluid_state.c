@@ -318,12 +318,34 @@ bool b2fMakeOutline( b2ShapeId id, b2fOutline* s )
 	}
 }
 
-// Whether a point is inside the outline, testing the shape only for points inside its bounds
+b2fOutline b2fMakeBoxOutline( b2Pos lower, b2Pos upper )
+{
+	return ( b2fOutline ){ .type = b2_shapeTypeCount, .minX = lower.x, .minY = lower.y, .maxX = upper.x, .maxY = upper.y };
+}
+
+b2fOutline b2fMakeCircleOutline( b2Pos center, float radius )
+{
+	b2fOutline s = { .type = b2_circleShape, .circle = { { 0.0f, 0.0f }, radius } };
+	s.transform.p = center;
+	s.transform.q = b2Rot_identity;
+	s.minX = center.x - radius;
+	s.minY = center.y - radius;
+	s.maxX = center.x + radius;
+	s.maxY = center.y + radius;
+	return s;
+}
+
+// Whether a point is inside the outline, testing the shape only for points inside its bounds. A box is its bounds,
+// edges included.
 bool b2fInsideOutline( const b2fOutline* s, b2Pos p )
 {
 	if ( p.x < s->minX || p.x > s->maxX || p.y < s->minY || p.y > s->maxY )
 	{
 		return false;
+	}
+	if ( s->type == b2_shapeTypeCount )
+	{
+		return true;
 	}
 
 	b2Vec2 local = b2InvTransformWorldPoint( s->transform, p );

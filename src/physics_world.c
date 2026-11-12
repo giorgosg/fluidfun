@@ -3286,6 +3286,12 @@ void b2World_Explode( b2WorldId worldId, const b2ExplosionDef* explosionDef )
 	b2AABB aabb = b2OffsetAABB( localBox, position );
 
 	b2DynamicTree_OverlapAABB( world->broadPhase.trees + b2_dynamicBody, aabb, maskBits, ExplosionCallback, &explosionContext );
+
+	// The liquid is thrown too
+	if ( world->fluid != NULL )
+	{
+		b2fExplode( world->fluid, explosionDef );
+	}
 }
 
 // This is for internal testing. Not optimized.

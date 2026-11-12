@@ -924,8 +924,11 @@ static b2FluidId CreateJelly( b2WorldId worldId, LabScene* scene, const LabDef* 
 
 // A tap, which is an emitter, fills a basin, and a ball of liquid thrown in from the side lands in it. The basin
 // overflows into a pit whose floor is a sensor that the scene empties each step, so the liquid comes and goes with
-// no recycling.
+// no recycling. A fan across the falling stream, a sensor the scene pushes the liquid in each step, bends it toward
+// the low wall.
 #define LAB_BASIN_MOUTH 0.6f
+// The fan's push, in m/s^2
+#define LAB_BASIN_FAN 5.0f
 
 static b2FluidId CreateBasin( b2WorldId worldId, LabScene* scene, const LabDef* def )
 {
@@ -944,6 +947,8 @@ static b2FluidId CreateBasin( b2WorldId worldId, LabScene* scene, const LabDef* 
 	b2Polygon drain = b2MakeOffsetBox( 1.4f, 0.3f, (b2Vec2){ 2.6f, 0.3f }, b2Rot_identity );
 	scene->drain = b2CreatePolygonShape( ground, &sensorDef, &drain );
 	scene->drained = 0;
+	b2Polygon fan = b2MakeOffsetBox( 0.5f, 0.5f, (b2Vec2){ -0.5f, 3.5f }, b2Rot_identity );
+	scene->fan = b2CreatePolygonShape( ground, &sensorDef, &fan );
 
 	b2FluidId fluid = CreateFluid( worldId, scene, def );
 	b2EmitterDef tap = b2DefaultEmitterDef();
@@ -1155,6 +1160,7 @@ void LabStepScene( LabScene* scene, b2FluidId fluid, float timeStep )
 			tap.velocity = (b2Vec2){ 0.0f, -scene->control };
 			b2Emitter_SetDef( scene->emitter, &tap );
 			scene->drained += b2Fluid_RemoveInShape( fluid, b2_nullLiquidId, scene->drain );
+			b2Fluid_AccelerateInShape( fluid, b2_nullLiquidId, scene->fan, (b2Vec2){ LAB_BASIN_FAN * timeStep, 0.0f } );
 		}
 		break;
 
