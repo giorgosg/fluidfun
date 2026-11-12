@@ -129,7 +129,12 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 		return;
 	}
 
+	// With no bodies there is nothing to find, and no array yet to clear
 	int needed = f->bodyCount * B2F_MAX_LIQUIDS;
+	if ( needed == 0 )
+	{
+		return;
+	}
 	if ( needed > f->bodyLiquidCapacity )
 	{
 		f->bodyLiquidCapacity = needed;
@@ -265,26 +270,66 @@ void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId )
 	*sensor = ( b2fSensor ){ shapeId, 0.0f, true };
 }
 
-// A sensor's outline where it is now, and its bounds in the world
+// A sensor's outline, and the area of liquid in it
 typedef struct b2fSensorShape
 {
-	b2WorldTransform transform;
-	b2ShapeType type;
-	b2Polygon polygon;
-	b2Circle circle;
-	b2Capsule capsule;
-	b2fCoord minX, minY, maxX, maxY;
+	b2fOutline outline;
 	double area;
 	int sensor;
 } b2fSensorShape;
 
-static void GrowBounds( b2fSensorShape* s, b2WorldTransform t, b2Vec2 local, float radius )
+static void GrowBounds( b2fOutline* s, b2WorldTransform t, b2Vec2 local, float radius )
 {
 	b2Pos p = b2TransformWorldPoint( t, local );
 	s->minX = p.x - radius < s->minX ? p.x - radius : s->minX;
 	s->minY = p.y - radius < s->minY ? p.y - radius : s->minY;
 	s->maxX = p.x + radius > s->maxX ? p.x + radius : s->maxX;
 	s->maxY = p.y + radius > s->maxY ? p.y + radius : s->maxY;
+}
+
+bool b2fMakeOutline( b2ShapeId id, b2fOutline* s )
+{
+	*s = ( b2fOutline ){ .type = b2Shape_GetType( id ), .minX = FLT_MAX, .minY = FLT_MAX, .maxX = -FLT_MAX, .maxY = -FLT_MAX };
+	s->transform = b2Body_GetTransform( b2Shape_GetBody( id ) );
+	switch ( s->type )
+	{
+		case b2_circleShape:
+			s->circle = b2Shape_GetCircle( id );
+			GrowBounds( s, s->transform, s->circle.center, s->circle.radius );
+			return true;
+
+		case b2_capsuleShape:
+			s->capsule = b2Shape_GetCapsule( id );
+			GrowBounds( s, s->transform, s->capsule.center1, s->capsule.radius );
+			GrowBounds( s, s->transform, s->capsule.center2, s->capsule.radius );
+			return true;
+
+		case b2_polygonShape:
+			s->polygon = b2Shape_GetPolygon( id );
+			for ( int j = 0; j < s->polygon.count; ++j )
+			{
+				GrowBounds( s, s->transform, s->polygon.vertices[j], s->polygon.radius );
+			}
+			return true;
+
+		default:
+			// Segments have no inside
+			return false;
+	}
+}
+
+// Whether a point is inside the outline, testing the shape only for points inside its bounds
+bool b2fInsideOutline( const b2fOutline* s, b2Pos p )
+{
+	if ( p.x < s->minX || p.x > s->maxX || p.y < s->minY || p.y > s->maxY )
+	{
+		return false;
+	}
+
+	b2Vec2 local = b2InvTransformWorldPoint( s->transform, p );
+	return s->type == b2_circleShape	? b2PointInCircle( &s->circle, local )
+		   : s->type == b2_capsuleShape ? b2PointInCapsule( &s->capsule, local )
+										: b2PointInPolygon( &s->polygon, local );
 }
 
 // The area at rest of the liquid whose particles are inside each sensor near it. A particle is in a sensor when its
@@ -312,40 +357,17 @@ static void MeasureSensors( b2fFluid* f )
 			continue;
 		}
 
-		b2ShapeId id = f->sensors[i].id;
 		b2fSensorShape* s = shapes + shapeCount;
-		*s = ( b2fSensorShape ){ .type = b2Shape_GetType( id ), .minX = FLT_MAX, .minY = FLT_MAX, .maxX = -FLT_MAX, .maxY = -FLT_MAX, .sensor = i };
-		s->transform = b2Body_GetTransform( b2Shape_GetBody( id ) );
-		switch ( s->type )
+		*s = ( b2fSensorShape ){ .sensor = i };
+		if ( b2fMakeOutline( f->sensors[i].id, &s->outline ) == false )
 		{
-			case b2_circleShape:
-				s->circle = b2Shape_GetCircle( id );
-				GrowBounds( s, s->transform, s->circle.center, s->circle.radius );
-				break;
-
-			case b2_capsuleShape:
-				s->capsule = b2Shape_GetCapsule( id );
-				GrowBounds( s, s->transform, s->capsule.center1, s->capsule.radius );
-				GrowBounds( s, s->transform, s->capsule.center2, s->capsule.radius );
-				break;
-
-			case b2_polygonShape:
-				s->polygon = b2Shape_GetPolygon( id );
-				for ( int j = 0; j < s->polygon.count; ++j )
-				{
-					GrowBounds( s, s->transform, s->polygon.vertices[j], s->polygon.radius );
-				}
-				break;
-
-			default:
-				// Segments have no inside
-				continue;
+			continue;
 		}
 
-		minX = s->minX < minX ? s->minX : minX;
-		minY = s->minY < minY ? s->minY : minY;
-		maxX = s->maxX > maxX ? s->maxX : maxX;
-		maxY = s->maxY > maxY ? s->maxY : maxY;
+		minX = s->outline.minX < minX ? s->outline.minX : minX;
+		minY = s->outline.minY < minY ? s->outline.minY : minY;
+		maxX = s->outline.maxX > maxX ? s->outline.maxX : maxX;
+		maxY = s->outline.maxY > maxY ? s->outline.maxY : maxY;
 		shapeCount += 1;
 	}
 
@@ -361,16 +383,7 @@ static void MeasureSensors( b2fFluid* f )
 		for ( int k = 0; k < shapeCount; ++k )
 		{
 			b2fSensorShape* s = shapes + k;
-			if ( p.x < s->minX || p.x > s->maxX || p.y < s->minY || p.y > s->maxY )
-			{
-				continue;
-			}
-
-			b2Vec2 local = b2InvTransformWorldPoint( s->transform, p );
-			bool inside = s->type == b2_circleShape	   ? b2PointInCircle( &s->circle, local )
-						  : s->type == b2_capsuleShape ? b2PointInCapsule( &s->capsule, local )
-													   : b2PointInPolygon( &s->polygon, local );
-			if ( inside )
+			if ( b2fInsideOutline( &s->outline, p ) )
 			{
 				float size = pitch * f->size[i];
 				s->area += 0.8660254 * size * size;

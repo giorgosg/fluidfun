@@ -91,7 +91,7 @@ static b2FluidId CreateFluid( b2WorldId worldId, LabScene* scene, const LabDef* 
 static b2FluidId AddLiquid( b2WorldId worldId, LabScene* scene, const LabDef* def, b2Vec2 lower, b2Vec2 upper )
 {
 	b2FluidId fluid = CreateFluid( worldId, scene, def );
-	b2Liquid_CreateParticlesInBox( scene->liquids[0], b2ToPos( lower ), b2ToPos( upper ) );
+	b2Liquid_SpawnBox( scene->liquids[0], b2ToPos( lower ), b2ToPos( upper ), b2Vec2_zero );
 	return fluid;
 }
 
@@ -294,6 +294,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.name = "Jelly And Dough";
 			s.viewCenter = (b2Vec2){ 0.0f, 3.5f };
 			s.viewHalfWidth = 4.5f;
+			break;
+
+		case lab_basin:
+			s.name = "Overflowing Basin";
+			s.viewCenter = (b2Vec2){ 0.75f, 2.5f };
+			s.viewHalfWidth = 5.0f;
+			s.controlLabel = "Tap speed";
+			s.control = 2.5f;
+			s.controlMin = 0.0f;
+			s.controlMax = 6.0f;
 			break;
 
 		default:
@@ -520,7 +530,7 @@ static b2FluidId CreateWaves( b2WorldId worldId, LabScene* scene, const LabDef* 
 		float bottom = slope * ( x + column - toe ) + 2.0f * def->fluid.particleSpacing;
 		if ( bottom < depth )
 		{
-			b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ x, bottom }, (b2Pos){ x + column, depth } );
+			b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ x, bottom }, (b2Pos){ x + column, depth }, b2Vec2_zero );
 		}
 	}
 	return fluid;
@@ -540,7 +550,7 @@ static b2FluidId CreateSplash( b2WorldId worldId, LabScene* scene, const LabDef*
 	b2CreateCircleShape( scene->driven, &shapeDef, &ball );
 
 	b2FluidId fluid = AddLiquid( worldId, scene, def, (b2Vec2){ -9.9f, 0.05f }, (b2Vec2){ 9.9f, 3.0f } );
-	b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ -5.5f, 8.5f }, (b2Pos){ -2.5f, 11.5f } );
+	b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ -5.5f, 8.5f }, (b2Pos){ -2.5f, 11.5f }, b2Vec2_zero );
 	return fluid;
 }
 
@@ -609,9 +619,9 @@ static b2FluidId CreateLayers( b2WorldId worldId, LabScene* scene, const LabDef*
 	scene->liquids[1] = light;
 	b2LiquidId heavy = b2CreateLiquid( fluid, &syrup );
 	scene->liquids[2] = heavy;
-	b2Liquid_CreateParticlesInBox( light, (b2Pos){ -w + s, s }, (b2Pos){ w - s, layer } );
-	b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ -w + s, layer + s }, (b2Pos){ w - s, 2.0f * layer } );
-	b2Liquid_CreateParticlesInBox( heavy, (b2Pos){ -w + s, 2.0f * layer + s }, (b2Pos){ w - s, 3.0f * layer } );
+	b2Liquid_SpawnBox( light, (b2Pos){ -w + s, s }, (b2Pos){ w - s, layer }, b2Vec2_zero );
+	b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ -w + s, layer + s }, (b2Pos){ w - s, 2.0f * layer }, b2Vec2_zero );
+	b2Liquid_SpawnBox( heavy, (b2Pos){ -w + s, 2.0f * layer + s }, (b2Pos){ w - s, 3.0f * layer }, b2Vec2_zero );
 	return fluid;
 }
 
@@ -701,7 +711,7 @@ static b2FluidId CreateTap( b2WorldId worldId, LabScene* scene, const LabDef* de
 
 	b2FluidId fluid = AddLiquid( worldId, scene, def, (b2Vec2){ -3.9f, 0.05f }, (b2Vec2){ 3.9f, LAB_TAP_BASIN } );
 	scene->keep = BasinArea( fluid );
-	b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ -1.9f, floor + 0.15f }, (b2Pos){ 1.9f, floor + 1.5f } );
+	b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ -1.9f, floor + 0.15f }, (b2Pos){ 1.9f, floor + 1.5f }, b2Vec2_zero );
 	return fluid;
 }
 
@@ -715,7 +725,7 @@ static void AddLane( b2LiquidId liquid, b2BodyId ground, float x0 )
 	AddBox( ground, x0 - 0.2f, 0.5f * ( top + 3.0f ), 0.2f, 0.5f * ( top + 3.0f ), 0.0f, 0.0f );
 	AddBox( ground, x0 + 1.0f, top, 1.0f, 0.2f, 0.0f, 0.0f );
 	AddPlank( ground, (b2Vec2){ x0 + 1.9f, top + 0.05f }, (b2Vec2){ x0 + 10.0f, -0.1f }, 0.2f );
-	b2Liquid_CreateParticlesInBox( liquid, (b2Pos){ x0 + 0.05f, top + 0.25f }, (b2Pos){ x0 + 1.95f, top + 1.7f } );
+	b2Liquid_SpawnBox( liquid, (b2Pos){ x0 + 0.05f, top + 0.25f }, (b2Pos){ x0 + 1.95f, top + 1.7f }, b2Vec2_zero );
 }
 
 // Water and honey run down two lanes from the same start. The Honey viscosity slider changes the honey as it runs.
@@ -768,9 +778,9 @@ static b2FluidId CreateLava( b2WorldId worldId, LabScene* scene, const LabDef* d
 	scene->liquids[2] = sinking;
 	scene->keep = def->liquid.density;
 
-	b2Liquid_CreateParticlesInBox( rising, (b2Pos){ -w + s, s }, (b2Pos){ w - s, 0.8f } );
-	b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ -w + s, 0.8f + s }, (b2Pos){ w - s, h - 1.2f } );
-	b2Liquid_CreateParticlesInBox( sinking, (b2Pos){ -w + s, h - 1.2f + s }, (b2Pos){ w - s, h - 0.4f } );
+	b2Liquid_SpawnBox( rising, (b2Pos){ -w + s, s }, (b2Pos){ w - s, 0.8f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ -w + s, 0.8f + s }, (b2Pos){ w - s, h - 1.2f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( sinking, (b2Pos){ -w + s, h - 1.2f + s }, (b2Pos){ w - s, h - 0.4f }, b2Vec2_zero );
 	return fluid;
 }
 
@@ -798,8 +808,8 @@ static b2FluidId CreateSpace( b2WorldId worldId, LabScene* scene, const LabDef* 
 	for ( int i = 0; i < LAB_SPACE_DROPS; ++i )
 	{
 		b2Vec2 c = SpaceDrop( i );
-		b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ c.x - LAB_SPACE_HALF, c.y - LAB_SPACE_HALF },
-									   (b2Pos){ c.x + LAB_SPACE_HALF, c.y + LAB_SPACE_HALF } );
+		b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ c.x - LAB_SPACE_HALF, c.y - LAB_SPACE_HALF },
+						   (b2Pos){ c.x + LAB_SPACE_HALF, c.y + LAB_SPACE_HALF }, b2Vec2_zero );
 	}
 	return fluid;
 }
@@ -819,7 +829,7 @@ static b2FluidId CreatePlunge( b2WorldId worldId, LabScene* scene, const LabDef*
 
 	// The first drop starts in the air, and later ones come from the pool
 	float half = 0.5f * scene->control;
-	b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ -half, 5.0f }, (b2Pos){ half, 5.0f + scene->control } );
+	b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ -half, 5.0f }, (b2Pos){ half, 5.0f + scene->control }, b2Vec2_zero );
 	return fluid;
 }
 
@@ -907,8 +917,42 @@ static b2FluidId CreateJelly( b2WorldId worldId, LabScene* scene, const LabDef* 
 	b2LiquidId doughLiquid = b2CreateLiquid( fluid, &dough );
 	scene->liquids[1] = doughLiquid;
 
-	b2Liquid_CreateParticlesInBox( scene->liquids[0], (b2Pos){ -4.5f, 2.0f }, (b2Pos){ -2.5f, 4.0f } );
-	b2Liquid_CreateParticlesInBox( doughLiquid, (b2Pos){ 2.5f, 2.0f }, (b2Pos){ 4.5f, 4.0f } );
+	b2Liquid_SpawnBox( scene->liquids[0], (b2Pos){ -4.5f, 2.0f }, (b2Pos){ -2.5f, 4.0f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( doughLiquid, (b2Pos){ 2.5f, 2.0f }, (b2Pos){ 4.5f, 4.0f }, b2Vec2_zero );
+	return fluid;
+}
+
+// A tap, which is an emitter, fills a basin, and a ball of liquid thrown in from the side lands in it. The basin
+// overflows into a pit whose floor is a sensor that the scene empties each step, so the liquid comes and goes with
+// no recycling.
+#define LAB_BASIN_MOUTH 0.6f
+
+static b2FluidId CreateBasin( b2WorldId worldId, LabScene* scene, const LabDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	AddBox( ground, 0.75f, -0.25f, 3.75f, 0.25f, 0.0f, 0.0f );
+	AddBox( ground, -2.75f, 3.5f, 0.25f, 3.75f, 0.0f, 0.0f );
+	AddBox( ground, 4.25f, 3.5f, 0.25f, 3.75f, 0.0f, 0.0f );
+
+	// The basin is the top of a solid step on the left, with a low wall on its right that it spills over
+	AddBox( ground, -0.65f, 0.5f, 1.85f, 0.5f, 0.0f, 0.0f );
+	AddBox( ground, 1.1f, 1.5f, 0.1f, 0.5f, 0.0f, 0.0f );
+
+	// The drain: a sensor over the floor of the pit
+	b2ShapeDef sensorDef = b2DefaultShapeDef();
+	sensorDef.isSensor = true;
+	b2Polygon drain = b2MakeOffsetBox( 1.4f, 0.3f, (b2Vec2){ 2.6f, 0.3f }, b2Rot_identity );
+	scene->drain = b2CreatePolygonShape( ground, &sensorDef, &drain );
+	scene->drained = 0;
+
+	b2FluidId fluid = CreateFluid( worldId, scene, def );
+	b2EmitterDef tap = b2DefaultEmitterDef();
+	tap.point1 = (b2Pos){ -0.5f - 0.5f * LAB_BASIN_MOUTH, 4.8f };
+	tap.point2 = (b2Pos){ -0.5f + 0.5f * LAB_BASIN_MOUTH, 4.8f };
+	tap.velocity = (b2Vec2){ 0.0f, -scene->control };
+	scene->emitter = b2CreateEmitter( scene->liquids[0], &tap );
+
+	b2Liquid_SpawnCircle( scene->liquids[0], (b2Pos){ -1.8f, 3.6f }, 0.45f, (b2Vec2){ 2.0f, 0.0f } );
 	return fluid;
 }
 
@@ -958,6 +1002,8 @@ b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def 
 			return CreateSlime( worldId, scene, def );
 		case lab_jelly:
 			return CreateJelly( worldId, scene, def );
+		case lab_basin:
+			return CreateBasin( worldId, scene, def );
 		default:
 			return CreateTank( worldId, scene, def );
 	}
@@ -1102,6 +1148,15 @@ void LabStepScene( LabScene* scene, b2FluidId fluid, float timeStep )
 		case lab_drop:
 			b2World_SetGravity( b2Body_GetWorld( scene->bodies[0] ), (b2Vec2){ 0.0f, -10.0f * scene->control } );
 			break;
+
+		case lab_basin:
+		{
+			b2EmitterDef tap = b2Emitter_GetDef( scene->emitter );
+			tap.velocity = (b2Vec2){ 0.0f, -scene->control };
+			b2Emitter_SetDef( scene->emitter, &tap );
+			scene->drained += b2Fluid_RemoveInShape( fluid, b2_nullLiquidId, scene->drain );
+		}
+		break;
 
 		case lab_splash:
 			if ( fmodf( t, 7.0f ) < timeStep && t > 1.0f )

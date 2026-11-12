@@ -218,6 +218,22 @@ typedef struct b2fReaction
 	float wetTop;
 } b2fReaction;
 
+#define B2F_MAX_EMITTERS B2_MAX_EMITTERS
+
+// A mouth stepped by the world (fluid_spawn.c)
+typedef struct b2fEmitter
+{
+	b2EmitterDef def;
+	int liquid;
+	// How far the liquid has gone across the mouth since the last row, and how many rows there have been, which sets
+	// each row's half-spacing shift
+	float travel;
+	int rows;
+	// As for liquids: a destroyed emitter leaves its slot, and the count changes so old ids do not fit
+	bool alive;
+	uint16_t generation;
+} b2fEmitter;
+
 typedef struct b2fLiquid
 {
 	b2LiquidDef def;
@@ -250,8 +266,12 @@ struct b2fFluid
 	float margin;	 // collision radius of a particle
 	float mass;	 // of a finest particle of liquid 0, the unit adaptive sizes count mass in
 	float restDensity;
-	int capacity;
+	// Room for this many particles in every per-particle array, which b2fGrow doubles up to maxCapacity
+	int capacity, maxCapacity;
 	int count;
+
+	b2fEmitter emitters[B2F_MAX_EMITTERS];
+	int emitterCount;
 
 	b2fLiquid liquids[B2F_MAX_LIQUIDS];
 	int liquidCount;
@@ -319,7 +339,7 @@ struct b2fFluid
 
 	// Particle sizes as the caller sees them, in rest spacings, refilled by b2Fluid_GetParticles when marked stale.
 	// Whatever may change a size or the order of particles marks them: adapting sizes and each substep's sort, adding
-	// particles, and destroying a liquid. Moving particles changes neither.
+	// and removing particles, and destroying a liquid. Moving particles changes neither.
 	float* restSizes;
 	bool restSizesStale;
 
@@ -380,8 +400,25 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 
 #define FOR_NEIGHBOURS( f, i, j ) FOR_NEIGHBOURS_WITHIN( f, i, j, f->uniformWindow > 0 ? f->uniformWindow : f->window[i] )
 
+// A shape's outline where it is now, and its bounds in the world, for testing whether particle centres are inside it
+typedef struct b2fOutline
+{
+	b2WorldTransform transform;
+	b2ShapeType type;
+	b2Polygon polygon;
+	b2Circle circle;
+	b2Capsule capsule;
+	b2fCoord minX, minY, maxX, maxY;
+} b2fOutline;
+
 // fluid.c
 b2fFluid* b2fGetFluid( b2FluidId fluidId );
+// Makes room for at least needed particles, doubling, up to maxCapacity. Only between steps or in b2PrepareFluid.
+// Returns false if needed is past maxCapacity.
+bool b2fGrow( b2fFluid* f, int needed );
+// Removes the particles marked in adaptUsed, which only the size pass reads and it writes them first. Keeps the order
+// of the rest, and the grid from the last sort with it. Returns how many went.
+int b2fRemoveMarked( b2fFluid* f );
 // The liquid's index in its fluid
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
 // The id of the liquid in a slot
@@ -404,7 +441,16 @@ void b2fFindContacts( b2fFluid* f, b2SubStepContext* context );
 void b2fCollide( b2fFluid* f, b2SubStepContext* context );
 bool b2fShapeDistance( const b2fShape* s, b2Vec2 p, float* distance, b2Vec2* normal );
 
+// spawn.c
+// Adds the rows each enabled emitter owes for a step of this time
+void b2fStepEmitters( b2fFluid* f, float timeStep );
+// Ends the emitters of a liquid that is being destroyed
+void b2fDestroyEmitters( b2fFluid* f, int liquid );
+
 // state.c
+// Returns false for shapes with no inside, segments and chains
+bool b2fMakeOutline( b2ShapeId shapeId, b2fOutline* outline );
+bool b2fInsideOutline( const b2fOutline* outline, b2Pos p );
 void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId );
 void b2fFinishStep( b2fFluid* f );
 void b2fFreeState( b2fFluid* f );

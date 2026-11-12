@@ -4,7 +4,7 @@
 //
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_CRATE_HALF, LAB_SUBSTEPS,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
-// ApplySettings. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
+// ApplySettings, LAB_CAPACITY among them. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
 // LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
 // LAB_FRAME_EVERY.
 #include "scene.h"
@@ -197,6 +197,11 @@ static void ApplySettings( LabDef* def )
 	if ( getenv( "LAB_DEPTH_LIMIT" ) )
 	{
 		def->liquid.tuning.adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;
+	}
+	// The room the fluid starts with, which it grows from as needed, to check that growing changes nothing
+	if ( getenv( "LAB_CAPACITY" ) )
+	{
+		def->fluid.capacity = atoi( getenv( "LAB_CAPACITY" ) );
 	}
 }
 
@@ -816,7 +821,7 @@ int main( int argc, char** argv )
 		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f) top=%.2f hash=%016llx\n",
 				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, top,
 				(unsigned long long)hash );
-		printf( "  leaked %d, measure %.3f ms/frame\n", scene.leaked, measureSum / f );
+		printf( "  leaked %d, measure %.3f ms/frame, capacity %d\n", scene.leaked, measureSum / f, b2Fluid_GetCapacity( fluid ) );
 		if ( w == ( oneRun ? 2u : 0u ) )
 		{
 			firstHash = hash;
@@ -828,6 +833,10 @@ int main( int argc, char** argv )
 		if ( scene.type == lab_drain )
 		{
 			printf( "  pumped %d mass %.0f stall %.1fs\n", scene.pumped, (double)b2Fluid_GetMovedMass( fluid ), (double)scene.longestStall / 60.0 );
+		}
+		if ( scene.type == lab_basin )
+		{
+			printf( "  drained %d\n", scene.drained );
 		}
 		{
 			const float* size = particles.sizes;

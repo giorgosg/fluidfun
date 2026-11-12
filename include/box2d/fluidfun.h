@@ -114,8 +114,15 @@ typedef struct b2FluidDef
 	float adaptiveDepth;
 	/// How full a box has to be, compared with liquid at rest, to count as full
 	float adaptiveFullBox;
-	/// The most particles the fluid can hold, over all its liquids
+	/// How many particles the fluid makes room for at the start, over all its liquids. When a spawn, an emitter or a
+	/// particle splitting needs more, the fluid doubles its room, up to maxCapacity. Growing happens only between steps
+	/// and does not change how the liquid moves.
 	int capacity;
+	/// The most particles the fluid will grow to hold. Each particle of room takes 536 bytes, and 950 to 965 once some
+	/// liquid has springs (568 and 980 to 995 when Box2D is built for large worlds), so the default of 1,000,000 is up to
+	/// 0.54 GB, or 0.96 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above
+	/// this is kept as the most.
+	int maxCapacity;
 } b2FluidDef;
 
 /// Timing of the last step in milliseconds, summed over substeps.
@@ -160,8 +167,13 @@ B2_API void b2DestroyFluid( b2FluidId fluidId );
 /// Whether the id names a fluid that still exists
 B2_API bool b2Fluid_IsValid( b2FluidId fluidId );
 
-/// Change the fluid's settings between steps. The spacing and capacity cannot change.
+/// Change the fluid's settings between steps. The spacing and starting capacity cannot change, and maxCapacity cannot
+/// go below the room the fluid already has.
 B2_API void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def );
+
+/// How many particles the fluid has room for now. It starts at b2FluidDef::capacity and doubles as needed, up to
+/// b2FluidDef::maxCapacity.
+B2_API int b2Fluid_GetCapacity( b2FluidId fluidId );
 
 /// Add a liquid to a fluid, which starts with none. Returns b2_nullLiquidId if the fluid already holds
 /// B2_MAX_LIQUIDS. Call between steps.
@@ -187,12 +199,75 @@ B2_API int b2Fluid_GetLiquidCount( b2FluidId fluidId );
 /// at zero, so liquids keep apart; a value near their own cohesion lets them cling to each other.
 B2_API void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB, float cohesion );
 
-/// Fill a box with particles of a liquid on a triangular lattice. Returns how many were added. With adaptive
-/// sizes particles start at the size their distance from the edge of the box asks for.
-B2_API int b2Liquid_CreateParticlesInBox( b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound );
+/// Spawning fills a shape with new particles of a liquid, all moving at the given velocity, and returns how many it
+/// added. Particles go on a triangular lattice 0.97 particleSpacing apart, a little tighter than liquid at rest, so a
+/// pool settles to about the depth it was spawned at. A spawn does not look at what is already there: particles put
+/// inside other liquid or inside a shape are pushed out hard on the next step, so keeping them clear is the caller's
+/// business. When the fluid is full it grows (b2FluidDef::capacity); a spawn that returns fewer than the shape holds
+/// has reached b2FluidDef::maxCapacity, which b2Fluid_GetParticleCount then equals. Call between steps.
+///
+/// A box, between two corners. With adaptive sizes particles start at the size their distance from the edge of the
+/// box asks for, in rectangular rings, so a pool does not begin by merging all over.
+B2_API int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocity );
+
+/// A circle. This and the shapes below start every particle at the finest size, and with adaptive sizes the deeper
+/// ones coarsen over the next steps.
+B2_API int b2Liquid_SpawnCircle( b2LiquidId liquidId, b2Pos center, float radius, b2Vec2 velocity );
+
+/// A capsule, the points within radius of the segment between two centres
+B2_API int b2Liquid_SpawnCapsule( b2LiquidId liquidId, b2Pos center1, b2Pos center2, float radius, b2Vec2 velocity );
+
+/// A convex polygon, as Box2D makes them, placed at origin with this rotation. Its radius rounds it.
+B2_API int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, const b2Polygon* polygon, b2Vec2 velocity );
+
+/// Remove the particles whose centres are inside a box, of one liquid, or of every liquid if liquidId is null. Returns
+/// how many went. The others keep their ids, and springs to a particle that went are dropped. Call between steps.
+B2_API int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound );
+
+/// The same for the outline of a Box2D shape where it is now, which may be a sensor: a drain is a sensor shape the
+/// caller empties each step. A circle, capsule or polygon; segments and chains have no inside and remove nothing.
+B2_API int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId );
+
+/// The most emitters one fluid can hold
+#define B2_MAX_EMITTERS 32
+
+/// A mouth that liquid comes out of, fixed in the world
+typedef struct b2EmitterDef
+{
+	/// The ends of the mouth: liquid comes out across this segment
+	b2Pos point1, point2;
+	/// Velocity of the liquid as it leaves. Only the part across the mouth carries liquid out, so the flow, as area of
+	/// liquid at rest per second, is that speed times the mouth's length, and a velocity along the mouth emits nothing.
+	/// The stream is packed as a spawn is, a little tighter than at rest, and each row holds a whole number of
+	/// particles: a mouth 0.5 long at 2 m/s, with particles 0.08 apart, gives 174 particles a second, where that area
+	/// at rest holds 180.
+	b2Vec2 velocity;
+	/// An emitter that is not enabled adds nothing and keeps its place in the stream
+	bool enabled;
+} b2EmitterDef;
+
+/// A mouth from the origin to one metre along x, emitting nothing until given a velocity
+B2_API b2EmitterDef b2DefaultEmitterDef( void );
+
+/// Add an emitter to a liquid. Before each step the world adds as many rows of particles across its mouth as the
+/// liquid has travelled since the last row, each where it would have got to by then, so the stream is as dense as a
+/// spawn whatever the step time and speed. A mouth narrower than the spacing gets one particle a row. Particles start
+/// at the finest size with the emitter's velocity. It stops quietly while the fluid is full at
+/// b2FluidDef::maxCapacity, and ends when its liquid is destroyed. Returns b2_nullEmitterId if the fluid already
+/// has B2_MAX_EMITTERS. Emitters do not move with bodies. Call between steps.
+B2_API b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def );
+B2_API void b2DestroyEmitter( b2EmitterId emitterId );
+
+/// Whether the id names an emitter that still exists. Destroying its liquid or its fluid ends it.
+B2_API bool b2Emitter_IsValid( b2EmitterId emitterId );
+
+/// Change an emitter between steps. It keeps how far the liquid has gone since its last row.
+B2_API void b2Emitter_SetDef( b2EmitterId emitterId, const b2EmitterDef* def );
+B2_API b2EmitterDef b2Emitter_GetDef( b2EmitterId emitterId );
 
 /// Move up to maxCount particles found in the box from to a lattice in the box to, with this velocity.
-/// Call between steps. This is how a scene recycles liquid into a stream. Returns how many moved.
+/// Call between steps. This is how a scene recycles liquid into a stream. Returns how many moved. Emitters and
+/// removal now cover most of what it was for.
 B2_API int b2Fluid_MoveParticles( b2FluidId fluidId, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount );
 
 /// The total mass moved by b2Fluid_MoveParticles so far.
@@ -223,8 +298,10 @@ typedef struct b2FluidParticles
 	/// Particles get them in the order they are made, from zero, and a number is not given again. With adaptive sizes
 	/// a particle that splits keeps its id on one of its parts, and the others get new ones; a particle that merges
 	/// away gives its mass to neighbours, which keep their ids, and its own id is gone. b2Fluid_MoveParticles keeps
-	/// ids, so a moved particle has its id at its new place. Ids are ints, so they stay unique for the first 2^31
-	/// particles a fluid makes, splits included. Scenes of about 5000 particles make fewer than 7000 in 10 seconds.
+	/// ids, so a moved particle has its id at its new place, and removing particles leaves the others' ids alone. Ids
+	/// are ints, so they stay unique for the first 2^31 particles a fluid makes, splits and emitters included. Scenes
+	/// of about 5000 particles make fewer than 7000 in 10 seconds; an emitter giving 200 particles a second makes
+	/// 2^31 in about 120 days.
 	const int* ids;
 	/// Kernel density of liquid at rest, which densities are compared with
 	float restDensity;

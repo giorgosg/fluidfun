@@ -79,8 +79,8 @@ int main( int argc, char** argv )
 	b2FluidId fluid = b2CreateFluid( worldId, &def );
 	b2LiquidId liquidId = b2CreateLiquid( fluid, &liquid );
 	float spacing = def.particleSpacing;
-	b2Liquid_CreateParticlesInBox( liquidId, (b2Pos){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
-								   (b2Pos){ halfWidth - 0.5f * spacing, depth } );
+	b2Liquid_SpawnBox( liquidId, (b2Pos){ -halfWidth + 0.5f * spacing, 0.5f * spacing },
+					   (b2Pos){ halfWidth - 0.5f * spacing, depth }, b2Vec2_zero );
 	int n = b2Fluid_GetParticleCount( fluid );
 	double startArea = 0.0;
 	{

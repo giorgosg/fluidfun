@@ -6,8 +6,9 @@
 
 struct b2fFluid;
 
-// Before a step, while the world is unlocked: gathers the shapes near the liquid and changes particle sizes
-void b2PrepareFluid( struct b2fFluid* fluid );
+// Before a step, while the world is unlocked: changes particle sizes, runs the emitters for a step of this time and
+// gathers the shapes near the liquid
+void b2PrepareFluid( struct b2fFluid* fluid, float timeStep );
 
 // Once per sub-step, after the bodies have moved
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, struct b2fFluid* fluid );

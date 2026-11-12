@@ -36,7 +36,7 @@ static int FluidLifetime( void )
 	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
 	ENSURE( b2Liquid_IsValid( waterId ) );
 	ENSURE( b2Liquid_GetIndex( waterId ) == 0 );
-	int added = b2Liquid_CreateParticlesInBox( waterId, ( b2Pos ){ -1.0f, 1.0f }, ( b2Pos ){ 1.0f, 2.0f } );
+	int added = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.0f, 1.0f }, ( b2Pos ){ 1.0f, 2.0f }, b2Vec2_zero );
 	ENSURE( added > 0 );
 	ENSURE( b2Fluid_GetParticleCount( fluidId ) == added );
 
@@ -59,7 +59,7 @@ static int FluidLifetime( void )
 	b2LiquidDef oil = b2MakeOilDef();
 	b2LiquidId oilId = b2CreateLiquid( fluidId, &oil );
 	ENSURE( b2Liquid_GetIndex( oilId ) == 1 );
-	int oilAdded = b2Liquid_CreateParticlesInBox( oilId, ( b2Pos ){ -1.0f, 3.0f }, ( b2Pos ){ 1.0f, 3.5f } );
+	int oilAdded = b2Liquid_SpawnBox( oilId, ( b2Pos ){ -1.0f, 3.0f }, ( b2Pos ){ 1.0f, 3.5f }, b2Vec2_zero );
 	ENSURE( oilAdded > 0 );
 	ENSURE( b2Fluid_GetLiquidCount( fluidId ) == 2 );
 	b2World_Step( worldId, 1.0f / 60.0f, 4 );
@@ -94,7 +94,7 @@ static int FluidLifetime( void )
 	ENSURE( b2Liquid_IsValid( waterId ) == false );
 	ENSURE( b2Liquid_GetDef( honeyId ).density == honey.density );
 	b2Liquid_SetCohesionBetween( honeyId, oilId, 0.05f );
-	b2Liquid_CreateParticlesInBox( honeyId, ( b2Pos ){ -1.0f, 5.0f }, ( b2Pos ){ 1.0f, 5.5f } );
+	b2Liquid_SpawnBox( honeyId, ( b2Pos ){ -1.0f, 5.0f }, ( b2Pos ){ 1.0f, 5.5f }, b2Vec2_zero );
 	for ( int i = 0; i < 10; ++i )
 	{
 		b2World_Step( worldId, 1.0f / 60.0f, 4 );
@@ -171,7 +171,7 @@ static int FluidParticles( void )
 	b2LiquidDef water = b2DefaultLiquidDef();
 	water.tuning.adaptiveRatio = 1.0f;
 	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
-	b2Liquid_CreateParticlesInBox( waterId, ( b2Pos ){ -1.0f, 0.05f }, ( b2Pos ){ 1.0f, 0.6f } );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.0f, 0.05f }, ( b2Pos ){ 1.0f, 0.6f }, b2Vec2_zero );
 
 	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
 	int count = particles.count;
@@ -233,7 +233,7 @@ static int FluidParticles( void )
 	// With adaptive sizes particles split and merge, and new particles still get ids no other has
 	b2LiquidDef adaptive = b2DefaultLiquidDef();
 	b2LiquidId adaptiveId = b2CreateLiquid( fluidId, &adaptive );
-	b2Liquid_CreateParticlesInBox( adaptiveId, ( b2Pos ){ -2.0f, 0.05f }, ( b2Pos ){ 2.0f, 2.0f } );
+	b2Liquid_SpawnBox( adaptiveId, ( b2Pos ){ -2.0f, 0.05f }, ( b2Pos ){ 2.0f, 2.0f }, b2Vec2_zero );
 	int sizeChanges = 0;
 	for ( int frame = 0; frame < 90; ++frame )
 	{
@@ -278,7 +278,7 @@ static int FluidState( void )
 	b2LiquidDef water = b2DefaultLiquidDef();
 	water.tuning.adaptiveRatio = 1.0f;
 	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
-	b2Liquid_CreateParticlesInBox( waterId, ( b2Pos ){ -halfWidth + 0.05f, 0.05f }, ( b2Pos ){ halfWidth - 0.05f, 0.75f } );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -halfWidth + 0.05f, 0.05f }, ( b2Pos ){ halfWidth - 0.05f, 0.75f }, b2Vec2_zero );
 
 	// A crate of half the water's density, dropped from above on the right
 	b2BodyDef crateDef = b2DefaultBodyDef();
@@ -411,10 +411,234 @@ static int FluidState( void )
 	return 0;
 }
 
+// The particles added since first, with the velocity asked for, all passing an inside test
+typedef bool InsideFcn( b2Pos p, const void* shape );
+
+static bool CheckSpawned( b2FluidId fluidId, int first, b2Vec2 velocity, InsideFcn* inside, const void* shape )
+{
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	bool good = true;
+	for ( int i = first; i < particles.count; ++i )
+	{
+		good = good && particles.velocitiesX[i] == velocity.x && particles.velocitiesY[i] == velocity.y;
+		good = good && inside( particles.positions[i], shape );
+	}
+	return good;
+}
+
+// A small allowance for rounding at the edge
+#define SPAWN_EDGE 1e-4f
+
+static bool InsideCircle( b2Pos p, const void* shape )
+{
+	const b2Circle* c = shape;
+	return b2Length( b2Sub( b2ToVec2( p ), c->center ) ) <= c->radius + SPAWN_EDGE;
+}
+
+static bool InsideCapsule( b2Pos p, const void* shape )
+{
+	const b2Capsule* c = shape;
+	b2Vec2 d = b2Sub( c->center2, c->center1 ), q = b2Sub( b2ToVec2( p ), c->center1 );
+	float t = b2ClampFloat( b2Dot( q, d ) / b2Dot( d, d ), 0.0f, 1.0f );
+	return b2Length( b2Sub( q, b2MulSV( t, d ) ) ) <= c->radius + SPAWN_EDGE;
+}
+
+typedef struct SpawnBox
+{
+	b2Vec2 center, half;
+	b2Rot rotation;
+} SpawnBox;
+
+static bool InsideBox( b2Pos p, const void* shape )
+{
+	const SpawnBox* box = shape;
+	b2Vec2 local = b2InvRotateVector( box->rotation, b2Sub( b2ToVec2( p ), box->center ) );
+	return fabsf( local.x ) <= box->half.x + SPAWN_EDGE && fabsf( local.y ) <= box->half.y + SPAWN_EDGE;
+}
+
+// Spawning in shapes, removing by box, shape and liquid, emitters, and capacity that grows
+static int FluidSpawnAndRemove( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+
+	// Small to start with, so every spawn below makes it grow
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 64;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	ENSURE( b2Fluid_GetCapacity( fluidId ) == 64 );
+
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+
+	// A particle spawned fills a triangle-lattice cell 0.97 particleSpacing across, 1.09 of the solver's spacing
+	float spawnSpacing = 1.09f * def.particleSpacing / 1.125f, cellArea = 0.8660254f * spawnSpacing * spawnSpacing;
+
+	b2Vec2 velocity = { 1.0f, -2.0f };
+	b2Circle circle = { { 0.0f, 0.0f }, 0.5f };
+	int count = b2Liquid_SpawnCircle( waterId, b2ToPos( circle.center ), circle.radius, velocity );
+	ENSURE( fabsf( (float)count - B2_PI * circle.radius * circle.radius / cellArea ) < 0.1f * (float)count );
+	ENSURE( CheckSpawned( fluidId, 0, velocity, InsideCircle, &circle ) );
+	ENSURE( b2Fluid_GetCapacity( fluidId ) >= count );
+
+	int first = b2Fluid_GetParticleCount( fluidId );
+	b2Capsule capsule = { { 1.5f, -0.2f }, { 2.5f, 0.3f }, 0.3f };
+	count = b2Liquid_SpawnCapsule( waterId, b2ToPos( capsule.center1 ), b2ToPos( capsule.center2 ), capsule.radius, velocity );
+	float capsuleArea = 2.0f * capsule.radius * b2Distance( capsule.center1, capsule.center2 ) + B2_PI * capsule.radius * capsule.radius;
+	ENSURE( fabsf( (float)count - capsuleArea / cellArea ) < 0.1f * (float)count );
+	ENSURE( CheckSpawned( fluidId, first, velocity, InsideCapsule, &capsule ) );
+
+	first = b2Fluid_GetParticleCount( fluidId );
+	SpawnBox box = { { 0.0f, 2.0f }, { 0.6f, 0.4f }, b2MakeRot( 0.3f ) };
+	b2Polygon polygon = b2MakeBox( box.half.x, box.half.y );
+	count = b2Liquid_SpawnPolygon( waterId, b2ToPos( box.center ), box.rotation, &polygon, velocity );
+	ENSURE( fabsf( (float)count - 4.0f * box.half.x * box.half.y / cellArea ) < 0.1f * (float)count );
+	ENSURE( CheckSpawned( fluidId, first, velocity, InsideBox, &box ) );
+
+	// A box puts particles on its edges, so it is close to its area only once it is many particles across
+	first = b2Fluid_GetParticleCount( fluidId );
+	SpawnBox upright = { { -3.0f, 2.0f }, { 1.5f, 1.0f }, b2Rot_identity };
+	count = b2Liquid_SpawnBox( waterId, b2ToPos( b2Sub( upright.center, upright.half ) ), b2ToPos( b2Add( upright.center, upright.half ) ), velocity );
+	ENSURE( fabsf( (float)count - 4.0f * upright.half.x * upright.half.y / cellArea ) < 0.1f * (float)count );
+	ENSURE( CheckSpawned( fluidId, first, velocity, InsideBox, &upright ) );
+	int total = b2Fluid_GetParticleCount( fluidId );
+	ENSURE( b2Fluid_GetCapacity( fluidId ) >= total );
+
+	// A step, so the particles are sorted and the removals below run on a grid that holds
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+
+	// Removing the right half of the circle takes exactly the particles in it, and the rest keep their ids
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	ENSURE( particles.count == total );
+	bool* outside = calloc( (size_t)total, sizeof( bool ) );
+	b2Pos lower = { 0.0f, -1.0f }, upper = { 1.0f, 1.0f };
+	int inBox = 0;
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		b2Pos p = particles.positions[i];
+		bool in = p.x >= lower.x && p.x <= upper.x && p.y >= lower.y && p.y <= upper.y;
+		inBox += in ? 1 : 0;
+		ENSURE( 0 <= particles.ids[i] && particles.ids[i] < total );
+		outside[particles.ids[i]] = in == false;
+	}
+	ENSURE( inBox > 0 );
+	ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, lower, upper ) == inBox );
+	particles = b2Fluid_GetParticles( fluidId );
+	ENSURE( particles.count == total - inBox && b2Fluid_GetParticleCount( fluidId ) == particles.count );
+	ENSURE( IdsAreUnique( particles ) );
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		ENSURE( outside[particles.ids[i]] );
+	}
+	free( outside );
+	ENSURE( b2Fluid_MeasureBox( fluidId, lower, upper ).count == 0 );
+
+	// Removing one liquid's particles leaves the other's, by box and by a sensor shape
+	b2LiquidDef oil = b2MakeOilDef();
+	oil.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId oilId = b2CreateLiquid( fluidId, &oil );
+	int oilCount = b2Liquid_SpawnCircle( oilId, ( b2Pos ){ -0.3f, 0.0f }, 0.3f, b2Vec2_zero );
+	int before = b2Fluid_GetParticleCount( fluidId );
+	ENSURE( b2Fluid_RemoveInBox( fluidId, oilId, ( b2Pos ){ -1.0f, -1.0f }, ( b2Pos ){ 0.0f, 1.0f } ) == oilCount );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == before - oilCount );
+	ENSURE( b2Fluid_MeasureBox( fluidId, ( b2Pos ){ -0.5f, -0.5f }, ( b2Pos ){ -0.1f, 0.5f } ).count > 0 );
+
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef sensorDef = b2DefaultShapeDef();
+	sensorDef.isSensor = true;
+	b2Circle drain = { { -3.0f, 2.0f }, 0.5f };
+	b2ShapeId drainId = b2CreateCircleShape( groundId, &sensorDef, &drain );
+	ENSURE( b2Fluid_RemoveInShape( fluidId, oilId, drainId ) == 0 );
+	ENSURE( b2Fluid_RemoveInShape( fluidId, waterId, drainId ) > 0 );
+	particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		ENSURE( b2Length( b2Sub( b2ToVec2( particles.positions[i] ), drain.center ) ) > drain.radius - SPAWN_EDGE );
+	}
+
+	// Removal leaves the liquid stepping as before
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	ENSURE( IdsAreUnique( b2Fluid_GetParticles( fluidId ) ) );
+	b2DestroyLiquid( waterId );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == 0 );
+
+	// An emitter adds speed times mouth length times time, as area at rest, which is how far apart particles rest
+	float speed = 2.0f, mouth = 0.5f, restArea = 0.8660254f * def.particleSpacing * def.particleSpacing;
+	b2EmitterDef tapDef = b2DefaultEmitterDef();
+	tapDef.point1 = ( b2Pos ){ 10.0f, 0.0f };
+	tapDef.point2 = ( b2Pos ){ 10.0f + mouth, 0.0f };
+	tapDef.velocity = ( b2Vec2 ){ 0.3f, -speed };
+	b2EmitterId tapId = b2CreateEmitter( oilId, &tapDef );
+	ENSURE( b2Emitter_IsValid( tapId ) );
+	ENSURE( b2Emitter_GetDef( tapId ).velocity.y == -speed );
+	for ( int i = 0; i < 60; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	int emitted = b2Fluid_GetParticleCount( fluidId );
+	float expected = speed * mouth * 1.0f / restArea;
+	ENSURE( fabsf( (float)emitted - expected ) < 0.1f * expected );
+
+	// Disabled, it adds nothing; destroyed, its id is gone; and destroying its liquid ends another
+	tapDef.enabled = false;
+	b2Emitter_SetDef( tapId, &tapDef );
+	for ( int i = 0; i < 5; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == emitted );
+	b2DestroyEmitter( tapId );
+	ENSURE( b2Emitter_IsValid( tapId ) == false );
+	tapDef.enabled = true;
+	b2EmitterId secondId = b2CreateEmitter( oilId, &tapDef );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	b2DestroyLiquid( oilId );
+	ENSURE( b2Emitter_IsValid( secondId ) == false );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == 0 );
+	b2DestroyFluid( fluidId );
+
+	// A fluid with springs grows from 64 while they are in use, and stops at its most
+	def.capacity = 64;
+	def.maxCapacity = 500;
+	fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef jelly = b2MakeJellyDef();
+	jelly.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId jellyId = b2CreateLiquid( fluidId, &jelly );
+	count = b2Liquid_SpawnCircle( jellyId, ( b2Pos ){ 0.0f, 0.0f }, 0.5f, b2Vec2_zero );
+	ENSURE( count > 64 && count < def.maxCapacity );
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	int more = b2Liquid_SpawnCircle( jellyId, ( b2Pos ){ 2.0f, 0.0f }, 0.8f, b2Vec2_zero );
+	ENSURE( count + more == def.maxCapacity );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == def.maxCapacity && b2Fluid_GetCapacity( fluidId ) == def.maxCapacity );
+	b2EmitterId fullId = b2CreateEmitter( jellyId, &tapDef );
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	ENSURE( b2Emitter_IsValid( fullId ) );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == def.maxCapacity );
+	ENSURE( IdsAreUnique( b2Fluid_GetParticles( fluidId ) ) );
+
+	b2DestroyWorld( worldId );
+	ENSURE( b2Emitter_IsValid( fullId ) == false );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
 	RUN_SUBTEST( FluidParticles );
 	RUN_SUBTEST( FluidState );
+	RUN_SUBTEST( FluidSpawnAndRemove );
 	return 0;
 }

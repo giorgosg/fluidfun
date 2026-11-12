@@ -30,6 +30,7 @@ typedef enum LabSceneType
 	lab_mercury,
 	lab_slime,
 	lab_jelly,
+	lab_basin,
 	lab_sceneCount
 } LabSceneType;
 
@@ -90,6 +91,11 @@ typedef struct LabScene
 	// Liquid a scene keeps where it put it, such as a basin's water, as area in particle sizes squared, so that it
 	// can move the rest back
 	float keep;
+
+	// A scene's emitter, and a sensor it empties each step with what it removed so far
+	b2EmitterId emitter;
+	b2ShapeId drain;
+	int drained;
 } LabScene;
 
 LabScene LabDefaultScene( LabSceneType type );

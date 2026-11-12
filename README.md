@@ -76,14 +76,23 @@ b2FluidId fluid = b2CreateFluid( worldId, &def );
 // A fluid starts empty. Water is the default liquid.
 b2LiquidDef water = b2DefaultLiquidDef();
 b2LiquidId waterId = b2CreateLiquid( fluid, &water );
-b2Liquid_CreateParticlesInBox( waterId, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f } );
+b2Liquid_SpawnBox( waterId, (b2Pos){ -4.0f, 0.1f }, (b2Pos){ 4.0f, 3.0f }, b2Vec2_zero );
 
 // A second liquid, lighter than the first. There are also honey, mercury, slime, jelly and dough.
 b2LiquidDef oil = b2MakeOilDef();
 b2LiquidId oilId = b2CreateLiquid( fluid, &oil );
-b2Liquid_CreateParticlesInBox( oilId, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f } );
+b2Liquid_SpawnBox( oilId, (b2Pos){ -4.0f, 3.1f }, (b2Pos){ 4.0f, 4.0f }, b2Vec2_zero );
 
-// Each frame. The world steps its fluid with the bodies.
+// A ball of water thrown sideways, and a tap: an emitter the world steps, pouring 0.5 m wide at 2 m/s
+b2Liquid_SpawnCircle( waterId, (b2Pos){ -6.0f, 5.0f }, 0.5f, (b2Vec2){ 3.0f, 0.0f } );
+b2EmitterDef tap = b2DefaultEmitterDef();
+tap.point1 = (b2Pos){ 0.0f, 6.0f };
+tap.point2 = (b2Pos){ 0.5f, 6.0f };
+tap.velocity = (b2Vec2){ 0.0f, -2.0f };
+b2EmitterId tapId = b2CreateEmitter( waterId, &tap );
+
+// Each frame. A drain is a sensor shape emptied between steps; then the world steps its fluid with the bodies.
+b2Fluid_RemoveInShape( fluid, b2_nullLiquidId, drainShapeId );
 b2World_Step( worldId, 1.0f / 60.0f, 4 );
 
 // What the fluid gives back is good until the next step or change to the fluid. Particles change order every step;
@@ -114,6 +123,8 @@ b2DestroyWorld( worldId );
 
 A world has one fluid, which holds all of its liquids, up to 16 of them. A liquid's settings come in two parts: what
 the liquid is like (density, viscosity, cohesion, friction, springs), and `tuning`, the solver's own settings. Every setting is described in `include/box2d/fluidfun.h`.
+A fluid starts with room for `capacity` particles and doubles it as spawns, emitters and splitting particles need, up to
+`maxCapacity`.
 
 ## License
 
