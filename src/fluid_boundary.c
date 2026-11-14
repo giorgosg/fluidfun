@@ -487,7 +487,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 	float baseMass = f->mass, spacing = f->spacing, added = f->liquids[0].def.tuning.addedMass;
 
 	// What a patch needs of the liquid around its body: the density its buoyancy goes by, and how high the liquid
-	// stands on the body, against gravity
+	// stands on the body, against gravity, which is also the share under that the caller reads
 	const b2LiquidDef* def = &f->liquids[0].def;
 	float buoyantDensity = def->tuning.buoyancyAssist * def->density * def->gravityScale;
 	float g = b2Length( f->worldGravity );
@@ -538,7 +538,6 @@ static void CollideTask( int start, int end, int worker, void* context )
 					{
 						reaction->wetMass += m;
 						reaction->wetDensity += m * buoyantDensity;
-						reaction->wetHeight += m * ( rx * up.x + ry * up.y );
 
 						// Only the row against the body: counting every particle within reach made a face with two
 						// rows beside it weigh twice one with a thin film
@@ -549,8 +548,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 							reaction->wetNormalY += f->size[i] * contacts[c].normalY;
 						}
 
-						// The level of the liquid on the body, for the state the caller reads. Liquid lying on an
-						// upward face, such as a film or a splash on top of a floating body, is not the level.
+						// The level of the liquid on the body. Liquid lying on an upward face, such as a film or a
+						// splash on top of a floating body, is not the level.
 						float facing = contacts[c].normalX * up.x + contacts[c].normalY * up.y;
 						if ( f->rho[i] >= spray && facing < B2F_TOP_FACING )
 						{
@@ -682,15 +681,28 @@ static b2Vec2 OpenSide( const b2fFluid* f, const b2fBody* body, const b2fReactio
 	return gap;
 }
 
+// The share of the body's height under liquid: the liquid's level on it, its top over the body's height. Twice the
+// mean height of the liquid within reach, used before, counted the liquid under a floating body's bottom too and read
+// 0.37 for a crate half under.
+static float SubmergedShare( const b2fBody* body, const b2fReaction* total )
+{
+	float height = body->high - body->low;
+	if ( height <= 0.0f )
+	{
+		return 0.0f;
+	}
+	float share = total->wetTop / height;
+	return share > 1.0f ? 1.0f : share;
+}
+
 // Liquid cannot fill a gap narrower than a few particles, so a body touching or nearly touching something misses the
 // liquid's push on that side. Still liquid pushes on a body with the weight of the liquid it displaces, Archimedes'
 // principle, whatever the depth, and does not turn it. So the gap gives what the particles' push falls short of that,
 // along the direction away from the other shape: a body lighter than the liquid lifts off, a heavier one stays down,
 // and as particles fill the gap their push takes over and this fades. Reading the pressure in the gap from the depth
 // instead had to be right to a few percent of that pressure, many times the body's buoyancy in deep liquid, to tell
-// the two apart. It never pulls. The share of the body under liquid is taken from how high the liquid
-// within reach stands on it: twice its mean height above the body's lowest point, which is exact for a box wet up its
-// sides.
+// the two apart. It never pulls. The share of the body under liquid is the one b2Fluid_GetBodyState
+// reports.
 static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
@@ -710,8 +722,7 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 			continue;
 		}
 
-		float share = 2.0f * ( total->wetHeight / total->wetMass - body->low ) / height;
-		share = share < 0.0f ? 0.0f : ( share > 1.0f ? 1.0f : share );
+		float share = SubmergedShare( body, total );
 		float lift = total->wetDensity / total->wetMass * body->area * share * g * f->h;
 		float needX = lift * up.x - total->x, needY = lift * up.y - total->y, needAngular = -total->angular;
 		float arm = 0.5f * sqrtf( body->area );
@@ -784,9 +795,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 }
 
 // What b2Fluid_GetBodyState reports, summed over the step: the liquid's push once patches are applied, before added
-// mass shares the body's change of motion with the liquid, and the share of the body under liquid. That share is the
-// liquid's level on the body, its top over the body's height, and all of it with liquid all the way round. Patches use
-// twice the mean height of the liquid within reach instead, which the liquid under a floating body's bottom pulls down. Nothing here feeds back into the liquid or the bodies.
+// mass shares the body's change of motion with the liquid, and the share of the body under liquid, the one patches
+// use, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies.
 static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
@@ -803,7 +813,6 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 		body->stepImpulse.x += total->x;
 		body->stepImpulse.y += total->y;
 		body->stepAngular += total->angular;
-		float height = body->high - body->low;
 		if ( total->wetMass <= 0.0f )
 		{
 			continue;
@@ -811,12 +820,7 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 
 		// Without gravity there is no under, and only liquid all round counts
 		body->stepWet = true;
-		float share = 0.0f;
-		if ( height > 0.0f && g > 0.0f )
-		{
-			share = total->wetTop / height;
-			share = share > 1.0f ? 1.0f : share;
-		}
+		float share = g > 0.0f ? SubmergedShare( body, total ) : 0.0f;
 		body->stepSubmerged += b2Length( OpenSide( f, body, total, up ) ) < 0.1f ? 1.0f : share;
 	}
 }
@@ -988,7 +992,6 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 			t->inertia += r->inertia;
 			t->wetMass += r->wetMass;
 			t->wetDensity += r->wetDensity;
-			t->wetHeight += r->wetHeight;
 			t->wetLength += r->wetLength;
 			t->wetNormalX += r->wetNormalX;
 			t->wetNormalY += r->wetNormalY;
