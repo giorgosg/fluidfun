@@ -423,12 +423,13 @@ static void VelocityTask( int start, int end, int worker, void* context )
 // reaches h is marked gone, as is one whose partner has gone, holds no spring back, or is now another liquid.
 // Both ends read the same positions and rest length, so they work a spring out the same way.
 //
-// Each spring finds its partner by id in a table of where each id is this substep. Ids are given out in order as
-// liquid spawns and splits, so particles near each other mostly have near ids, and taking the slot straight from the
-// id keeps their slots near too. With a scrambling hash the spring scenes ran 2 to 4% slower.
+// Each spring finds its partner by id in a table of where each id is this substep. The slot is the high bits of the id
+// times 2^32 over the golden ratio (Fibonacci hashing). Ids only grow, so after spawns, splits and drains the live
+// ids can span many table sizes: the id itself, or the low bits of the product, would put ids that differ by a
+// multiple of the table size in the same slot, and a block of such ids would make one long run to probe through.
 static inline unsigned int IdSlot( const b2fFluid* f, int id )
 {
-	return (unsigned int)id & (unsigned int)f->idMapMask;
+	return ( (unsigned int)id * 2654435761u ) >> f->idMapShift;
 }
 
 static inline int FindParticle( const b2fFluid* f, int id )
@@ -527,12 +528,14 @@ static void SpringApplyTask( int start, int end, int worker, void* context )
 void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 {
 	// Where each id is now, in a table at least twice the particle count, filled in index order
-	int slots = 1;
+	int slots = 2, bits = 1;
 	while ( slots < 2 * f->count )
 	{
 		slots *= 2;
+		bits += 1;
 	}
 	f->idMapMask = slots - 1;
+	f->idMapShift = 32 - bits;
 	memset( f->idMap, 0xFF, (size_t)slots * sizeof( b2fIdSlot ) );
 	for ( int i = 0; i < f->count; ++i )
 	{

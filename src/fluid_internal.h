@@ -327,7 +327,7 @@ struct b2fFluid
 	b2fSprings* springs;
 	b2fSprings* sortedSprings;
 	b2fIdSlot* idMap;
-	int idMapMask;
+	int idMapMask, idMapShift;
 	bool springy;	 // some liquid has springs
 	bool checkSprings;	 // the first substep of a step, which checks both ends hold each spring
 
