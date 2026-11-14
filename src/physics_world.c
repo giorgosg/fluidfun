@@ -190,11 +190,14 @@ b2WorldId b2CreateWorld( const b2WorldDef* def )
 
 	b2World* world = b2_worlds + worldId;
 	uint16_t generation = world->generation;
+	uint16_t liquidSerial = world->liquidSerial, emitterSerial = world->emitterSerial;
 
 	*world = (b2World){ 0 };
 
 	world->worldId = (uint16_t)worldId;
 	world->generation = generation;
+	world->liquidSerial = liquidSerial;
+	world->emitterSerial = emitterSerial;
 	world->inUse = true;
 
 	world->stack = b2CreateStack( b2MaxInt( 2048, def->capacity.arenaByteCount ) );
@@ -442,11 +445,15 @@ void b2DestroyWorld( b2WorldId worldId )
 
 	b2DestroyStack( &world->stack );
 
-	// Wipe world but preserve generation
+	// Wipe world but preserve generation, and the liquid and emitter counts so no liquid or emitter id of this world
+	// fits one in the next
 	uint16_t generation = world->generation;
+	uint16_t liquidSerial = world->liquidSerial, emitterSerial = world->emitterSerial;
 	*world = (b2World){ 0 };
 	world->worldId = 0;
 	world->generation = generation + 1;
+	world->liquidSerial = liquidSerial;
+	world->emitterSerial = emitterSerial;
 }
 
 static inline float b2RelativeCos( b2Rot a, b2Rot b )

@@ -235,7 +235,7 @@ typedef struct b2fEmitter
 	// each row's half-spacing shift
 	float travel;
 	int rows;
-	// As for liquids: a destroyed emitter leaves its slot, and the count changes so old ids do not fit
+	// As for liquids: a destroyed emitter leaves its slot, and the next one in it has a new generation
 	bool alive;
 	uint16_t generation;
 } b2fEmitter;
@@ -244,7 +244,8 @@ typedef struct b2fLiquid
 {
 	b2LiquidDef def;
 	float mass;	 // of a particle at the finest size
-	// A destroyed liquid leaves its slot for the next one created, and the count changes so old ids do not fit
+	// A destroyed liquid leaves its slot for the next one created. The generation its ids carry is the world's
+	// liquidSerial when it was made, so an old id does not fit a later liquid in the slot, in this fluid or the next.
 	bool alive;
 	uint16_t generation;
 } b2fLiquid;

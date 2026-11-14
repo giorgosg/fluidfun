@@ -1254,6 +1254,76 @@ static int FluidFilter( void )
 	return 0;
 }
 
+// A liquid or emitter id stays invalid after its fluid is destroyed and the world given a new one, however often its
+// slot was used. A slot used eight times in one fluid once gave the same generation as its first use in the next.
+static int FluidStaleIds( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 100;
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2EmitterDef mouth = b2DefaultEmitterDef();
+
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidId staleLiquids[8];
+	for ( int i = 0; i < 8; ++i )
+	{
+		staleLiquids[i] = b2CreateLiquid( fluidId, &water );
+		ENSURE( b2Liquid_GetIndex( staleLiquids[i] ) == 0 );
+		if ( i < 7 )
+		{
+			b2DestroyLiquid( staleLiquids[i] );
+		}
+	}
+	b2EmitterId staleEmitters[8];
+	for ( int i = 0; i < 8; ++i )
+	{
+		staleEmitters[i] = b2CreateEmitter( staleLiquids[7], &mouth );
+		ENSURE( staleEmitters[i].index1 == 1 );
+		if ( i < 7 )
+		{
+			b2DestroyEmitter( staleEmitters[i] );
+		}
+	}
+	ENSURE( b2Liquid_IsValid( staleLiquids[7] ) && b2Emitter_IsValid( staleEmitters[7] ) );
+	b2DestroyFluid( fluidId );
+
+	b2FluidId nextId = b2CreateFluid( worldId, &def );
+	b2LiquidId liquidId = b2CreateLiquid( nextId, &water );
+	b2EmitterId emitterId = b2CreateEmitter( liquidId, &mouth );
+	ENSURE( b2Liquid_IsValid( liquidId ) && b2Emitter_IsValid( emitterId ) );
+	for ( int i = 0; i < 8; ++i )
+	{
+		ENSURE( b2Liquid_IsValid( staleLiquids[i] ) == false );
+		ENSURE( b2Emitter_IsValid( staleEmitters[i] ) == false );
+	}
+
+	b2DestroyWorld( worldId );
+
+	// Nor does a new world in the same slot bring back a liquid id of the old one's, after its slot was used 32 times
+	worldId = b2CreateWorld( &worldDef );
+	fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidId stale = b2_nullLiquidId;
+	for ( int i = 0; i < 32; ++i )
+	{
+		stale = b2CreateLiquid( fluidId, &water );
+		if ( i < 31 )
+		{
+			b2DestroyLiquid( stale );
+		}
+	}
+	b2DestroyWorld( worldId );
+	b2WorldId sameSlotId = b2CreateWorld( &worldDef );
+	ENSURE( sameSlotId.index1 == worldId.index1 );
+	nextId = b2CreateFluid( sameSlotId, &def );
+	liquidId = b2CreateLiquid( nextId, &water );
+	ENSURE( b2Liquid_IsValid( liquidId ) );
+	ENSURE( b2Liquid_IsValid( stale ) == false );
+	b2DestroyWorld( sameSlotId );
+	return 0;
+}
+
 // A world has one fluid: asking for a second gives the null id, as the header says, and leaves the first working
 static int FluidSecondFluid( void )
 {
@@ -1322,6 +1392,7 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidSpawnAndRemove );
 	RUN_SUBTEST( FluidPush );
 	RUN_SUBTEST( FluidFilter );
+	RUN_SUBTEST( FluidStaleIds );
 	RUN_SUBTEST( FluidSecondFluid );
 	RUN_SUBTEST( FluidCrowdedSprings );
 	return 0;
