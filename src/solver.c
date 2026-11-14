@@ -938,10 +938,14 @@ static void b2ExecuteBlock( b2SolverStage* stage, b2StepContext* context, b2Solv
 
 		case b2_stageUser:
 		{
+			// A loop that needs fewer blocks than the stage has leaves the rest empty
 			b2SubStepContext* subStep = context->subStep;
 			int startIndex = block.startIndex;
 			int endIndex = b2MinInt( startIndex + subStep->blockSize, subStep->itemCount );
-			subStep->task( startIndex, endIndex, workerIndex, subStep->taskContext );
+			if ( startIndex < endIndex )
+			{
+				subStep->task( startIndex, endIndex, workerIndex, subStep->taskContext );
+			}
 		}
 		break;
 
@@ -1068,8 +1072,11 @@ void b2SubStep_ParallelFor( b2SubStepContext* context, b2SubStepTaskFcn* task, i
 	b2SolverStage* stage = context->stage;
 
 	// A worker late for the previous call can still be sweeping these blocks. Sync indices grow
-	// monotonically so its CAS fails, but only if every block moves on before the new block count
-	// is visible, including blocks the previous call did not use.
+	// monotonically so its CAS fails, and it reads a block only after claiming it. It does read the
+	// stage's block count without a lock, so that count never changes: the stage always has
+	// maxBlockCount blocks, set when the stage is made, and a loop that needs fewer leaves the rest
+	// empty.
+	B2_ASSERT( stage->blockCount == maxBlockCount );
 	context->syncIndex += 1;
 	for ( int i = 0; i < maxBlockCount; ++i )
 	{
@@ -1080,11 +1087,11 @@ void b2SubStep_ParallelFor( b2SubStepContext* context, b2SubStepTaskFcn* task, i
 	context->taskContext = taskContext;
 	context->itemCount = itemCount;
 	context->blockSize = ( itemCount + blockCount - 1 ) / blockCount;
-	for ( int i = 0; i < blockCount; ++i )
+	for ( int i = 0; i < maxBlockCount; ++i )
 	{
-		stage->blocks[i].block = (b2SolverBlock){ i * context->blockSize, 0, 0, UINT8_MAX };
+		int startIndex = i < blockCount ? i * context->blockSize : itemCount;
+		stage->blocks[i].block = (b2SolverBlock){ startIndex, 0, 0, UINT8_MAX };
 	}
-	stage->blockCount = blockCount;
 
 	uint32_t syncBits = ( (uint32_t)context->syncIndex << 16 ) | (uint32_t)context->stageIndex;
 	b2ExecuteMainStage( stage, stepContext, syncBits );
@@ -1715,7 +1722,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		stage = b2InitColorStages( stage, b2_stageRestitution, 1, activeColorCount, graphColorBlocks, graphBlockCounts,
 								   activeColorIndices );
 		stage = b2InitStage( stage, b2_stageStoreImpulses, contactBlocks, contactPrepareDim.count, UINT8_MAX );
-		stage = b2InitStage( stage, b2_stageUser, userBlocks, 0, UINT8_MAX );
+		stage = b2InitStage( stage, b2_stageUser, userBlocks, maxBlockCount, UINT8_MAX );
 		for ( int i = 0; i < maxBlockCount; ++i )
 		{
 			b2AtomicStoreInt( &userBlocks[i].syncIndex, 0 );
