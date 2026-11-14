@@ -343,16 +343,13 @@ static void ApplyTask( int start, int end, int worker, void* context )
 	float restRatio = 1.0f + B2F_SQUEEZE_SURFACE, invRest = 1.0f / f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		float radius = 2.0f * b2fLatticeSize( f->size[i] ), limit = f->moveLimit * radius, limit2 = limit * limit;
-		if ( limit > 0.0f )
+		float radius = 2.0f * b2fLatticeSize( f->size[i] ), limit = B2F_MOVE_LIMIT * radius;
+		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i];
+		if ( d2 > limit * limit )
 		{
-			float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i];
-			if ( d2 > limit2 )
-			{
-				float scale = limit / sqrtf( d2 );
-				f->dx[i] *= scale;
-				f->dy[i] *= scale;
-			}
+			float scale = limit / sqrtf( d2 );
+			f->dx[i] *= scale;
+			f->dy[i] *= scale;
 		}
 		// Viscosity changes velocity, and the position follows it for the rest of the substep. Velocity itself is
 		// derived from the change in position at the end of the substep, so only the position needs the change.
@@ -520,7 +517,7 @@ static void SpringApplyTask( int start, int end, int worker, void* context )
 	b2fFluid* f = context;
 	for ( int i = start; i < end; ++i )
 	{
-		float cap = f->moveLimit * 2.0f * b2fLatticeSize( f->size[i] );
+		float cap = B2F_MOVE_LIMIT * 2.0f * b2fLatticeSize( f->size[i] );
 		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i], scale = d2 > cap * cap ? cap / sqrtf( d2 ) : 1.0f;
 		f->pos[i].x += scale * f->dx[i];
 		f->pos[i].y += scale * f->dy[i];

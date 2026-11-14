@@ -362,10 +362,9 @@ struct b2fFluid
 	b2fPatch* patches;
 	int patchCount, patchCapacity;
 
-	// Set per substep. Gravity is liquid 0's, after its gravity scale.
+	// Set per substep. Gravity is the world's; each liquid scales it by its gravityScale.
 	float h;
 	b2Vec2 worldGravity;
-	float moveLimit;
 
 	// Density box tables, sized to the liquid's bounds
 	double *boxMass, *boxPx, *boxPy, *boxWeight, *boxMixed;

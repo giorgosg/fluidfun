@@ -237,7 +237,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	UpdateLiquids( f );
 	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
-	f->moveLimit = B2F_MOVE_LIMIT;
 
 	size_t n = (size_t)f->capacity + 1;
 #define B2F_ALLOC_FIELD( type, name ) f->name = calloc( n, sizeof( type ) );
@@ -546,7 +545,7 @@ b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 		return b2_nullLiquidId;
 	}
 
-	// The lowest free slot, so that the first liquid of a fluid is the one the single-liquid passes read
+	// The lowest free slot, so that the first liquid of a fluid is the one the uniform density pass reads
 	int index = 0;
 	while ( index < f->liquidCount && f->liquids[index].alive )
 	{
@@ -700,9 +699,8 @@ void b2FinishFluid( b2fFluid* f )
 	b2fFinishStep( f );
 }
 
-void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, b2fFluid* f )
+void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFluid* f )
 {
-	(void)subStepCount;
 	f->checkSprings = subStepIndex == 0;
 	f->stepTime += h;
 	f->stepSubSteps += 1;
