@@ -196,9 +196,21 @@ B2_API void b2DestroyFluid( b2FluidId fluidId );
 /// Whether the id names a fluid that still exists
 B2_API bool b2Fluid_IsValid( b2FluidId fluidId );
 
-/// Change the fluid's settings between steps. The spacing and starting capacity cannot change, and maxCapacity cannot
-/// go below the room the fluid already has.
-B2_API void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def );
+/// The fluid's settings that can change after it is made, each as b2FluidDef describes it. The spacing and the starting
+/// capacity cannot change, since every particle and the solver's lengths are made from them. Changes take effect at the
+/// next step.
+B2_API void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth );
+B2_API float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId );
+B2_API void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox );
+B2_API float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId );
+
+/// The most particles the fluid will grow to hold. It cannot go below the room the fluid already has, and a value
+/// below that keeps that room as the most.
+B2_API void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity );
+B2_API int b2Fluid_GetMaxCapacity( b2FluidId fluidId );
+
+/// The spacing the fluid was made with, b2FluidDef::particleSpacing
+B2_API float b2Fluid_GetParticleSpacing( b2FluidId fluidId );
 
 /// How many particles the fluid has room for now. It starts at b2FluidDef::capacity and doubles as needed, up to
 /// b2FluidDef::maxCapacity.

@@ -678,6 +678,18 @@ static int FluidSpawnAndRemove( void )
 	ENSURE( b2Fluid_GetParticleCount( fluidId ) == def.maxCapacity );
 	ENSURE( IdsAreUnique( b2Fluid_GetParticles( fluidId ) ) );
 
+	// Raising the most lets the emitter go on; lowering it below the room there is keeps that room
+	b2Fluid_SetMaxCapacity( fluidId, 4 * def.maxCapacity );
+	ENSURE( b2Fluid_GetMaxCapacity( fluidId ) == 4 * def.maxCapacity );
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) > def.maxCapacity );
+	b2Fluid_SetMaxCapacity( fluidId, 10 );
+	ENSURE( b2Fluid_GetMaxCapacity( fluidId ) == b2Fluid_GetCapacity( fluidId ) );
+	ENSURE( b2Fluid_GetParticleSpacing( fluidId ) == def.particleSpacing );
+
 	b2DestroyWorld( worldId );
 	ENSURE( b2Emitter_IsValid( fullId ) == false );
 	return 0;
@@ -1759,9 +1771,12 @@ static int FluidInvalidDefs( void )
 	FLUID_REJECTS( b2Liquid_SetDef( waterId, badLiquid + 0 ) );
 	ENSURE( b2Liquid_GetDef( waterId ).density == water.density );
 	FLUID_REJECTS( b2Liquid_SetCohesionBetween( waterId, oilId, NAN ) );
-	b2FluidDef badSet = b2DefaultFluidDef();
-	badSet.adaptiveDepth = -1.0f;
-	FLUID_REJECTS( b2Fluid_SetDef( fluidId, &badSet ) );
+	FLUID_REJECTS( b2Fluid_SetAdaptiveDepth( fluidId, -1.0f ) );
+	FLUID_REJECTS( b2Fluid_SetAdaptiveFullBox( fluidId, NAN ) );
+	FLUID_REJECTS( b2Fluid_SetMaxCapacity( fluidId, -1 ) );
+	ENSURE( b2Fluid_GetAdaptiveDepth( fluidId ) == def.adaptiveDepth );
+	ENSURE( b2Fluid_GetAdaptiveFullBox( fluidId ) == def.adaptiveFullBox );
+	ENSURE( b2Fluid_GetMaxCapacity( fluidId ) == def.maxCapacity );
 
 	// What a get call returns can be passed back
 	b2LiquidDef got = b2Liquid_GetDef( waterId );

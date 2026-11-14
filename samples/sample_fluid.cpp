@@ -117,7 +117,8 @@ public:
 		changed |= ImGui::SliderFloat( "Yield ratio", &m_def->liquid.yieldRatio, 0.0f, 0.5f, "%.2f" );
 		if ( changed )
 		{
-			b2Fluid_SetDef( m_fluid, &m_def->fluid );
+			b2Fluid_SetAdaptiveDepth( m_fluid, m_def->fluid.adaptiveDepth );
+			b2Fluid_SetAdaptiveFullBox( m_fluid, m_def->fluid.adaptiveFullBox );
 			b2Liquid_SetDef( m_scene->liquids[0], &m_def->liquid );
 		}
 

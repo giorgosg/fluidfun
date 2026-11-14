@@ -363,20 +363,44 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f, sizeof( b2fFluid ) );
 }
 
-void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
+void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth )
 {
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( IsValidFluidDef( def ) == false )
-	{
-		return;
-	}
+	B2_CHECK_INPUT( b2IsValidFloat( adaptiveDepth ) && adaptiveDepth >= 0.0f );
+	b2fGetFluid( fluidId )->def.adaptiveDepth = adaptiveDepth;
+}
 
-	float spacing = f->def.particleSpacing;
-	int capacity = f->def.capacity;
-	f->def = *def;
-	f->def.particleSpacing = spacing;
-	f->def.capacity = capacity;
-	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
+float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->def.adaptiveDepth;
+}
+
+void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox )
+{
+	B2_CHECK_INPUT( b2IsValidFloat( adaptiveFullBox ) && adaptiveFullBox > 0.0f );
+	b2fGetFluid( fluidId )->def.adaptiveFullBox = adaptiveFullBox;
+}
+
+float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->def.adaptiveFullBox;
+}
+
+void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity )
+{
+	B2_CHECK_INPUT( maxCapacity >= 0 );
+	b2fFluid* f = b2fGetFluid( fluidId );
+	f->def.maxCapacity = maxCapacity;
+	f->maxCapacity = maxCapacity > f->capacity ? maxCapacity : f->capacity;
+}
+
+int b2Fluid_GetMaxCapacity( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->maxCapacity;
+}
+
+float b2Fluid_GetParticleSpacing( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->def.particleSpacing;
 }
 
 int b2Fluid_GetCapacity( b2FluidId fluidId )
