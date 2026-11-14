@@ -218,8 +218,9 @@ B2_API void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB,
 /// business. When the fluid is full it grows (b2FluidDef::capacity); a spawn that returns fewer than the shape holds
 /// has reached b2FluidDef::maxCapacity, which b2Fluid_GetParticleCount then equals. Call between steps.
 ///
-/// A box, between two corners. With adaptive sizes particles start at the size their distance from the edge of the
-/// box asks for, in rectangular rings, so a pool does not begin by merging all over.
+/// A box, between two corners. Without adaptive sizes it is filled as the shapes below are, on a lattice centred on the
+/// box that keeps the points inside it, edges included. With adaptive sizes particles start at the size their distance
+/// from the edge of the box asks for, in rectangular rings, so a pool does not begin by merging all over.
 B2_API int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocity );
 
 /// A circle. This and the shapes below start every particle at the finest size, and with adaptive sizes the deeper

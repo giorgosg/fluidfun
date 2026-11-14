@@ -352,9 +352,10 @@ static int FluidState( void )
 	ENSURE( fabsf( submerged - level ) < 0.15f );
 
 	// The sensor is under the surface, full of water. Particles cross its edges as the water sloshes, so this is the
-	// mean over the last second.
-	float held = areaSum / (float)settled;
-	ENSURE( fabsf( held - sensorArea ) < 0.1f * sensorArea );
+	// mean over the last second. Liquid packs about as it was spawned, 0.97 particleSpacing apart, so the particles'
+	// area in the sensor is about 1 / 0.97^2 of its own; it reads 1.04 of that.
+	float held = areaSum / (float)settled, packed = sensorArea / ( 0.97f * 0.97f );
+	ENSURE( fabsf( held - packed ) < 0.1f * packed );
 	ENSURE( b2Fluid_GetSensorArea( fluidId, floorId ) == 0.0f );
 
 	// Everything is in the tank, and the surface stands as high as the water's area, and what the crate displaces,
@@ -498,7 +499,7 @@ static int FluidSpawnAndRemove( void )
 	ENSURE( fabsf( (float)count - 4.0f * box.half.x * box.half.y / cellArea ) < 0.1f * (float)count );
 	ENSURE( CheckSpawned( fluidId, first, velocity, InsideBox, &box ) );
 
-	// A box puts particles on its edges, so it is close to its area only once it is many particles across
+	// An upright box, filled as the polygon was
 	first = b2Fluid_GetParticleCount( fluidId );
 	SpawnBox upright = { { -3.0f, 2.0f }, { 1.5f, 1.0f }, b2Rot_identity };
 	count = b2Liquid_SpawnBox( waterId, b2ToPos( b2Sub( upright.center, upright.half ) ), b2ToPos( b2Add( upright.center, upright.half ) ), velocity );
@@ -1108,13 +1109,18 @@ static int FluidFilter( void )
 	b2Filter filter = crateShape.filter;
 	filter.maskBits = ~(uint64_t)0x8;
 	b2Shape_SetFilter( crateShapeId, filter );
+	// The liquid inside the crate is thrown out when it starts colliding, so the crate can be in the air at any one
+	// frame; it has to have been in the liquid
 	float lift = 0.0f;
+	bool wet = false;
 	for ( int frame = 0; frame < 60; ++frame )
 	{
 		b2World_Step( worldId, 1.0f / 60.0f, 4 );
-		lift = b2Fluid_GetBodyState( fluidId, crateId ).force.y > lift ? b2Fluid_GetBodyState( fluidId, crateId ).force.y : lift;
+		b2FluidBodyState state = b2Fluid_GetBodyState( fluidId, crateId );
+		lift = state.force.y > lift ? state.force.y : lift;
+		wet = wet || state.inLiquid;
 	}
-	ENSURE( b2Fluid_GetBodyState( fluidId, crateId ).inLiquid );
+	ENSURE( wet );
 	ENSURE( lift > 0.0f );
 	ENSURE( b2Body_GetPosition( crateId ).y > 0.2f );
 	b2DestroyWorld( worldId );
