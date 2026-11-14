@@ -91,8 +91,8 @@ static void BuildGrid( b2fFluid* f )
 	int cellCount = width * height;
 	if ( cellCount + 2 > f->gridCapacity )
 	{
+		f->cellStart = b2fGrowArray( f->cellStart, f->gridCapacity, 2 * cellCount + 2, sizeof( int ) );
 		f->gridCapacity = 2 * cellCount + 2;
-		f->cellStart = realloc( f->cellStart, (size_t)f->gridCapacity * sizeof( int ) );
 	}
 	memset( f->cellStart, 0, ( (size_t)cellCount + 2 ) * sizeof( int ) );
 
@@ -101,9 +101,9 @@ static void BuildGrid( b2fFluid* f )
 	{
 		if ( bw * bh > f->blockCapacity )
 		{
+			f->blockSize = b2fGrowArray( f->blockSize, f->blockCapacity, 2 * bw * bh, sizeof( float ) );
+			f->blockReach = b2fGrowArray( f->blockReach, f->blockCapacity, 2 * bw * bh, sizeof( float ) );
 			f->blockCapacity = 2 * bw * bh;
-			f->blockSize = realloc( f->blockSize, (size_t)f->blockCapacity * sizeof( float ) );
-			f->blockReach = realloc( f->blockReach, (size_t)f->blockCapacity * sizeof( float ) );
 		}
 		memset( f->blockSize, 0, (size_t)( bw * bh ) * sizeof( float ) );
 	}

@@ -1571,6 +1571,86 @@ static int FluidCoarsenSpawns( void )
 	return 0;
 }
 
+// The fluid allocates through Box2D, so its memory is in b2GetByteCount, and all of it goes with the fluid or the world.
+// Room for 500 particles that grows, with springs, a sensor, a body in the liquid and events, touches every
+// array the fluid has.
+static int FluidMemory( void )
+{
+	size_t start = b2GetByteCount();
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon floor = b2MakeOffsetBox( 4.0f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &floor );
+	b2Polygon wall = b2MakeOffsetBox( 0.5f, 3.0f, ( b2Vec2 ){ -4.5f, 2.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &wall );
+	wall = b2MakeOffsetBox( 0.5f, 3.0f, ( b2Vec2 ){ 4.5f, 2.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &wall );
+	b2ShapeDef sensorDef = b2DefaultShapeDef();
+	sensorDef.isSensor = true;
+	b2Polygon sensorBox = b2MakeOffsetBox( 1.0f, 0.3f, ( b2Vec2 ){ 2.0f, 0.4f }, b2Rot_identity );
+	b2ShapeId sensorId = b2CreatePolygonShape( groundId, &sensorDef, &sensorBox );
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ -2.0f, 2.0f };
+	b2BodyId crateId = b2CreateBody( worldId, &bodyDef );
+	shapeDef.density = 0.5f;
+	b2Polygon crate = b2MakeBox( 0.3f, 0.3f );
+	b2CreatePolygonShape( crateId, &shapeDef, &crate );
+
+	// Steps first, so the world's own arrays have grown before the fluid comes
+	for ( int i = 0; i < 10; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	size_t worldOnly = b2GetByteCount();
+	ENSURE( worldOnly > start );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 500;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 4.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2LiquidDef jelly = b2MakeJellyDef();
+	b2LiquidId jellyId = b2CreateLiquid( fluidId, &jelly );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -3.9f, 0.0f }, ( b2Pos ){ 3.9f, 1.2f }, b2Vec2_zero );
+	b2Liquid_SpawnCircle( jellyId, ( b2Pos ){ 2.0f, 2.5f }, 0.4f, b2Vec2_zero );
+	b2EmitterDef emitterDef = b2DefaultEmitterDef();
+	emitterDef.point1 = ( b2Pos ){ 0.0f, 3.0f };
+	emitterDef.point2 = ( b2Pos ){ 0.5f, 3.0f };
+	emitterDef.velocity = ( b2Vec2 ){ 0.0f, -2.0f };
+	b2CreateEmitter( waterId, &emitterDef );
+	ENSURE( b2Fluid_GetCapacity( fluidId ) > def.capacity );
+
+	int bodyBegins = 0;
+	for ( int i = 0; i < 30; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		bodyBegins += b2Fluid_GetEvents( fluidId ).bodyBeginCount;
+	}
+	ENSURE( bodyBegins > 0 );
+	ENSURE( b2Fluid_GetSensorArea( fluidId, sensorId ) > 0.0f );
+
+	// Each particle of room takes about 820 bytes with springs, as b2FluidDef::maxCapacity says
+	size_t withFluid = b2GetByteCount();
+	ENSURE( withFluid - worldOnly > (size_t)b2Fluid_GetCapacity( fluidId ) * 800 );
+
+	b2DestroyFluid( fluidId );
+	ENSURE( b2GetByteCount() == worldOnly );
+
+	// A fluid the world destroys goes with it
+	fluidId = b2CreateFluid( worldId, &def );
+	waterId = b2CreateLiquid( fluidId, &water );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -3.9f, 0.0f }, ( b2Pos ){ 3.9f, 1.2f }, b2Vec2_zero );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2GetByteCount() > worldOnly );
+	b2DestroyWorld( worldId );
+	ENSURE( b2GetByteCount() == start );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1585,5 +1665,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidAdaptiveGravity );
 	RUN_SUBTEST( FluidAdaptiveStepRate );
 	RUN_SUBTEST( FluidCoarsenSpawns );
+	RUN_SUBTEST( FluidMemory );
 	return 0;
 }

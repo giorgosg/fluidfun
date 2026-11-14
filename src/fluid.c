@@ -99,6 +99,17 @@ b2FluidDef b2DefaultFluidDef( void )
 	return def;
 }
 
+// The id table b2fRelaxSprings fills: a power of two at least twice the room for particles
+static size_t IdMapSlots( int capacity )
+{
+	size_t n = (size_t)capacity + 1, slots = 1;
+	while ( slots < 2 * n )
+	{
+		slots *= 2;
+	}
+	return slots;
+}
+
 // Rebuilds what the passes read from the liquids' settings. A destroyed liquid's slot keeps its last settings, which
 // nothing reads since no particle is of it.
 static void UpdateLiquids( b2fFluid* f )
@@ -120,14 +131,10 @@ static void UpdateLiquids( b2fFluid* f )
 
 	if ( f->springy && f->springs == NULL )
 	{
-		size_t n = (size_t)f->capacity + 1, slots = 1;
-		while ( slots < 2 * n )
-		{
-			slots *= 2;
-		}
-		f->springs = calloc( n, sizeof( b2fSprings ) );
-		f->sortedSprings = calloc( n, sizeof( b2fSprings ) );
-		f->idMap = malloc( slots * sizeof( b2fIdSlot ) );
+		size_t n = (size_t)f->capacity + 1;
+		f->springs = b2AllocZero( n * sizeof( b2fSprings ) );
+		f->sortedSprings = b2AllocZero( n * sizeof( b2fSprings ) );
+		f->idMap = b2Alloc( IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
 	}
 
 	for ( int a = 0; a < f->liquidCount; ++a )
@@ -225,7 +232,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 		return b2_nullFluidId;
 	}
 
-	b2fFluid* f = calloc( 1, sizeof( b2fFluid ) );
+	b2fFluid* f = b2AllocZero( sizeof( b2fFluid ) );
 	f->worldId = worldId;
 	f->def = *def;
 	f->capacity = def->capacity > 0 ? def->capacity : 0;
@@ -239,16 +246,16 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->maxRadius = f->radius;
 
 	size_t n = (size_t)f->capacity + 1;
-#define B2F_ALLOC_FIELD( type, name ) f->name = calloc( n, sizeof( type ) );
-#define B2F_ALLOC_SORTED( type, name ) f->sorted.name = calloc( n, sizeof( type ) );
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+#define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_SORTED )
 	B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
 	B2F_WORK_FIELDS( B2F_ALLOC_FIELD )
 #undef B2F_ALLOC_FIELD
 #undef B2F_ALLOC_SORTED
-	f->contacts = calloc( n, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
-	f->pairs = malloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
+	f->contacts = b2AllocZero( n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
+	f->pairs = b2Alloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
 	b2fBuildWallTable( f );
 
 	world->fluid = f;
@@ -271,37 +278,42 @@ void b2DestroyFluid( b2FluidId fluidId )
 
 void b2FreeFluid( b2fFluid* f )
 {
-#define B2F_FREE_FIELD( type, name ) free( f->name );
-#define B2F_FREE_SORTED( type, name ) free( f->sorted.name );
+	size_t n = (size_t)f->capacity + 1;
+#define B2F_FREE_FIELD( type, name ) b2Free( f->name, n * sizeof( type ) );
+#define B2F_FREE_SORTED( type, name ) b2Free( f->sorted.name, n * sizeof( type ) );
 	B2F_PARTICLE_FIELDS( B2F_FREE_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_FREE_SORTED )
 	B2F_CARRIED_FIELDS( B2F_FREE_FIELD )
 	B2F_WORK_FIELDS( B2F_FREE_FIELD )
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
-	free( f->contacts );
-	free( f->pairs );
-	free( f->springs );
-	free( f->sortedSprings );
-	free( f->idMap );
-	free( f->cellStart );
-	free( f->blockSize );
-	free( f->blockReach );
-	free( f->shapes );
-	free( f->bodies );
-	free( f->reactions );
-	free( f->patches );
-	free( f->boxMass );
-	free( f->boxPx );
-	free( f->boxPy );
-	free( f->boxWeight );
-	free( f->boxMixed );
-	free( f->boxLiquid );
-	free( f->boxPressure );
-	free( f->boxDepth );
-	free( f->boxFlow );
+	b2Free( f->contacts, n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
+	b2Free( f->pairs, n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
+	if ( f->springs != NULL )
+	{
+		b2Free( f->springs, n * sizeof( b2fSprings ) );
+		b2Free( f->sortedSprings, n * sizeof( b2fSprings ) );
+		b2Free( f->idMap, IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
+	}
+	b2Free( f->cellStart, (size_t)f->gridCapacity * sizeof( int ) );
+	b2Free( f->blockSize, (size_t)f->blockCapacity * sizeof( float ) );
+	b2Free( f->blockReach, (size_t)f->blockCapacity * sizeof( float ) );
+	b2Free( f->shapes, (size_t)f->shapeCapacity * sizeof( b2fShape ) );
+	b2Free( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
+	b2Free( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );
+	b2Free( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
+	size_t boxes = (size_t)f->boxCapacity;
+	b2Free( f->boxMass, boxes * sizeof( double ) );
+	b2Free( f->boxPx, boxes * sizeof( double ) );
+	b2Free( f->boxPy, boxes * sizeof( double ) );
+	b2Free( f->boxWeight, boxes * sizeof( double ) );
+	b2Free( f->boxMixed, boxes * sizeof( double ) );
+	b2Free( f->boxLiquid, boxes );
+	b2Free( f->boxPressure, boxes * sizeof( float ) );
+	b2Free( f->boxDepth, boxes * sizeof( float ) );
+	b2Free( f->boxFlow, boxes * sizeof( float ) );
 	b2fFreeState( f );
-	free( f );
+	b2Free( f, sizeof( b2fFluid ) );
 }
 
 void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
@@ -324,8 +336,7 @@ int b2Fluid_GetCapacity( b2FluidId fluidId )
 // Resizes an array of count + 1 values to newCount + 1, zeroing the new part when the array started zeroed
 static void* Resize( void* array, int count, int newCount, size_t size, bool zero )
 {
-	char* p = realloc( array, ( (size_t)newCount + 1 ) * size );
-	B2_ASSERT( p != NULL );
+	char* p = b2GrowAlloc( array, ( (size_t)count + 1 ) * size, ( (size_t)newCount + 1 ) * size );
 	if ( zero )
 	{
 		memset( p + ( (size_t)count + 1 ) * size, 0, (size_t)( newCount - count ) * size );
@@ -370,13 +381,8 @@ bool b2fGrow( b2fFluid* f, int needed )
 	{
 		f->springs = Resize( f->springs, old, capacity, sizeof( b2fSprings ), true );
 		f->sortedSprings = Resize( f->sortedSprings, old, capacity, sizeof( b2fSprings ), true );
-		size_t n = (size_t)capacity + 1, slots = 1;
-		while ( slots < 2 * n )
-		{
-			slots *= 2;
-		}
-		free( f->idMap );
-		f->idMap = malloc( slots * sizeof( b2fIdSlot ) );
+		b2Free( f->idMap, IdMapSlots( old ) * sizeof( b2fIdSlot ) );
+		f->idMap = b2Alloc( IdMapSlots( capacity ) * sizeof( b2fIdSlot ) );
 	}
 
 	f->capacity = capacity;
@@ -399,7 +405,7 @@ int b2fRemoveMarked( b2fFluid* f )
 	}
 
 	bool keepGrid = f->gridValid;
-	int* before = keepGrid ? malloc( ( (size_t)n + 1 ) * sizeof( int ) ) : NULL;
+	int* before = keepGrid ? b2Alloc( ( (size_t)n + 1 ) * sizeof( int ) ) : NULL;
 	for ( int i = 0; keepGrid && i < first; ++i )
 	{
 		before[i] = i;
@@ -437,7 +443,7 @@ int b2fRemoveMarked( b2fFluid* f )
 			f->cellStart[c] = before[f->cellStart[c]];
 		}
 	}
-	free( before );
+	b2Free( before, keepGrid ? ( (size_t)n + 1 ) * sizeof( int ) : 0 );
 	return n - kept;
 }
 
