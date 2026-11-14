@@ -130,40 +130,9 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 	return added;
 }
 
-int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lower, b2Pos upper, b2Vec2 velocity )
-{
-	b2fFluid* f;
-	int liquid = b2fGetLiquid( liquidId, &f );
-	if ( SpawnCalled( liquidId ) == false )
-	{
-		return 0;
-	}
-
-	if ( f->liquids[liquid].def.tuning.adaptiveRatio > 1.0f )
-	{
-		return CreateGradedParticles( f, liquid, lower, upper, velocity );
-	}
-
-	float spacing = SpawnSpacing( f );
-	float rowSpacing = 0.8660254f * spacing;
-	int added = 0;
-	int row = 0;
-	for ( b2fCoord y = lower.y; y <= upper.y; y += rowSpacing, ++row )
-	{
-		for ( b2fCoord x = lower.x + ( row & 1 ? 0.5f * spacing : 0.0f ); x <= upper.x; x += spacing )
-		{
-			if ( AddParticle( f, liquid, x, y, f->spacing, velocity ) == false )
-			{
-				return added;
-			}
-			added += 1;
-		}
-	}
-	return added;
-}
-
-// The shapes other than the box: a lattice at the finest size over the shape's bounds, centred on a point near the
-// shape, keeping the points inside it. The test takes points relative to that centre, in float.
+// A lattice at the finest size over the shape's bounds, centred on a point near the shape, keeping the points inside
+// it, edges included. The test takes points relative to that centre, in float. Every shape spawns this way, and a box
+// too unless its liquid has adaptive sizes.
 typedef struct b2fSpawnShape
 {
 	b2ShapeType type;
@@ -189,15 +158,8 @@ static bool InsideSpawnShape( const b2fSpawnShape* s, b2Vec2 p )
 	}
 }
 
-static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 velocity )
+static int FillLattice( b2fFluid* f, int liquid, const b2fSpawnShape* s, b2Vec2 velocity )
 {
-	b2fFluid* f;
-	int liquid = b2fGetLiquid( liquidId, &f );
-	if ( SpawnCalled( liquidId ) == false )
-	{
-		return 0;
-	}
-
 	float spacing = SpawnSpacing( f ), rowSpacing = 0.8660254f * spacing;
 	int rows = (int)( s->halfHeight / rowSpacing ) + 1, columns = (int)( s->halfWidth / spacing ) + 1;
 	int added = 0;
@@ -220,6 +182,43 @@ static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 vel
 		}
 	}
 	return added;
+}
+
+static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 velocity )
+{
+	b2fFluid* f;
+	int liquid = b2fGetLiquid( liquidId, &f );
+	if ( SpawnCalled( liquidId ) == false )
+	{
+		return 0;
+	}
+	return FillLattice( f, liquid, s, velocity );
+}
+
+int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lower, b2Pos upper, b2Vec2 velocity )
+{
+	b2fFluid* f;
+	int liquid = b2fGetLiquid( liquidId, &f );
+	if ( SpawnCalled( liquidId ) == false )
+	{
+		return 0;
+	}
+
+	if ( f->liquids[liquid].def.tuning.adaptiveRatio > 1.0f )
+	{
+		return CreateGradedParticles( f, liquid, lower, upper, velocity );
+	}
+
+	float halfWidth = 0.5f * (float)( upper.x - lower.x ), halfHeight = 0.5f * (float)( upper.y - lower.y );
+	b2fSpawnShape s = {
+		.type = b2_polygonShape,
+		.polygon = b2MakeBox( halfWidth, halfHeight ),
+		.rotation = b2Rot_identity,
+		.center = { 0.5f * ( lower.x + upper.x ), 0.5f * ( lower.y + upper.y ) },
+		.halfWidth = halfWidth,
+		.halfHeight = halfHeight,
+	};
+	return FillLattice( f, liquid, &s, velocity );
 }
 
 int b2Liquid_SpawnCircle( b2LiquidId liquidId, b2Pos center, float radius, b2Vec2 velocity )
