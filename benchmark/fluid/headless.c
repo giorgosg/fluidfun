@@ -513,7 +513,7 @@ int main( int argc, char** argv )
 
 			// LAB_START: how liquid settles after it spawns. Every so many frames: the particle count and its peak so far,
 			// size changes, the rms of density over rest less one, the same less the mean of a band 0.25 m high, which takes
-			// out the weight's squeeze and leaves the noise, and the rms speed. The first step's time comes first.
+			// out the weight's squeeze and leaves the noise, and the rms and the largest speed. The first step's time comes first.
 			if ( startEvery > 0 )
 			{
 				b2FluidParticles particles = b2Fluid_GetParticles( fluid );
@@ -533,7 +533,7 @@ int main( int argc, char** argv )
 					const b2Pos* pos = particles.positions;
 					const float* rho = particles.densities;
 					float rest = particles.restDensity;
-					double raw = 0.0, speed = 0.0;
+					double raw = 0.0, speed = 0.0, fastest = 0.0;
 					for ( int k = 0; k < n; ++k )
 					{
 						int band = (int)floor( pos[k].y / 0.25 );
@@ -542,7 +542,9 @@ int main( int argc, char** argv )
 						bandSum[band] += e;
 						bandN[band] += 1;
 						raw += e * e;
-						speed += (double)particles.velocitiesX[k] * particles.velocitiesX[k] + (double)particles.velocitiesY[k] * particles.velocitiesY[k];
+						double v2 = (double)particles.velocitiesX[k] * particles.velocitiesX[k] + (double)particles.velocitiesY[k] * particles.velocitiesY[k];
+						speed += v2;
+						fastest = v2 > fastest ? v2 : fastest;
 					}
 					double noise = 0.0;
 					for ( int k = 0; k < n; ++k )
@@ -552,8 +554,9 @@ int main( int argc, char** argv )
 						double e = rho[k] / rest - 1.0 - bandSum[band] / bandN[band];
 						noise += e * e;
 					}
-					printf( "START t %.3f n %d peak %d changes %d rms %.4f noise %.4f speed %.4f\n", (double)( i + 1 ) / (double)hz, n, peakCount,
-							p.sizeChanges, n > 0 ? sqrt( raw / n ) : 0.0, n > 0 ? sqrt( noise / n ) : 0.0, n > 0 ? sqrt( speed / n ) : 0.0 );
+					printf( "START t %.3f n %d peak %d changes %d rms %.4f noise %.4f speed %.4f fastest %.2f\n", (double)( i + 1 ) / (double)hz, n,
+							peakCount, p.sizeChanges, n > 0 ? sqrt( raw / n ) : 0.0, n > 0 ? sqrt( noise / n ) : 0.0, n > 0 ? sqrt( speed / n ) : 0.0,
+							sqrt( fastest ) );
 				}
 			}
 			measureSum += p.measure;
