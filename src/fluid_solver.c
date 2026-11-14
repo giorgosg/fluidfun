@@ -10,23 +10,27 @@ static inline float TensileClamp( float excess, float tensile )
 	return excess > 0.0f ? excess : tensile * excess;
 }
 
-// Densities and pressures for one particle use current positions. Also keeps each neighbour within reach for the move pass.
+// Densities for one particle, from current positions, keeping each neighbour within reach for the move pass. A pair
+// uses the mean of the two sizes and weights the other particle by its area, which keeps moves equal and opposite in
+// momentum when sizes differ. A neighbour of a liquid this particle's liquid does not push on is not counted and not
+// kept, so no pair move, viscosity or cohesion acts between them either.
 static inline void Density( b2fFluid* f, int i, float* density, float* nearDensity )
 {
-	float h = f->radius, h2 = h * h, inv = 1.0f / h;
 	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-	float a = 0.0f, b = 0.0f;
+	float si = f->size[i], a = 0.0f, b = 0.0f;
+	uint32_t sees = f->liquidSees[f->liquid[i]];
+	bool all = sees == UINT32_MAX;
 	b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
 	int n = 0;
 	FOR_NEIGHBOURS( f, i, j )
 	{
-		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
-		if ( d2 < h2 && j != i )
+		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+		if ( d2 < h * h && j != i && ( all || ( sees >> f->liquid[j] & 1u ) != 0 ) )
 		{
-			float l = sqrtf( d2 ), q = 1.0f - l * inv;
-			float q2 = q * q;
-			a += q2;
-			b += q2 * q;
+			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
+			float l = sqrtf( d2 ), q = 1.0f - l / h;
+			a += w * q * q;
+			b += w * q * q * q;
 			if ( n < B2F_PAIRS_PER_PARTICLE )
 			{
 				pairs[n] = ( b2fPair ){ j, l };
@@ -64,197 +68,6 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 		contacts[c].move = move;
 		f->pos[i].x += move * contacts[c].normalX;
 		f->pos[i].y += move * contacts[c].normalY;
-	}
-}
-
-// With sizes that differ, a pair uses the mean size and weights the other particle by its area, which keeps
-// moves equal and opposite in momentum. Each particle's own pressure scales with its own size squared.
-static inline void AdaptiveDensity( b2fFluid* f, int i, float* density, float* nearDensity )
-{
-	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-	float si = f->size[i], a = 0.0f, b = 0.0f;
-	b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
-	int n = 0;
-	FOR_NEIGHBOURS( f, i, j )
-	{
-		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
-		if ( d2 < h * h && j != i )
-		{
-			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
-			float l = sqrtf( d2 ), q = 1.0f - l / h;
-			a += w * q * q;
-			b += w * q * q * q;
-			if ( n < B2F_PAIRS_PER_PARTICLE )
-			{
-				pairs[n] = ( b2fPair ){ j, l };
-			}
-			n += 1;
-		}
-	}
-	f->pairCount[i] = n <= B2F_PAIRS_PER_PARTICLE ? n : -1;
-	*density = a + f->wallDensity[i];
-	*nearDensity = b + f->wallNearDensity[i];
-}
-
-// The same, for several liquids some of which pass through each other: a neighbour of a liquid this particle's
-// liquid does not push on is not counted and not kept, so no pair move, viscosity or cohesion acts between them either
-static inline void FilteredDensity( b2fFluid* f, int i, float* density, float* nearDensity )
-{
-	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-	float si = f->size[i], a = 0.0f, b = 0.0f;
-	uint32_t sees = f->liquidSees[f->liquid[i]];
-	b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
-	int n = 0;
-	FOR_NEIGHBOURS( f, i, j )
-	{
-		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
-		if ( d2 < h * h && j != i && ( sees >> f->liquid[j] & 1u ) != 0 )
-		{
-			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
-			float l = sqrtf( d2 ), q = 1.0f - l / h;
-			a += w * q * q;
-			b += w * q * q * q;
-			if ( n < B2F_PAIRS_PER_PARTICLE )
-			{
-				pairs[n] = ( b2fPair ){ j, l };
-			}
-			n += 1;
-		}
-	}
-	f->pairCount[i] = n <= B2F_PAIRS_PER_PARTICLE ? n : -1;
-	*density = a + f->wallDensity[i];
-	*nearDensity = b + f->wallNearDensity[i];
-}
-
-static void AdaptiveAccumulate( b2fFluid* f, int start, int end )
-{
-	const b2LiquidDef* def = &f->liquids[0].def;
-	float k = def->tuning.stiffness, kn = def->tuning.nearStiffness, rest = f->restDensity;
-	float tensile = def->tuning.tensilePressure, cohesion = def->cohesion;
-	float sigma = def->viscosity, beta = def->tuning.quadraticViscosity, dt = f->h;
-	bool viscous = sigma > 0.0f || beta > 0.0f;
-	for ( int i = start; i < end; ++i )
-	{
-		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
-		float hi2 = 4.0f * si * si;
-		float pressure = k * hi2 * TensileClamp( f->rho[i] - rest, tensile ), nearPressure = kn * hi2 * f->rhoNear[i];
-		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
-#define B2F_ADAPTIVE_PAIR( j, l )                                                                                    \
-	{                                                                                                                  \
-		float sj = f->size[j], h = si + sj;                                                                            \
-		float q = 1.0f - l / h, mean = 0.5f * h, w = sj * sj / ( mean * mean ), hj2 = 4.0f * sj * sj;                \
-		float pj = k * hj2 * TensileClamp( f->rho[j] - rest, tensile ), nj = kn * hj2 * f->rhoNear[j];                \
-		float pull = cohesion * h * h * q * ( 1.0f - 2.0f * q );                                                       \
-		float d = 0.5f * w * ( ( pressure + pj ) * q + ( nearPressure + nj ) * q * q - pull ) / ( h * l );            \
-		moveX -= d * dx;                                                                                               \
-		moveY -= d * dy;                                                                                               \
-		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
-		if ( viscous && u > 0.0f )                                                                                     \
-		{                                                                                                              \
-			float impulse = 0.5f * w * dt * q * ( sigma * u + beta * u * u ) / l;                                      \
-			dvx -= impulse * dx;                                                                                       \
-			dvy -= impulse * dy;                                                                                       \
-		}                                                                                                              \
-	}
-		int n = f->pairCount[i];
-		if ( n >= 0 )
-		{
-			const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
-			for ( int p = 0; p < n; ++p )
-			{
-				int j = pairs[p].j;
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
-				if ( d2 > 1e-12f )
-				{
-					B2F_ADAPTIVE_PAIR( j, l )
-				}
-			}
-		}
-		else
-		{
-			FOR_NEIGHBOURS( f, i, j )
-			{
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = si + f->size[j];
-				if ( d2 < reach * reach && d2 > 1e-12f && j != i )
-				{
-					float l = sqrtf( d2 );
-					B2F_ADAPTIVE_PAIR( j, l )
-				}
-			}
-		}
-#undef B2F_ADAPTIVE_PAIR
-		f->dx[i] = moveX;
-		f->dy[i] = moveY;
-		f->viscX[i] = dvx;
-		f->viscY[i] = dvy;
-	}
-}
-
-// Several liquids. Pressures were stored by the density pass, each from its own liquid's settings. A pair takes its
-// cohesion, viscosity and mass weight from the table for the two liquids, which keeps the pair's moves equal and
-// opposite in momentum when the liquids differ in density. With one liquid the passes above give the same moves.
-static void MultiAccumulate( b2fFluid* f, int start, int end )
-{
-	float dt = f->h;
-	for ( int i = start; i < end; ++i )
-	{
-		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
-		float pressure = f->pressure[i], nearPressure = f->nearPressure[i];
-		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
-		const b2fLiquidPair* row = f->liquidPairs[f->liquid[i]];
-		// The density pass kept only neighbours this particle's liquid pushes on; a particle with too many to keep
-		// scans the grid, and skips the others here. Every bit is set when no liquids pass through each other.
-		uint32_t sees = f->liquidSees[f->liquid[i]];
-#define B2F_MULTI_PAIR( j, l )                                                                                       \
-	{                                                                                                                  \
-		const b2fLiquidPair* pair = row + f->liquid[j];                                                                \
-		float sj = f->size[j], h = si + sj;                                                                            \
-		float q = 1.0f - l / h, mean = 0.5f * h, w = pair->weight * sj * sj / ( mean * mean );                       \
-		float pull = pair->cohesion * h * h * q * ( 1.0f - 2.0f * q );                                                 \
-		float d = 0.5f * w * ( ( pressure + f->pressure[j] ) * q + ( nearPressure + f->nearPressure[j] ) * q * q - pull ) / ( h * l ); \
-		moveX -= d * dx;                                                                                               \
-		moveY -= d * dy;                                                                                               \
-		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
-		if ( u > 0.0f )                                                                                                \
-		{                                                                                                              \
-			float impulse = 0.5f * w * dt * q * ( pair->viscosity * u + pair->quadraticViscosity * u * u ) / l;  \
-			dvx -= impulse * dx;                                                                                       \
-			dvy -= impulse * dy;                                                                                       \
-		}                                                                                                              \
-	}
-		int n = f->pairCount[i];
-		if ( n >= 0 )
-		{
-			const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
-			for ( int p = 0; p < n; ++p )
-			{
-				int j = pairs[p].j;
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
-				if ( d2 > 1e-12f )
-				{
-					B2F_MULTI_PAIR( j, l )
-				}
-			}
-		}
-		else
-		{
-			FOR_NEIGHBOURS( f, i, j )
-			{
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = si + f->size[j];
-				if ( d2 < reach * reach && d2 > 1e-12f && j != i && ( sees >> f->liquid[j] & 1u ) != 0 )
-				{
-					float l = sqrtf( d2 );
-					B2F_MULTI_PAIR( j, l )
-				}
-			}
-		}
-#undef B2F_MULTI_PAIR
-		f->dx[i] = moveX;
-		f->dy[i] = moveY;
-		f->viscX[i] = dvx;
-		f->viscY[i] = dvy;
 	}
 }
 
@@ -309,76 +122,46 @@ static void AddSprings( b2fFluid* f, int i )
 	}
 }
 
-static void DensityTask( int start, int end, int worker, void* context )
+// The same for one liquid with uniform sizes, where every pair's reach is the interaction radius and weighs 1. It
+// gives the same densities up to rounding, and is kept because it is faster: without it and its move pass below, the two passes
+// took 12% longer in the Tank and 17% longer in the Pool with uniform sizes.
+static inline void UniformDensity( b2fFluid* f, int i, float* density, float* nearDensity )
 {
-	(void)worker;
-	b2fFluid* f = context;
-	bool springy = f->springy;
-	if ( f->liquidCount > 1 )
+	float h = f->radius, h2 = h * h, inv = 1.0f / h;
+	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
+	float a = 0.0f, b = 0.0f;
+	b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+	int n = 0;
+	FOR_NEIGHBOURS( f, i, j )
 	{
-		float rest = f->restDensity;
-		bool filtered = f->liquidsFiltered;
-		for ( int i = start; i < end; ++i )
+		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
+		if ( d2 < h2 && j != i )
 		{
-			if ( filtered )
+			float l = sqrtf( d2 ), q = 1.0f - l * inv;
+			float q2 = q * q;
+			a += q2;
+			b += q2 * q;
+			if ( n < B2F_PAIRS_PER_PARTICLE )
 			{
-				FilteredDensity( f, i, f->rho + i, f->rhoNear + i );
+				pairs[n] = ( b2fPair ){ j, l };
 			}
-			else
-			{
-				AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
-			}
-			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
-			float hi2 = 4.0f * f->size[i] * f->size[i];
-			f->pressure[i] = def->tuning.stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tuning.tensilePressure );
-			f->nearPressure[i] = def->tuning.nearStiffness * hi2 * f->rhoNear[i];
-			if ( springy )
-			{
-				AddSprings( f, i );
-			}
-		}
-		return;
-	}
-
-	if ( f->adaptive )
-	{
-		for ( int i = start; i < end; ++i )
-		{
-			AdaptiveDensity( f, i, f->rho + i, f->rhoNear + i );
-			if ( springy )
-			{
-				AddSprings( f, i );
-			}
-		}
-		return;
-	}
-
-	for ( int i = start; i < end; ++i )
-	{
-		Density( f, i, f->rho + i, f->rhoNear + i );
-		if ( springy )
-		{
-			AddSprings( f, i );
+			n += 1;
 		}
 	}
+	f->pairCount[i] = n <= B2F_PAIRS_PER_PARTICLE ? n : -1;
+	*density = a + f->wallDensity[i];
+	*nearDensity = b + f->wallNearDensity[i];
 }
 
-static void AccumulateTask( int start, int end, int worker, void* context )
+// One liquid with uniform sizes runs its own density and move passes
+static inline bool UsesUniformPasses( const b2fFluid* f )
 {
-	(void)worker;
-	b2fFluid* f = context;
-	if ( f->liquidCount > 1 )
-	{
-		MultiAccumulate( f, start, end );
-		return;
-	}
+	return f->liquidCount <= 1 && f->adaptive == false;
+}
 
-	if ( f->adaptive )
-	{
-		AdaptiveAccumulate( f, start, end );
-		return;
-	}
-
+// The move pass for one liquid with uniform sizes. It gives the same moves as the general pass up to rounding, faster.
+static void UniformAccumulate( b2fFluid* f, int start, int end )
+{
 	const b2LiquidDef* def = &f->liquids[0].def;
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
 	float scale = def->tuning.stiffness * h, nearScale = def->tuning.nearStiffness * h, rest = 2.0f * f->restDensity;
@@ -435,6 +218,116 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 			}
 		}
 #undef B2F_UNIFORM_PAIR
+		f->dx[i] = moveX;
+		f->dy[i] = moveY;
+		f->viscX[i] = dvx;
+		f->viscY[i] = dvy;
+	}
+}
+
+// Each particle's pressure and near pressure, from its own liquid's settings, scale with its size squared
+static void DensityTask( int start, int end, int worker, void* context )
+{
+	(void)worker;
+	b2fFluid* f = context;
+	bool springy = f->springy;
+	if ( UsesUniformPasses( f ) )
+	{
+		for ( int i = start; i < end; ++i )
+		{
+			UniformDensity( f, i, f->rho + i, f->rhoNear + i );
+			if ( springy )
+			{
+				AddSprings( f, i );
+			}
+		}
+		return;
+	}
+
+	float rest = f->restDensity;
+	for ( int i = start; i < end; ++i )
+	{
+		Density( f, i, f->rho + i, f->rhoNear + i );
+		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
+		float hi2 = 4.0f * f->size[i] * f->size[i];
+		f->pressure[i] = def->tuning.stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tuning.tensilePressure );
+		f->nearPressure[i] = def->tuning.nearStiffness * hi2 * f->rhoNear[i];
+		if ( springy )
+		{
+			AddSprings( f, i );
+		}
+	}
+}
+
+// The move from pressure, near pressure and cohesion, and the change of velocity from viscosity. A pair takes its
+// cohesion, viscosity and mass weight from the table for the two liquids, which keeps the pair's moves equal and
+// opposite in momentum when the liquids differ in density.
+static void AccumulateTask( int start, int end, int worker, void* context )
+{
+	(void)worker;
+	b2fFluid* f = context;
+	if ( UsesUniformPasses( f ) )
+	{
+		UniformAccumulate( f, start, end );
+		return;
+	}
+
+	float dt = f->h;
+	for ( int i = start; i < end; ++i )
+	{
+		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
+		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
+		float pressure = f->pressure[i], nearPressure = f->nearPressure[i];
+		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
+		const b2fLiquidPair* row = f->liquidPairs[f->liquid[i]];
+		// The density pass kept only neighbours this particle's liquid pushes on; a particle with too many to keep
+		// scans the grid, and skips the others here
+		uint32_t sees = f->liquidSees[f->liquid[i]];
+		bool all = sees == UINT32_MAX;
+#define B2F_PAIR( j, l )                                                                                             \
+	{                                                                                                                  \
+		const b2fLiquidPair* pair = row + f->liquid[j];                                                                \
+		float sj = f->size[j], h = si + sj;                                                                            \
+		float q = 1.0f - l / h, mean = 0.5f * h, w = pair->weight * sj * sj / ( mean * mean );                       \
+		float pull = pair->cohesion * h * h * q * ( 1.0f - 2.0f * q );                                                 \
+		float d = 0.5f * w * ( ( pressure + f->pressure[j] ) * q + ( nearPressure + f->nearPressure[j] ) * q * q - pull ) / ( h * l ); \
+		moveX -= d * dx;                                                                                               \
+		moveY -= d * dy;                                                                                               \
+		float u = ( ( vx - f->vx[j] ) * dx + ( vy - f->vy[j] ) * dy ) / l;                                            \
+		if ( u > 0.0f )                                                                                                \
+		{                                                                                                              \
+			float impulse = 0.5f * w * dt * q * ( pair->viscosity * u + pair->quadraticViscosity * u * u ) / l;          \
+			dvx -= impulse * dx;                                                                                       \
+			dvy -= impulse * dy;                                                                                       \
+		}                                                                                                              \
+	}
+		int n = f->pairCount[i];
+		if ( n >= 0 )
+		{
+			const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+			for ( int p = 0; p < n; ++p )
+			{
+				int j = pairs[p].j;
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
+				if ( d2 > 1e-12f )
+				{
+					B2F_PAIR( j, l )
+				}
+			}
+		}
+		else
+		{
+			FOR_NEIGHBOURS( f, i, j )
+			{
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = si + f->size[j];
+				if ( d2 < reach * reach && d2 > 1e-12f && j != i && ( all || ( sees >> f->liquid[j] & 1u ) != 0 ) )
+				{
+					float l = sqrtf( d2 );
+					B2F_PAIR( j, l )
+				}
+			}
+		}
+#undef B2F_PAIR
 		f->dx[i] = moveX;
 		f->dy[i] = moveY;
 		f->viscX[i] = dvx;
