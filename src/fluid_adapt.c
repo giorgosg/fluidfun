@@ -105,7 +105,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 
 	// Mass here is the area a particle fills at rest, whatever its liquid, so liquids of other densities fill a box
 	// the same
-	float inverse = 1.0f / ( spacing * spacing );
+	float fineSize = f->def.particleSpacing, inverse = 1.0f / ( fineSize * fineSize );
 	for ( int i = 0; i < f->count; ++i )
 	{
 		if ( ( counted >> f->liquid[i] & 1u ) == 0 )
@@ -120,7 +120,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		f->boxPy[c] += m * f->vy[i];
 		// Weightless liquid is squeezed by nothing, so squeeze says nothing about its depth
 		float slope = perMetre[f->liquid[i]];
-		float squeezeDepth = slope > 0.0f ? ( f->rho[i] / f->restDensity - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / slope : 0.0f;
+		float squeezeDepth = slope > 0.0f ? ( f->rho[i] / f->restDensity - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / fineSize ) / slope : 0.0f;
 		f->boxWeight[c] += m * ( squeezeDepth > 0.0f ? squeezeDepth : 0.0f );
 	}
 
@@ -169,7 +169,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	{
 		sizes[levels++] = (int)k;
 	}
-	int flowSize = (int)( B2F_FLOW_BOX * largest / cell + 0.5f );
+	int flowSize = (int)( B2F_FLOW_BOX * b2fLatticeSize( largest ) / cell + 0.5f );
 	flowSize = flowSize < 1 ? 1 : flowSize;
 
 	// Liquid at rest stands at the spacing it spawns at. Boxes count mass as area.
@@ -297,7 +297,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	// default settings, which keeps small, soft particles to a thin layer along a deep floor. Next to a moving body it
 	// cost lift, a quarter of it for a crate near the floor, so there size grows in a line with distance instead.
 	// Masses are the areas particles fill at rest, whatever the liquid.
-	float spacing = f->spacing, fineArea = f->fineArea;
+	float spacing = f->spacing, fineSize = f->def.particleSpacing, fineArea = f->fineArea;
 	b2fLiquidSizes sizes[B2F_MAX_LIQUIDS];
 	float perMetre[B2F_MAX_LIQUIDS];
 	float deepest = 0.0f;
@@ -366,7 +366,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		const b2fLiquidSizes* liquid = sizes + f->liquid[i];
 		if ( settle && ( ( f->coarsenLiquids >> f->liquid[i] & 1u ) == 0 || f->id[i] < f->coarsenFrom[f->liquid[i]] ) )
 		{
-			float s = f->size[i] / spacing;
+			float s = f->size[i] / fineSize;
 			f->adaptMass[i] = f->adaptTarget[i] = fineArea * s * s;
 			f->adaptUsed[i] = 0;
 			f->adaptClass[i] = b2f_good;
@@ -424,7 +424,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			target = target > safe ? target : safe;
 		}
 
-		float s = f->size[i] / spacing;
+		float s = f->size[i] / fineSize;
 		float mass = fineArea * s * s;
 		float relative = mass / target;
 		f->adaptMass[i] = mass;
@@ -440,7 +440,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		int cls = f->adaptClass[i];
 
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-		float reachI = 2.0f * f->size[i], reach2 = reachI * reachI;
+		float reachI = 2.0f * b2fLatticeSize( f->size[i] ), reach2 = reachI * reachI;
 
 		// Splits happen after this pass, but count as changes here
 		if ( cls == b2f_tooLarge && f->adaptUsed[i] == 0 )
@@ -523,7 +523,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		}
 
 		b2fCopyParticle( f, kept, i );
-		f->size[kept] = spacing * sqrtf( f->adaptMass[i] / fineArea );
+		f->size[kept] = fineSize * sqrtf( f->adaptMass[i] / fineArea );
 		f->adaptClass[kept] = f->adaptClass[i];
 		f->adaptTarget[kept] = f->adaptTarget[i];
 		kept += 1;
@@ -538,7 +538,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			continue;
 		}
 
-		float s = f->size[i] / spacing;
+		float s = f->size[i] / fineSize;
 		float mass = fineArea * s * s;
 		int children = (int)ceilf( mass / f->adaptTarget[i] );
 		children = children < B2F_MAX_CHILDREN ? children : B2F_MAX_CHILDREN;
@@ -548,9 +548,10 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			continue;
 		}
 
-		float child = f->size[i] / sqrtf( (float)children );
+		// The children's size, and the same on the solver's lattice, which the distances here go by
+		float child = f->size[i] / sqrtf( (float)children ), latticeChild = b2fLatticeSize( child );
 		int ring = children > 4 ? children - 1 : children;
-		float radius = child * B2F_SPAWN_SPACING * 0.5f / sinf( 3.14159265f / (float)ring );
+		float radius = latticeChild * B2F_SPAWN_SPACING * 0.5f / sinf( 3.14159265f / (float)ring );
 		float phase = 2.3999632f * (float)f->id[i];
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 
@@ -559,7 +560,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		for ( int si = 0; si < f->shapeCount && clear; ++si )
 		{
 			const b2fShape* shape = f->shapes + si;
-			float reachOut = radius + child;
+			float reachOut = radius + latticeChild;
 			if ( ( f->shapesFiltered && ( shape->liquids >> f->liquid[i] & 1u ) == 0 ) || x + reachOut < shape->minX || x - reachOut > shape->maxX || y + reachOut < shape->minY || y - reachOut > shape->maxY )
 			{
 				continue;
@@ -573,7 +574,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( point, body->origin ) );
 				float distance;
 				b2Vec2 normal;
-				if ( b2fShapeDistance( shape, local, &distance, &normal ) && distance < 0.5f * child )
+				if ( b2fShapeDistance( shape, local, &distance, &normal ) && distance < 0.5f * latticeChild )
 				{
 					clear = false;
 				}

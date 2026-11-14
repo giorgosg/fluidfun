@@ -399,7 +399,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 	bool filtered = f->shapesFiltered;
 	for ( int i = start; i < end; ++i )
 	{
-		float h = 2.0f * f->size[i], tableScale = (float)B2F_WALL_TABLE_SIZE / h;
+		float h = 2.0f * b2fLatticeSize( f->size[i] ), tableScale = (float)B2F_WALL_TABLE_SIZE / h;
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float density = 0.0f, nearDensity = 0.0f;
 		int count = 0;
@@ -476,7 +476,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float h = f->h, inv = 1.0f / h, spacing = f->spacing;
+	float h = f->h, inv = 1.0f / h, fineSize = f->def.particleSpacing;
 	bool adaptive = f->adaptive, filtered = f->shapesFiltered;
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
@@ -496,7 +496,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 			// under that the caller reads.
 			const b2fLiquid* liquid = f->liquids + f->liquid[i];
 			const b2LiquidDef* def = &liquid->def;
-			float ratio = f->size[i] / spacing, m = liquid->mass * ratio * ratio, margin = 0.5f * f->size[i];
+			float ratio = f->size[i] / fineSize, m = liquid->mass * ratio * ratio, margin = 0.5f * b2fLatticeSize( f->size[i] );
 			float friction = def->friction, added = def->tuning.addedMass;
 			float buoyantDensity = def->tuning.buoyancyAssist * def->density * def->gravityScale;
 
@@ -534,7 +534,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 						float facing = contacts[c].normalX * up.x + contacts[c].normalY * up.y;
 						if ( f->rho[i] >= spray && facing < B2F_TOP_FACING )
 						{
-							float top = rx * up.x + ry * up.y + 0.5f * B2F_REST_PITCH * f->size[i] - body->low;
+							float top = rx * up.x + ry * up.y + 0.5f * f->size[i] - body->low;
 							reaction->wetTop = top > reaction->wetTop ? top : reaction->wetTop;
 						}
 					}

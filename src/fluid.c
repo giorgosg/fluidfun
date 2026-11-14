@@ -231,7 +231,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->def = *def;
 	f->capacity = def->capacity > 0 ? def->capacity : 0;
 	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
-	f->spacing = def->particleSpacing / B2F_REST_PITCH;
+	f->spacing = b2fLatticeSize( def->particleSpacing );
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
 	f->fineArea = 0.8660254f * f->spacing * f->spacing / B2F_REST_FILL;
@@ -250,7 +250,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 #undef B2F_ALLOC_SORTED
 	f->contacts = calloc( n, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
 	f->pairs = malloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
-	f->restSizes = calloc( n, sizeof( float ) );
 	b2fBuildWallTable( f );
 
 	world->fluid = f;
@@ -281,7 +280,6 @@ void b2FreeFluid( b2fFluid* f )
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
 	free( f->contacts );
-	free( f->restSizes );
 	free( f->pairs );
 	free( f->springs );
 	free( f->sortedSprings );
@@ -366,7 +364,6 @@ bool b2fGrow( b2fFluid* f, int needed )
 #undef B2F_GROW_SORTED
 	f->contacts = Resize( f->contacts, old, capacity, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ), true );
 	f->pairs = Resize( f->pairs, old, capacity, B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ), false );
-	f->restSizes = Resize( f->restSizes, old, capacity, sizeof( float ), true );
 
 	// The spring arrays, made once some liquid has springs, and the id table, which is cleared before each use
 	if ( f->springs != NULL )
@@ -423,7 +420,6 @@ int b2fRemoveMarked( b2fFluid* f )
 			b2fClearParticle( f, i );
 		}
 		f->count = kept;
-		f->restSizesStale = true;
 
 		if ( keepGrid )
 		{
@@ -649,23 +645,12 @@ b2FluidParticles b2Fluid_GetParticles( b2FluidId fluidId )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
 
-	// Inside, a size is a spacing of the solver's lattice; the caller gets how far apart such particles rest. This is
-	// worked out once after each change rather than on every call.
-	if ( f->restSizesStale )
-	{
-		for ( int i = 0; i < f->count; ++i )
-		{
-			f->restSizes[i] = B2F_REST_PITCH * f->size[i];
-		}
-		f->restSizesStale = false;
-	}
-
 	return ( b2FluidParticles ){
 		.count = f->count,
 		.positions = f->pos,
 		.velocitiesX = f->vx,
 		.velocitiesY = f->vy,
-		.sizes = f->restSizes,
+		.sizes = f->size,
 		.liquids = f->liquid,
 		.densities = f->rho,
 		.ids = f->id,
@@ -693,7 +678,6 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 	b2fAdaptSizes( f );
 	// After the sizes, which need every particle to have a grid cell from the last sort, as new ones have not
 	b2fStepEmitters( f, timeStep );
-	f->restSizesStale = true;
 	b2fGatherShapes( f );
 
 	f->stepTime = 0.0f;
@@ -713,8 +697,6 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCou
 {
 	(void)subStepCount;
 	f->checkSprings = subStepIndex == 0;
-	// The sort below reorders particles
-	f->restSizesStale = true;
 	f->stepTime += h;
 	f->stepSubSteps += 1;
 	if ( f->count == 0 )
