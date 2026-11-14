@@ -213,14 +213,13 @@ typedef struct b2fReaction
 {
 	float x, y, angular;
 	float mass, momentX, momentY, inertia;
-	// Of the liquid within reach: its mass, that mass times the density its buoyancy goes by, and times its height
-	// above the body's centre of mass
-	float wetMass, wetDensity, wetHeight;
+	// Of the liquid within reach: its mass, and that mass times the density its buoyancy goes by
+	float wetMass, wetDensity;
 	// The length of the body's outline that liquid is against, and that length times the outline's normal, which
 	// sums to nothing for a body with liquid all the way round
 	float wetLength, wetNormalX, wetNormalY;
-	// For b2Fluid_GetBodyState only, which nothing in the solver reads: how high the liquid against the body stands
-	// above its lowest point, the highest particle that is not spray plus half its size, or zero
+	// How high the liquid against the body stands above its lowest point: the highest particle that is not spray, and
+	// not lying on an upward face, plus half its size, or zero
 	float wetTop;
 } b2fReaction;
 
