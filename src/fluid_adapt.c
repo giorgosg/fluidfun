@@ -118,7 +118,9 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		f->boxMass[c] += m;
 		f->boxPx[c] += m * f->vx[i];
 		f->boxPy[c] += m * f->vy[i];
-		float squeezeDepth = ( f->rho[i] / f->restDensity - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / perMetre[f->liquid[i]];
+		// Weightless liquid is squeezed by nothing, so squeeze says nothing about its depth
+		float slope = perMetre[f->liquid[i]];
+		float squeezeDepth = slope > 0.0f ? ( f->rho[i] / f->restDensity - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / spacing ) / slope : 0.0f;
 		f->boxWeight[c] += m * ( squeezeDepth > 0.0f ? squeezeDepth : 0.0f );
 	}
 
@@ -307,7 +309,10 @@ void b2fAdaptSizes( b2fFluid* f )
 	{
 		const b2LiquidDef* def = &f->liquids[l].def;
 		float ratio = def->tuning.adaptiveRatio > 1.0f ? def->tuning.adaptiveRatio : 1.0f;
-		float g = -def->gravityScale * f->worldGravity.y;
+		// Depth is measured the same way in every direction, by boxes and by squeeze, so only how strong gravity is
+		// matters, not which way it points. Without gravity nothing has weight, so no size is unsafe: the reach is
+		// adaptiveDepth alone, and the depth limit does nothing.
+		float g = b2AbsFloat( def->gravityScale ) * b2Length( f->worldGravity );
 		float reach = b2fAdaptiveReach( f, l, g, f->h );
 		sizes[l] = ( b2fLiquidSizes ){
 			.baseMass = fineMass * ratio * ratio,
@@ -321,7 +326,8 @@ void b2fAdaptSizes( b2fFluid* f )
 			.depthLimit = def->tuning.adaptiveDepthLimit,
 		};
 		perMetre[l] = B2F_SQUEEZE_SLOPE * g * f->h * f->h / ( def->tuning.stiffness * spacing * spacing );
-		if ( ratio > 1.0f )
+		// A liquid with no reach, weightless and with no adaptiveDepth, stays fine and needs no boxes
+		if ( ratio > 1.0f && reach < FLT_MAX )
 		{
 			deepest = deepest > reach ? deepest : reach;
 			wantFlow = wantFlow || def->tuning.adaptiveSpeed > 0.0f;

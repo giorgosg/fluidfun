@@ -1384,6 +1384,89 @@ static int FluidCrowdedSprings( void )
 	return 0;
 }
 
+// A closed square tank 6 m across, its floor at y = 0, with water 2 m deep against the wall gravity points at
+static b2LiquidId MakeAdaptiveTank( b2WorldId worldId, b2Vec2 gravity, bool depthLimit, b2FluidId* fluidId )
+{
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId tankId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon walls[4] = {
+		b2MakeOffsetBox( 4.0f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity ),
+		b2MakeOffsetBox( 4.0f, 0.5f, ( b2Vec2 ){ 0.0f, 6.5f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ -3.5f, 3.0f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ 3.5f, 3.0f }, b2Rot_identity ),
+	};
+	for ( int i = 0; i < 4; ++i )
+	{
+		b2CreatePolygonShape( tankId, &shapeDef, walls + i );
+	}
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 4000;
+	*fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveDepthLimit = depthLimit;
+	b2LiquidId waterId = b2CreateLiquid( *fluidId, &water );
+	float s = def.particleSpacing;
+	b2Pos lower = { -3.0f + s, s }, upper = { 3.0f - s, 2.0f };
+	if ( gravity.x < 0.0f )
+	{
+		lower = ( b2Pos ){ -3.0f + s, s };
+		upper = ( b2Pos ){ -1.0f, 6.0f - s };
+	}
+	else if ( gravity.x == 0.0f && gravity.y == 0.0f )
+	{
+		lower = ( b2Pos ){ -1.0f, 2.0f };
+		upper = ( b2Pos ){ 1.0f, 4.0f };
+	}
+	b2Liquid_SpawnBox( waterId, lower, upper, b2Vec2_zero );
+	return waterId;
+}
+
+// Adaptive sizes go by gravity's strength, not by its y: sideways gravity sizes a pool as gravity down does, and with no
+// gravity at all nothing reads as unsafe, nothing is divided by zero, and the depth limit does not make every particle
+// coarsest
+static int FluidAdaptiveGravity( void )
+{
+	b2Vec2 gravities[3] = { { 0.0f, -10.0f }, { -10.0f, 0.0f }, { 0.0f, 0.0f } };
+	int counts[3] = { 0 };
+	for ( int k = 0; k < 3; ++k )
+	{
+		for ( int limit = 0; limit < 2; ++limit )
+		{
+			b2WorldDef worldDef = b2DefaultWorldDef();
+			worldDef.gravity = gravities[k];
+			b2WorldId worldId = b2CreateWorld( &worldDef );
+			b2FluidId fluidId;
+			MakeAdaptiveTank( worldId, gravities[k], limit == 1, &fluidId );
+			for ( int i = 0; i < 60; ++i )
+			{
+				b2World_Step( worldId, 1.0f / 60.0f, 4 );
+			}
+
+			const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
+			float fine = f->spacing, coarse = f->liquids[0].def.tuning.adaptiveRatio * f->spacing;
+			int coarsest = 0;
+			for ( int i = 0; i < f->count; ++i )
+			{
+				ENSURE( isfinite( f->adaptPressure[i] ) && isfinite( f->adaptDepth[i] ) );
+				ENSURE( isfinite( (float)f->pos[i].x ) && isfinite( (float)f->pos[i].y ) );
+				ENSURE( f->size[i] >= 0.2f * fine && f->size[i] <= 1.01f * coarse );
+				coarsest += f->size[i] > 0.7f * coarse ? 1 : 0;
+			}
+			// On main, without gravity down the depth limit read NaN and made three in four particles coarser than 3
+			// times the finest
+			ENSURE( coarsest < f->count / 10 );
+			counts[k] = limit == 1 ? f->count : counts[k];
+			b2DestroyWorld( worldId );
+		}
+	}
+
+	// The same pool against the side wall has about as many particles as against the floor
+	ENSURE( counts[1] > 3 * counts[0] / 4 && counts[1] < 4 * counts[0] / 3 );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1395,5 +1478,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidStaleIds );
 	RUN_SUBTEST( FluidSecondFluid );
 	RUN_SUBTEST( FluidCrowdedSprings );
+	RUN_SUBTEST( FluidAdaptiveGravity );
 	return 0;
 }

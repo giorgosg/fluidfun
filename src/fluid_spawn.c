@@ -52,7 +52,8 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 {
 	const b2LiquidDef* def = &f->liquids[liquid].def;
 	float spacing = f->spacing, ratio = def->tuning.adaptiveRatio;
-	float g = -def->gravityScale * b2World_GetGravity( f->worldId ).y;
+	// As in the size pass, only gravity's strength matters, since depth is measured the same way in every direction
+	float g = b2AbsFloat( def->gravityScale ) * b2Length( b2World_GetGravity( f->worldId ) );
 	float reach = b2fAdaptiveReach( f, liquid, g, f->h > 0.0f ? f->h : 1.0f / 240.0f );
 	b2fCoord cx = 0.5f * ( lower.x + upper.x ), cy = 0.5f * ( lower.y + upper.y );
 	int added = 0, ring = 0;
