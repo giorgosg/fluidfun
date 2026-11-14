@@ -89,8 +89,8 @@ b2EmitterId tapId = b2CreateEmitter( waterId, &tap );
 
 // Each frame. A drain is a sensor shape emptied between steps, and a fan one whose liquid is pushed along at
 // 5 m/s^2; then the world steps its fluid with the bodies.
-b2Fluid_RemoveInShape( fluid, b2_nullLiquidId, drainShapeId );
-b2Fluid_AccelerateInShape( fluid, b2_nullLiquidId, fanShapeId, (b2Vec2){ 5.0f / 60.0f, 0.0f } );
+b2Fluid_Remove( fluid, b2_nullLiquidId, b2MakeShapeRegion( drainShapeId ), INT_MAX );
+b2Fluid_Accelerate( fluid, b2_nullLiquidId, b2MakeShapeRegion( fanShapeId ), (b2Vec2){ 5.0f / 60.0f, 0.0f } );
 b2World_Step( worldId, 1.0f / 60.0f, 4 );
 
 // What the fluid gives back is good until the next step or change to the fluid. Particles change order every step;

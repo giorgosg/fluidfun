@@ -39,19 +39,7 @@ static int PushInside( b2fFluid* f, int liquid, const b2fOutline* outline, Push 
 	return pushed;
 }
 
-static int PushInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper, Push push )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( b2fWorldLocked( fluidId ) )
-	{
-		return 0;
-	}
-
-	b2fOutline box = b2fMakeBoxOutline( lower, upper );
-	return PushInside( f, b2fPickLiquid( f, liquidId ), &box, push );
-}
-
-static int PushInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, Push push )
+static int PushInRegion( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, Push push )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( b2fWorldLocked( fluidId ) )
@@ -61,37 +49,24 @@ static int PushInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeI
 
 	int liquid = b2fPickLiquid( f, liquidId );
 	b2fOutline outline;
-	if ( b2fMakeOutline( shapeId, &outline ) == false )
+	if ( b2fMakeRegionOutline( &region, &outline ) == false )
 	{
 		return 0;
 	}
 	return PushInside( f, liquid, &outline, push );
 }
 
-int b2Fluid_AccelerateInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocityChange )
+int b2Fluid_Accelerate( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocityChange )
 {
 	B2_CHECK_INPUT_RETURN( b2IsValidVec2( velocityChange ), 0 );
-	return PushInBox( fluidId, liquidId, lowerBound, upperBound, ( Push ){ velocityChange, b2Vec2_zero, 0.0f } );
+	return PushInRegion( fluidId, liquidId, region, ( Push ){ velocityChange, b2Vec2_zero, 0.0f } );
 }
 
-int b2Fluid_AccelerateInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocityChange )
-{
-	B2_CHECK_INPUT_RETURN( b2IsValidVec2( velocityChange ), 0 );
-	return PushInShape( fluidId, liquidId, shapeId, ( Push ){ velocityChange, b2Vec2_zero, 0.0f } );
-}
-
-int b2Fluid_BlendVelocityInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocity, float share )
+int b2Fluid_BlendVelocity( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocity, float share )
 {
 	B2_CHECK_INPUT_RETURN( b2IsValidVec2( velocity ) && b2IsValidFloat( share ), 0 );
 	share = b2ClampFloat( share, 0.0f, 1.0f );
-	return PushInBox( fluidId, liquidId, lowerBound, upperBound, ( Push ){ b2Vec2_zero, velocity, share } );
-}
-
-int b2Fluid_BlendVelocityInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocity, float share )
-{
-	B2_CHECK_INPUT_RETURN( b2IsValidVec2( velocity ) && b2IsValidFloat( share ), 0 );
-	share = b2ClampFloat( share, 0.0f, 1.0f );
-	return PushInShape( fluidId, liquidId, shapeId, ( Push ){ b2Vec2_zero, velocity, share } );
+	return PushInRegion( fluidId, liquidId, region, ( Push ){ b2Vec2_zero, velocity, share } );
 }
 
 // An explosion as Box2D gives one to a shape (ExplosionCallback in physics_world.c), for the liquid. Box2D finds the

@@ -252,40 +252,66 @@ B2_API int b2Liquid_SpawnCapsule( b2LiquidId liquidId, b2Pos center1, b2Pos cent
 /// A convex polygon, as Box2D makes them, placed at origin with this rotation. Its radius rounds it.
 B2_API int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, const b2Polygon* polygon, b2Vec2 velocity );
 
-/// Remove the particles whose centres are inside a box, of one liquid, or of every liquid if liquidId is null, but no
-/// more than maxCount of them, INT_MAX for all. When there are more, the first in the fluid's own order go: row by row
-/// up the world's y axis, then any added since the last step. A capped drain feeding an emitter is a pump with a
-/// steady flow. Returns how many went. The others keep their ids, and springs to a particle that went are dropped.
-/// Call between steps.
-B2_API int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, int maxCount );
+/// What a region is
+typedef enum b2FluidRegionType
+{
+	/// An axis-aligned box between two corners
+	b2_boxRegion,
+	/// The outline of a Box2D shape where it is now
+	b2_shapeRegion,
+	/// A shape proxy placed at an origin, as b2World_OverlapShape takes one
+	b2_proxyRegion,
+} b2FluidRegionType;
 
-/// The same for the outline of a Box2D shape where it is now, which may be a sensor: a drain is a sensor shape the
-/// caller empties each step. A circle, capsule or polygon; segments and chains have no inside and remove nothing. The
-/// shape is only a region here, so its filter and the liquids' filters play no part.
-B2_API int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, int maxCount );
+/// A part of the world that the calls below act on: the particles whose centres are inside it, edges included. Make
+/// one with b2MakeBoxRegion, b2MakeShapeRegion or b2MakeProxyRegion. A region is only a place: its shape's filter, or
+/// the liquids' filters, play no part.
+typedef struct b2FluidRegion
+{
+	b2FluidRegionType type;
+	/// b2_boxRegion: the corners
+	b2Pos lowerBound, upperBound;
+	/// b2_shapeRegion: a circle, capsule or polygon, which may be a sensor. Segments and chains have no inside, so a
+	/// region of one holds nothing.
+	b2ShapeId shapeId;
+	/// b2_proxyRegion: the proxy's points are relative to the origin. One point with a radius is a circle, two a
+	/// capsule, and more the rounded convex hull of the points, so a rotated box or any convex polygon. Points that
+	/// all lie on a line are taken as the capsule between the two furthest apart.
+	b2Pos origin;
+	b2ShapeProxy proxy;
+} b2FluidRegion;
 
-/// Pushing the liquid. These change the velocity of the particles whose centres are inside a region, of one liquid,
-/// or of every liquid if liquidId is null, and return how many they changed. They act once, between steps, and the
-/// next step moves the particles from their new velocities; there is no lasting force, so a fan or a current is a
-/// call the caller makes before every step. They push particles only, not bodies: a fan blowing liquid at a crate
+/// The box between two corners
+B2_API b2FluidRegion b2MakeBoxRegion( b2Pos lowerBound, b2Pos upperBound );
+
+/// A shape's outline, wherever it is when the region is used: a drain or a fan can be a sensor shape on a body
+B2_API b2FluidRegion b2MakeShapeRegion( b2ShapeId shapeId );
+
+/// A shape proxy placed at an origin, such as b2MakeProxy or b2MakeOffsetProxy give. Near the origin of the world, pass
+/// b2Pos_zero and world points.
+B2_API b2FluidRegion b2MakeProxyRegion( b2Pos origin, const b2ShapeProxy* proxy );
+
+/// Remove the particles inside a region, of one liquid, or of every liquid if liquidId is null, but no more than
+/// maxCount of them, INT_MAX for all. When there are more, the first in the fluid's own order go: row by row up the
+/// world's y axis, then any added since the last step. A capped drain feeding an emitter is a pump with a steady flow.
+/// A drain is a sensor shape the caller empties each step. Returns how many went. The others keep their ids, and
+/// springs to a particle that went are dropped. Call between steps.
+B2_API int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, int maxCount );
+
+/// Pushing the liquid. These change the velocity of the particles inside a region, of one liquid, or of every liquid if
+/// liquidId is null, and return how many they changed. They act once, between steps, and the next step moves the
+/// particles from their new velocities; there is no lasting force, so a fan or a current is a call the caller makes
+/// before every step, often on a sensor shape. They push particles only, not bodies: a fan blowing liquid at a crate
 /// moves the crate only through the liquid that reaches it. Call between steps.
 ///
-/// Add a velocity to every particle in a box, edges included. Called once it is an impulse; called every step with
-/// an acceleration times the step's time it is a steady force, such as wind.
-B2_API int b2Fluid_AccelerateInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocityChange );
+/// Add a velocity to every particle in a region. Called once it is an impulse; called every step with an acceleration
+/// times the step's time it is a steady force, such as wind.
+B2_API int b2Fluid_Accelerate( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocityChange );
 
-/// The same inside the outline of a Box2D shape where it is now, which may be a sensor: a fan or a current is a sensor
-/// shape the caller pushes the liquid in each step. A circle, capsule or polygon; segments and chains have no inside
-/// and change nothing. As with b2Fluid_RemoveInShape, the shape is only a region and filters play no part.
-B2_API int b2Fluid_AccelerateInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocityChange );
-
-/// Move the velocity of every particle in a box toward a velocity, by a share from 0, no change, to 1, which sets it.
+/// Move the velocity of every particle in a region toward a velocity, by a share from 0, no change, to 1, which sets it.
 /// A share below 1 called every step is a drag toward that velocity: a current, or still air. The share is per call,
 /// so the same share at a different step time drags at a different rate.
-B2_API int b2Fluid_BlendVelocityInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocity, float share );
-
-/// The same inside the outline of a shape
-B2_API int b2Fluid_BlendVelocityInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocity, float share );
+B2_API int b2Fluid_BlendVelocity( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocity, float share );
 
 /// Throw the liquid away from a point, as an explosion throws bodies. b2World_Explode calls this for the world's fluid,
 /// so an explosion throws liquid and bodies with one call; call this to throw only the liquid. Every particle within
@@ -490,9 +516,9 @@ typedef struct b2FluidAmount
 	float mass;
 } b2FluidAmount;
 
-/// The liquid whose particle centres are inside a box, counted now with a loop over every particle. Call it between
-/// steps.
-B2_API b2FluidAmount b2Fluid_MeasureBox( b2FluidId fluidId, b2Pos lowerBound, b2Pos upperBound );
+/// The liquid inside a region, of one liquid, or of every liquid if liquidId is null, counted now with a loop over every
+/// particle. Call it between steps.
+B2_API b2FluidAmount b2Fluid_Measure( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region );
 
 /// Where the liquid's surface is over a point, counted now with a loop over every particle. Among particles within two
 /// particle spacings of the line through the point along gravity, it takes the highest, leaving out spray, whose

@@ -439,8 +439,9 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 #define FOR_NEIGHBOURS( f, i, j ) FOR_NEIGHBOURS_WITHIN( f, i, j, f->uniformWindow > 0 ? f->uniformWindow : f->window[i] )
 
 // A shape's outline where it is now, and its bounds in the world, for testing whether particle centres are inside it.
-// The calls that pick particles in a region use it for boxes and circles too: a box has the type b2_shapeTypeCount
-// and is its bounds alone.
+// Every call that picks particles in a region tests this one outline (b2fPicks), whatever the region's type: a box
+// has the type b2_shapeTypeCount and is its bounds alone, so its test is four compares, and a proxy is turned into a
+// circle, capsule or polygon once per call.
 typedef struct b2fOutline
 {
 	b2WorldTransform transform;
@@ -498,6 +499,8 @@ void b2fDestroyEmitters( b2fFluid* f, int liquid );
 // state.c
 // Returns false for shapes with no inside, segments and chains
 bool b2fMakeOutline( b2ShapeId shapeId, b2fOutline* outline );
+// The outline of a region, or false for a region with no inside: a segment or chain shape, or bad input
+bool b2fMakeRegionOutline( const b2FluidRegion* region, b2fOutline* outline );
 // A box between two corners, and a circle
 b2fOutline b2fMakeBoxOutline( b2Pos lower, b2Pos upper );
 b2fOutline b2fMakeCircleOutline( b2Pos center, float radius );

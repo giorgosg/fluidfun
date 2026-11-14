@@ -531,20 +531,7 @@ static void MarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int 
 	}
 }
 
-int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper, int maxCount )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( b2fWorldLocked( fluidId ) )
-	{
-		return 0;
-	}
-
-	b2fOutline box = b2fMakeBoxOutline( lower, upper );
-	MarkInside( f, b2fPickLiquid( f, liquidId ), &box, maxCount );
-	return b2fRemoveMarked( f );
-}
-
-int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, int maxCount )
+int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, int maxCount )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( b2fWorldLocked( fluidId ) )
@@ -554,7 +541,7 @@ int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId sha
 
 	int liquid = b2fPickLiquid( f, liquidId );
 	b2fOutline outline;
-	if ( b2fMakeOutline( shapeId, &outline ) == false )
+	if ( b2fMakeRegionOutline( &region, &outline ) == false )
 	{
 		return 0;
 	}

@@ -364,7 +364,7 @@ static int FluidState( void )
 
 	// Everything is in the tank, and the surface stands as high as the water's area, and what the crate displaces,
 	// spread over the tank's width
-	b2FluidAmount amount = b2Fluid_MeasureBox( fluidId, ( b2Pos ){ -halfWidth, -0.1f }, ( b2Pos ){ halfWidth, 2.0f } );
+	b2FluidAmount amount = b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeBoxRegion( ( b2Pos ){ -halfWidth, -0.1f }, ( b2Pos ){ halfWidth, 2.0f } ) );
 	ENSURE( amount.count == b2Fluid_GetParticleCount( fluidId ) );
 	ENSURE( fabsf( amount.mass - amount.area * water.density ) < 1e-3f * amount.mass );
 	float depth = ( amount.area + b2Body_GetMass( crateId ) / water.density ) / ( 2.0f * halfWidth );
@@ -530,7 +530,7 @@ static int FluidSpawnAndRemove( void )
 		outside[particles.ids[i]] = in == false;
 	}
 	ENSURE( inBox > 0 );
-	ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, lower, upper, INT_MAX ) == inBox );
+	ENSURE( b2Fluid_Remove( fluidId, b2_nullLiquidId, b2MakeBoxRegion( lower, upper ), INT_MAX ) == inBox );
 	particles = b2Fluid_GetParticles( fluidId );
 	ENSURE( particles.count == total - inBox && b2Fluid_GetParticleCount( fluidId ) == particles.count );
 	ENSURE( IdsAreUnique( particles ) );
@@ -539,7 +539,7 @@ static int FluidSpawnAndRemove( void )
 		ENSURE( outside[particles.ids[i]] );
 	}
 	free( outside );
-	ENSURE( b2Fluid_MeasureBox( fluidId, lower, upper ).count == 0 );
+	ENSURE( b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeBoxRegion( lower, upper ) ).count == 0 );
 
 	// A capped removal takes that many, from the bottom up: the upright box's lowest row and a bit, so every one that
 	// goes is within a grid row, under 0.2 m, of the box's lowest particle
@@ -562,7 +562,7 @@ static int FluidSpawnAndRemove( void )
 			heightOf[particles.ids[i]] = (float)particles.positions[i].y;
 			gone[particles.ids[i]] = true;
 		}
-		ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, boxLower, boxUpper, 10 ) == 10 );
+		ENSURE( b2Fluid_Remove( fluidId, b2_nullLiquidId, b2MakeBoxRegion( boxLower, boxUpper ), 10 ) == 10 );
 		particles = b2Fluid_GetParticles( fluidId );
 		ENSURE( particles.count == startCount - 10 );
 		for ( int i = 0; i < particles.count; ++i )
@@ -579,7 +579,7 @@ static int FluidSpawnAndRemove( void )
 			}
 		}
 		ENSURE( goneCount == 10 );
-		ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, boxLower, boxUpper, 0 ) == 0 );
+		ENSURE( b2Fluid_Remove( fluidId, b2_nullLiquidId, b2MakeBoxRegion( boxLower, boxUpper ), 0 ) == 0 );
 		free( heightOf );
 		free( gone );
 	}
@@ -590,9 +590,9 @@ static int FluidSpawnAndRemove( void )
 	b2LiquidId oilId = b2CreateLiquid( fluidId, &oil );
 	int oilCount = b2Liquid_SpawnCircle( oilId, ( b2Pos ){ -0.3f, 0.0f }, 0.3f, b2Vec2_zero );
 	int before = b2Fluid_GetParticleCount( fluidId );
-	ENSURE( b2Fluid_RemoveInBox( fluidId, oilId, ( b2Pos ){ -1.0f, -1.0f }, ( b2Pos ){ 0.0f, 1.0f }, INT_MAX ) == oilCount );
+	ENSURE( b2Fluid_Remove( fluidId, oilId, b2MakeBoxRegion( ( b2Pos ){ -1.0f, -1.0f }, ( b2Pos ){ 0.0f, 1.0f } ), INT_MAX ) == oilCount );
 	ENSURE( b2Fluid_GetParticleCount( fluidId ) == before - oilCount );
-	ENSURE( b2Fluid_MeasureBox( fluidId, ( b2Pos ){ -0.5f, -0.5f }, ( b2Pos ){ -0.1f, 0.5f } ).count > 0 );
+	ENSURE( b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeBoxRegion( ( b2Pos ){ -0.5f, -0.5f }, ( b2Pos ){ -0.1f, 0.5f } ) ).count > 0 );
 
 	b2BodyDef bodyDef = b2DefaultBodyDef();
 	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
@@ -600,8 +600,8 @@ static int FluidSpawnAndRemove( void )
 	sensorDef.isSensor = true;
 	b2Circle drain = { { -3.0f, 2.0f }, 0.5f };
 	b2ShapeId drainId = b2CreateCircleShape( groundId, &sensorDef, &drain );
-	ENSURE( b2Fluid_RemoveInShape( fluidId, oilId, drainId, INT_MAX ) == 0 );
-	ENSURE( b2Fluid_RemoveInShape( fluidId, waterId, drainId, INT_MAX ) > 0 );
+	ENSURE( b2Fluid_Remove( fluidId, oilId, b2MakeShapeRegion( drainId ), INT_MAX ) == 0 );
+	ENSURE( b2Fluid_Remove( fluidId, waterId, b2MakeShapeRegion( drainId ), INT_MAX ) > 0 );
 	particles = b2Fluid_GetParticles( fluidId );
 	for ( int i = 0; i < particles.count; ++i )
 	{
@@ -785,7 +785,7 @@ static int FluidPush( void )
 	// Exactly the particles inside change, by exactly the change
 	b2Vec2 change = { 0.5f, 0.25f };
 	VelocitiesById( fluidId, before );
-	ENSURE( b2Fluid_AccelerateInBox( fluidId, b2_nullLiquidId, lower, upper, change ) == inBox );
+	ENSURE( b2Fluid_Accelerate( fluidId, b2_nullLiquidId, b2MakeBoxRegion( lower, upper ), change ) == inBox );
 	VelocitiesById( fluidId, after );
 	for ( int id = 0; id < count; ++id )
 	{
@@ -802,7 +802,7 @@ static int FluidPush( void )
 	b2Polygon region = b2MakeOffsetBox( 0.5f * ( right - left ), 0.5f * ( top - bottom ),
 										( b2Vec2 ){ 0.5f * ( left + right ), 0.5f * ( bottom + top ) }, b2Rot_identity );
 	b2ShapeId regionId = b2CreatePolygonShape( groundId, &sensorDef, &region );
-	ENSURE( b2Fluid_AccelerateInShape( fluidId, b2_nullLiquidId, regionId, b2Neg( change ) ) == inBox );
+	ENSURE( b2Fluid_Accelerate( fluidId, b2_nullLiquidId, b2MakeShapeRegion( regionId ), b2Neg( change ) ) == inBox );
 	VelocitiesById( fluidId, after );
 	for ( int id = 0; id < count; ++id )
 	{
@@ -812,21 +812,21 @@ static int FluidPush( void )
 	// Naming a liquid picks only its particles
 	b2LiquidDef oil = b2MakeOilDef();
 	b2LiquidId oilId = b2CreateLiquid( fluidId, &oil );
-	ENSURE( b2Fluid_AccelerateInBox( fluidId, oilId, lower, upper, change ) == 0 );
-	ENSURE( b2Fluid_AccelerateInBox( fluidId, waterId, lower, upper, b2Vec2_zero ) == inBox );
+	ENSURE( b2Fluid_Accelerate( fluidId, oilId, b2MakeBoxRegion( lower, upper ), change ) == 0 );
+	ENSURE( b2Fluid_Accelerate( fluidId, waterId, b2MakeBoxRegion( lower, upper ), b2Vec2_zero ) == inBox );
 	b2DestroyLiquid( oilId );
 
 	// A share of 1 sets the velocity, and a half halves the difference
 	b2Vec2 target = { 1.0f, 0.0f };
 	VelocitiesById( fluidId, before );
-	ENSURE( b2Fluid_BlendVelocityInBox( fluidId, b2_nullLiquidId, lower, upper, ( b2Vec2 ){ 0.0f, 2.0f }, 0.5f ) == inBox );
+	ENSURE( b2Fluid_BlendVelocity( fluidId, b2_nullLiquidId, b2MakeBoxRegion( lower, upper ), ( b2Vec2 ){ 0.0f, 2.0f }, 0.5f ) == inBox );
 	VelocitiesById( fluidId, after );
 	for ( int id = 0; id < count; ++id )
 	{
 		b2Vec2 expected = inside[id] ? b2Lerp( before[id], ( b2Vec2 ){ 0.0f, 2.0f }, 0.5f ) : before[id];
 		ENSURE( b2Distance( after[id], expected ) < 1e-6f );
 	}
-	ENSURE( b2Fluid_BlendVelocityInShape( fluidId, b2_nullLiquidId, regionId, target, 1.0f ) == inBox );
+	ENSURE( b2Fluid_BlendVelocity( fluidId, b2_nullLiquidId, b2MakeShapeRegion( regionId ), target, 1.0f ) == inBox );
 	VelocitiesById( fluidId, after );
 	for ( int id = 0; id < count; ++id )
 	{
@@ -853,9 +853,9 @@ static int FluidPush( void )
 	ENSURE( fabsf( otherMove / (float)( count - inBox ) ) < 0.5f * pushedMove / (float)inBox );
 
 	// Momentum given to the blob is kept as the liquid works it through, to a few percent
-	b2Fluid_BlendVelocityInBox( fluidId, b2_nullLiquidId, ( b2Pos ){ -2.0f, -2.0f }, ( b2Pos ){ 2.0f, 2.0f }, b2Vec2_zero, 1.0f );
+	b2Fluid_BlendVelocity( fluidId, b2_nullLiquidId, b2MakeBoxRegion( ( b2Pos ){ -2.0f, -2.0f }, ( b2Pos ){ 2.0f, 2.0f } ), b2Vec2_zero, 1.0f );
 	ENSURE( b2Length( TotalVelocity( fluidId ) ) == 0.0f );
-	b2Fluid_AccelerateInBox( fluidId, b2_nullLiquidId, ( b2Pos ){ -2.0f, -2.0f }, ( b2Pos ){ 0.0f, 2.0f }, ( b2Vec2 ){ 1.0f, 0.0f } );
+	b2Fluid_Accelerate( fluidId, b2_nullLiquidId, b2MakeBoxRegion( ( b2Pos ){ -2.0f, -2.0f }, ( b2Pos ){ 0.0f, 2.0f } ), ( b2Vec2 ){ 1.0f, 0.0f } );
 	b2Vec2 given = TotalVelocity( fluidId );
 	ENSURE( given.x > 0.25f * (float)count );
 	for ( int i = 0; i < 10; ++i )
@@ -1148,7 +1148,7 @@ static int FluidFilter( void )
 	int count;
 	float top = TopOfLiquid( fluidId, -1, &count );
 	ENSURE( top < grateY - 0.1f );
-	b2FluidAmount amount = b2Fluid_MeasureBox( fluidId, ( b2Pos ){ -0.8f, 0.0f }, ( b2Pos ){ 0.8f, grateY } );
+	b2FluidAmount amount = b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeBoxRegion( ( b2Pos ){ -0.8f, 0.0f }, ( b2Pos ){ 0.8f, grateY } ) );
 	ENSURE( amount.count == count );
 	ENSURE( b2Body_GetPosition( crateId ).y < 0.12f );
 
@@ -1552,9 +1552,9 @@ static int FluidCoarsenSpawns( void )
 	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
 	b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.0f, 0.0f }, 2.0f, b2Vec2_zero );
 	b2Pos lower = { -10.0f, -10.0f }, upper = { 10.0f, 10.0f };
-	float area = b2Fluid_MeasureBox( fluidId, lower, upper ).area;
+	float area = b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeBoxRegion( lower, upper ) ).area;
 	b2World_Step( worldId, 1.0f / 60.0f, 4 );
-	b2FluidAmount after = b2Fluid_MeasureBox( fluidId, lower, upper );
+	b2FluidAmount after = b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeBoxRegion( lower, upper ) );
 	ENSURE( b2AbsFloat( after.area - area ) < 1e-3f * area );
 	b2DestroyWorld( worldId );
 
@@ -1800,6 +1800,101 @@ static int FluidInvalidDefs( void )
 	return 0;
 }
 
+// Each kind of region takes the same particles as the others where they describe the same place: a proxy and a shape
+// for a rotated box, a circle and a capsule, and a box region and a box proxy. Particles are counted by hand too.
+static int FluidRegions( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	int count = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -2.0f, -2.0f }, ( b2Pos ){ 2.0f, 2.0f }, b2Vec2_zero );
+	ENSURE( count > 1000 );
+
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	bodyDef.position = ( b2Pos ){ 0.3f, -0.2f };
+	bodyDef.rotation = b2MakeRot( 0.6f );
+	b2BodyId bodyId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef sensorDef = b2DefaultShapeDef();
+	sensorDef.isSensor = true;
+	b2Transform pose = { bodyDef.position, bodyDef.rotation };
+
+	b2Polygon box = b2MakeOffsetBox( 0.7f, 0.4f, ( b2Vec2 ){ 0.2f, 0.1f }, b2MakeRot( 0.3f ) );
+	b2ShapeId boxId = b2CreatePolygonShape( bodyId, &sensorDef, &box );
+	b2Circle circle = { { -0.5f, 0.4f }, 0.55f };
+	b2ShapeId circleId = b2CreateCircleShape( bodyId, &sensorDef, &circle );
+	b2Capsule capsule = { { -1.0f, -0.8f }, { 0.9f, -0.5f }, 0.25f };
+	b2ShapeId capsuleId = b2CreateCapsuleShape( bodyId, &sensorDef, &capsule );
+	b2Segment segment = { { -1.0f, 0.0f }, { 1.0f, 0.0f } };
+	b2ShapeId segmentId = b2CreateSegmentShape( bodyId, &sensorDef, &segment );
+
+	b2Vec2 boxPoints[4];
+	for ( int k = 0; k < 4; ++k )
+	{
+		boxPoints[k] = b2TransformPoint( pose, box.vertices[k] );
+	}
+	b2ShapeProxy proxies[3] = {
+		b2MakeProxy( boxPoints, 4, 0.0f ),
+		b2MakeOffsetProxy( &circle.center, 1, circle.radius, pose.p, pose.q ),
+		b2MakeOffsetProxy( &capsule.center1, 2, capsule.radius, pose.p, pose.q ),
+	};
+	b2ShapeId shapes[3] = { boxId, circleId, capsuleId };
+	for ( int k = 0; k < 3; ++k )
+	{
+		int byShape = b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeShapeRegion( shapes[k] ) ).count;
+		int byProxy = b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeProxyRegion( b2Pos_zero, proxies + k ) ).count;
+		ENSURE( byShape > 50 );
+		// A particle exactly on an edge can fall either way between two tests that round differently
+		ENSURE( abs( byShape - byProxy ) <= 1 );
+	}
+	ENSURE( b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeShapeRegion( segmentId ) ).count == 0 );
+
+	// The proxy's points are relative to its origin, which may be far from them
+	b2ShapeProxy local = b2MakeProxy( &circle.center, 1, circle.radius );
+	b2Pos center = b2TransformWorldPoint( ( b2WorldTransform ){ pose.p, pose.q }, b2Vec2_zero );
+	b2ShapeProxy moved = b2MakeOffsetProxy( &local.points[0], 1, circle.radius, b2Vec2_zero, pose.q );
+	ENSURE( abs( b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeProxyRegion( center, &moved ) ).count -
+				 b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeShapeRegion( circleId ) ).count ) <= 1 );
+
+	// A box region against a four-point proxy of the same box, and against a count by hand
+	b2Vec2 corners[4] = { { -0.61f, -0.33f }, { 0.77f, -0.33f }, { 0.77f, 0.91f }, { -0.61f, 0.91f } };
+	b2ShapeProxy boxProxy = b2MakeProxy( corners, 4, 0.0f );
+	int inBox = 0;
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		b2Pos p = particles.positions[i];
+		inBox += corners[0].x <= p.x && p.x <= corners[2].x && corners[0].y <= p.y && p.y <= corners[2].y ? 1 : 0;
+	}
+	b2FluidRegion boxRegion = b2MakeBoxRegion( ( b2Pos ){ corners[0].x, corners[0].y }, ( b2Pos ){ corners[2].x, corners[2].y } );
+	ENSURE( b2Fluid_Measure( fluidId, b2_nullLiquidId, boxRegion ).count == inBox );
+	ENSURE( abs( b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeProxyRegion( b2Pos_zero, &boxProxy ) ).count - inBox ) <= 1 );
+
+	// Points on a line make the capsule between the two furthest apart
+	b2Vec2 line[3] = { { -1.0f, 0.2f }, { 1.0f, 0.2f }, { 0.1f, 0.2f } };
+	b2ShapeProxy lineProxy = b2MakeProxy( line, 3, 0.3f );
+	b2ShapeProxy twoProxy = b2MakeProxy( line, 2, 0.3f );
+	ENSURE( b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeProxyRegion( b2Pos_zero, &lineProxy ) ).count ==
+			b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeProxyRegion( b2Pos_zero, &twoProxy ) ).count );
+
+	// Every action takes the region the same way: push, blend, then remove what the proxy holds
+	b2FluidRegion circleRegion = b2MakeProxyRegion( b2Pos_zero, proxies + 1 );
+	int inCircle = b2Fluid_Measure( fluidId, b2_nullLiquidId, circleRegion ).count;
+	ENSURE( b2Fluid_Accelerate( fluidId, b2_nullLiquidId, circleRegion, ( b2Vec2 ){ 1.0f, 0.0f } ) == inCircle );
+	ENSURE( b2Fluid_BlendVelocity( fluidId, waterId, circleRegion, b2Vec2_zero, 1.0f ) == inCircle );
+	ENSURE( b2Fluid_Remove( fluidId, waterId, circleRegion, 5 ) == 5 );
+	ENSURE( b2Fluid_Remove( fluidId, b2_nullLiquidId, circleRegion, INT_MAX ) == inCircle - 5 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == count - inCircle );
+	ENSURE( b2Fluid_Measure( fluidId, waterId, circleRegion ).count == 0 );
+
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1816,5 +1911,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidCoarsenSpawns );
 	RUN_SUBTEST( FluidMemory );
 	RUN_SUBTEST( FluidInvalidDefs );
+	RUN_SUBTEST( FluidRegions );
 	return 0;
 }

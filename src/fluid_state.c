@@ -345,6 +345,102 @@ b2fOutline b2fMakeCircleOutline( b2Pos center, float radius )
 	return s;
 }
 
+b2FluidRegion b2MakeBoxRegion( b2Pos lowerBound, b2Pos upperBound )
+{
+	return ( b2FluidRegion ){ .type = b2_boxRegion, .lowerBound = lowerBound, .upperBound = upperBound, .shapeId = b2_nullShapeId };
+}
+
+b2FluidRegion b2MakeShapeRegion( b2ShapeId shapeId )
+{
+	return ( b2FluidRegion ){ .type = b2_shapeRegion, .shapeId = shapeId };
+}
+
+b2FluidRegion b2MakeProxyRegion( b2Pos origin, const b2ShapeProxy* proxy )
+{
+	return ( b2FluidRegion ){ .type = b2_proxyRegion, .shapeId = b2_nullShapeId, .origin = origin, .proxy = *proxy };
+}
+
+// A proxy is a circle, a capsule or a rounded polygon, placed at its origin with no rotation
+static bool MakeProxyOutline( b2Pos origin, const b2ShapeProxy* proxy, b2fOutline* s )
+{
+	*s = ( b2fOutline ){ .transform = { origin, b2Rot_identity }, .minX = FLT_MAX, .minY = FLT_MAX, .maxX = -FLT_MAX, .maxY = -FLT_MAX };
+	const b2Vec2* points = proxy->points;
+	float radius = proxy->radius;
+	b2Hull hull = { 0 };
+	if ( proxy->count >= 3 )
+	{
+		hull = b2ComputeHull( points, proxy->count );
+	}
+
+	if ( proxy->count == 1 )
+	{
+		s->type = b2_circleShape;
+		s->circle = ( b2Circle ){ points[0], radius };
+	}
+	else if ( hull.count >= 3 )
+	{
+		s->type = b2_polygonShape;
+		s->polygon = b2MakePolygon( &hull, radius );
+	}
+	else
+	{
+		// Two points, or more on one line: the capsule between the two furthest apart
+		int a = 0, b = 1;
+		float longest = -1.0f;
+		for ( int i = 0; i < proxy->count; ++i )
+		{
+			for ( int j = i + 1; j < proxy->count; ++j )
+			{
+				float d = b2DistanceSquared( points[i], points[j] );
+				if ( d > longest )
+				{
+					longest = d, a = i, b = j;
+				}
+			}
+		}
+		s->type = b2_capsuleShape;
+		s->capsule = ( b2Capsule ){ points[a], points[b], radius };
+	}
+
+	for ( int i = 0; i < proxy->count; ++i )
+	{
+		GrowBounds( s, s->transform, points[i], radius );
+	}
+	return true;
+}
+
+bool b2fMakeRegionOutline( const b2FluidRegion* region, b2fOutline* outline )
+{
+	switch ( region->type )
+	{
+		case b2_boxRegion:
+			B2_CHECK_INPUT_RETURN( b2IsValidPos( region->lowerBound ) && b2IsValidPos( region->upperBound ), false );
+			*outline = b2fMakeBoxOutline( region->lowerBound, region->upperBound );
+			return true;
+
+		case b2_shapeRegion:
+			return b2fMakeOutline( region->shapeId, outline );
+
+		case b2_proxyRegion:
+		{
+			const b2ShapeProxy* proxy = &region->proxy;
+			B2_CHECK_INPUT_RETURN( b2IsValidPos( region->origin ), false );
+			B2_CHECK_INPUT_RETURN( 0 < proxy->count && proxy->count <= B2_MAX_POLYGON_VERTICES, false );
+			B2_CHECK_INPUT_RETURN( b2IsValidFloat( proxy->radius ) && proxy->radius >= 0.0f, false );
+			for ( int i = 0; i < proxy->count; ++i )
+			{
+				B2_CHECK_INPUT_RETURN( b2IsValidVec2( proxy->points[i] ), false );
+			}
+			return MakeProxyOutline( region->origin, proxy, outline );
+		}
+
+		default:
+			break;
+	}
+	B2_CHECK_INPUT_RETURN( region->type == b2_boxRegion || region->type == b2_shapeRegion || region->type == b2_proxyRegion, false );
+	return false;
+}
+
 // Whether a point is inside the outline, testing the shape only for points inside its bounds. A box is its bounds,
 // edges included.
 bool b2fInsideOutline( const b2fOutline* s, b2Pos p )
@@ -550,15 +646,21 @@ float b2Fluid_GetSensorArea( b2FluidId fluidId, b2ShapeId sensorShapeId )
 	return 0.0f;
 }
 
-b2FluidAmount b2Fluid_MeasureBox( b2FluidId fluidId, b2Pos lowerBound, b2Pos upperBound )
+b2FluidAmount b2Fluid_Measure( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
+	int liquid = b2fPickLiquid( f, liquidId );
+	b2fOutline outline;
+	if ( b2fMakeRegionOutline( &region, &outline ) == false )
+	{
+		return ( b2FluidAmount ){ 0 };
+	}
+
 	int count = 0;
 	double area = 0.0, mass = 0.0;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		b2Pos p = f->pos[i];
-		if ( p.x < lowerBound.x || p.x > upperBound.x || p.y < lowerBound.y || p.y > upperBound.y )
+		if ( b2fPicks( f, liquid, &outline, i ) == false )
 		{
 			continue;
 		}
