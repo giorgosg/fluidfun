@@ -28,7 +28,7 @@ enum
 #define B2F_SPEED_MEMORY 0.5f
 #define B2F_MAX_CHILDREN 7
 
-// A merging particle is removed once it is down to this fraction of the finest mass, or one frame's exchange
+// A merging particle is removed once it is down to this fraction of the finest mass, or one step's exchange
 #define B2F_REMOVE_FLOOR 0.25f
 
 // Boxes asked per cell when measuring depth by fill, each this much smaller than the last
@@ -362,7 +362,9 @@ void b2fAdaptSizes( b2fFluid* f )
 	}
 	f->measureTime = b2GetMilliseconds( ticks );
 
-	float memoryDecay = powf( 0.5f, 1.0f / ( 60.0f * B2F_SPEED_MEMORY ) );
+	// The pass runs once a step, so the time since the last one is the last step's
+	float elapsed = f->stepTime;
+	float memoryDecay = powf( 0.5f, elapsed / B2F_SPEED_MEMORY );
 
 	for ( int i = 0; i < n; ++i )
 	{
@@ -448,11 +450,12 @@ void b2fAdaptSizes( b2fFluid* f )
 			continue;
 		}
 
-		// A particle moves at most this much mass a frame, so its size and its neighbours' change a little at a
-		// time. One that is merging away is only removed once what is left is that small, or a quarter of the
-		// finest, so it never shrinks to a speck with too short a reach to find neighbours.
+		// A particle moves at most this much mass a step, its rate per second over the step's time, so its size and
+		// its neighbours' change a little at a time. One that is merging away is only removed once what is left is
+		// that small, or a quarter of the finest, so it never shrinks to a speck with too short a reach to find
+		// neighbours.
 		const b2fLiquidSizes* liquid = sizes + f->liquid[i];
-		float cap = liquid->rate * f->adaptTarget[i], baseMass = liquid->baseMass;
+		float cap = liquid->rate * elapsed * f->adaptTarget[i], baseMass = liquid->baseMass;
 		float last = cap > B2F_REMOVE_FLOOR * fineMass ? cap : B2F_REMOVE_FLOOR * fineMass;
 		bool removing = cls == b2f_tooSmall && f->adaptMass[i] <= last;
 		float excess = cls == b2f_tooSmall ? f->adaptMass[i] : f->adaptMass[i] - f->adaptTarget[i];

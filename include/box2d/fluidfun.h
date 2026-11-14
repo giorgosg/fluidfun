@@ -54,8 +54,9 @@ typedef struct b2LiquidTuning
 	float adaptiveTolerance;
 	/// A particle splits above this many times its target mass, and merges into its neighbours below one over it.
 	float adaptiveLimit;
-	/// Most mass a particle passes to its neighbours in one frame, as a fraction of its target. Merges and mass
-	/// sharing happen over several frames at small values. One moves everything at once.
+	/// Most mass a particle passes to its neighbours per second, as a fraction of its target. Sizes change once a
+	/// step, by this times the step's time, so merges and mass sharing take several steps at small values, and one
+	/// step at the step rate or above, which moves everything at once. The default of 3 is 0.05 a step at 60 Hz.
 	float adaptiveRate;
 } b2LiquidTuning;
 

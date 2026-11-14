@@ -105,7 +105,7 @@ public:
 		changed |= ImGui::SliderFloat( "Full box", &m_def->fluid.adaptiveFullBox, 0.5f, 1.2f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Size tolerance", &m_def->liquid.tuning.adaptiveTolerance, 0.0f, 0.45f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Split/merge limit", &m_def->liquid.tuning.adaptiveLimit, 1.5f, 4.0f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Exchange rate", &m_def->liquid.tuning.adaptiveRate, 0.01f, 1.0f, "%.2f", ImGuiSliderFlags_Logarithmic );
+		changed |= ImGui::SliderFloat( "Exchange rate /s", &m_def->liquid.tuning.adaptiveRate, 0.5f, 60.0f, "%.1f", ImGuiSliderFlags_Logarithmic );
 		ImGui::Text( "Measure %.2f ms", p.measure );
 		changed |= ImGui::SliderFloat( "Contact pressure", &m_def->liquid.tuning.buoyancyAssist, 0.0f, 2.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Friction", &m_def->liquid.friction, 0.0f, 1.0f, "%.2f" );

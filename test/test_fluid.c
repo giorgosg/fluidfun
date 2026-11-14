@@ -1467,6 +1467,70 @@ static int FluidAdaptiveGravity( void )
 	return 0;
 }
 
+// Runs a circle of water 2 m across resting in a tank at a step rate and substep count, and a crate dropped into it.
+// Gives the particle count after the first step and after half a second, and when the crate began in the liquid.
+static void RunCircleAndCrate( float hz, int subSteps, int* spawned, int* firstStep, int* half, float* begin )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon walls[3] = {
+		b2MakeOffsetBox( 3.5f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ -3.5f, 4.0f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ 3.5f, 4.0f }, b2Rot_identity ),
+	};
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2CreatePolygonShape( groundId, &shapeDef, walls + i );
+	}
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 8000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	*spawned = b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.0f, 2.1f }, 2.0f, b2Vec2_zero );
+
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ 1.5f, 6.0f };
+	b2BodyId crateId = b2CreateBody( worldId, &bodyDef );
+	b2Polygon box = b2MakeBox( 0.3f, 0.3f );
+	shapeDef.density = 0.5f;
+	b2CreatePolygonShape( crateId, &shapeDef, &box );
+
+	*begin = -1.0f;
+	int steps = (int)( 1.5f * hz + 0.5f );
+	for ( int i = 1; i <= steps; ++i )
+	{
+		b2World_Step( worldId, 1.0f / hz, subSteps );
+		*firstStep = i == 1 ? b2Fluid_GetParticleCount( fluidId ) : *firstStep;
+		*half = i == (int)( 0.5f * hz + 0.5f ) ? b2Fluid_GetParticleCount( fluidId ) : *half;
+		if ( *begin < 0.0f && b2Fluid_GetEvents( fluidId ).bodyBeginCount > 0 )
+		{
+			*begin = (float)i / hz;
+		}
+	}
+	b2DestroyWorld( worldId );
+}
+
+// Size changes and a body's inLiquid go by seconds, not steps: at 120 Hz with the same substep, liquid coarsens about as
+// fast as at 60 Hz, and a crate begins in it at the same time. Before, 120 Hz coarsened about twice as fast, to 1203
+// particles against 1797 after half a second; now it is 1635 against 1822.
+static int FluidAdaptiveStepRate( void )
+{
+	int spawned60, first60, half60, spawned120, first120, half120;
+	float begin60, begin120;
+	RunCircleAndCrate( 60.0f, 4, &spawned60, &first60, &half60, &begin60 );
+	RunCircleAndCrate( 120.0f, 2, &spawned120, &first120, &half120, &begin120 );
+	ENSURE( spawned60 == spawned120 );
+	ENSURE( half60 < 4 * spawned60 / 5 );
+	ENSURE( b2AbsFloat( (float)( half120 - half60 ) ) < 0.2f * (float)half60 );
+	ENSURE( begin60 > 0.0f && begin120 > 0.0f && b2AbsFloat( begin120 - begin60 ) < 0.05f );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1479,5 +1543,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidSecondFluid );
 	RUN_SUBTEST( FluidCrowdedSprings );
 	RUN_SUBTEST( FluidAdaptiveGravity );
+	RUN_SUBTEST( FluidAdaptiveStepRate );
 	return 0;
 }

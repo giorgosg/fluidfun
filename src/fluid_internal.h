@@ -169,15 +169,15 @@ typedef struct b2fBodyRecord
 {
 	b2BodyId id;
 	b2FluidBodyState state;
-	// Steps in a row whose liquid within reach disagrees with state.inLiquid; it flips at B2F_WET_STEPS
-	int run;
+	// Seconds of steps in a row whose liquid within reach disagrees with state.inLiquid; it flips at B2F_WET_TIME
+	float run;
 	// Whether the body was near the liquid this step, and had liquid in reach
 	bool seen, wet;
 } b2fBodyRecord;
 
-// A body's inLiquid changes after this many steps in a row with liquid in reach, or without it, so that a splash
-// passing by does not begin and end it every step
-#define B2F_WET_STEPS 3
+// A body's inLiquid changes after this many seconds of steps in a row with liquid in reach, or without it, so that a
+// splash passing by does not begin and end it every step. At 60 Hz that is three steps, and at 120 Hz six.
+#define B2F_WET_TIME 0.045f
 
 // A sensor shape near the liquid this step, or one that held liquid last step
 typedef struct b2fSensor

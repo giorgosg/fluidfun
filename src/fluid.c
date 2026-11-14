@@ -28,7 +28,7 @@ b2LiquidDef b2DefaultLiquidDef( void )
 	def.tuning.adaptiveDepthLimit = false;
 	def.tuning.adaptiveTolerance = 0.3f;
 	def.tuning.adaptiveLimit = 3.0f;
-	def.tuning.adaptiveRate = 0.05f;
+	def.tuning.adaptiveRate = 3.0f;
 	def.categoryBits = B2_DEFAULT_CATEGORY_BITS;
 	def.maskBits = B2_DEFAULT_MASK_BITS;
 	return def;
