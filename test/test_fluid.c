@@ -1910,6 +1910,151 @@ static int FluidRegions( void )
 	return 0;
 }
 
+// Runs an emitter whose mouth is from (-0.25, 0) to (0.25, 0) and whose liquid leaves at (0, -2), for 30 steps without
+// gravity: fixed in the world, or on a kinematic body moving at 3 m/s along x, and returns how many particles it made
+static int CountEmitted( bool riding )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2EmitterDef emitterDef = b2DefaultEmitterDef();
+	if ( riding )
+	{
+		b2BodyDef bodyDef = b2DefaultBodyDef();
+		bodyDef.type = b2_kinematicBody;
+		bodyDef.position = ( b2Pos ){ -2.0f, 5.0f };
+		bodyDef.linearVelocity = ( b2Vec2 ){ 3.0f, 0.0f };
+		emitterDef.bodyId = b2CreateBody( worldId, &bodyDef );
+	}
+	emitterDef.point1 = ( b2Pos ){ -0.25f, 0.0f };
+	emitterDef.point2 = ( b2Pos ){ 0.25f, 0.0f };
+	emitterDef.velocity = ( b2Vec2 ){ 0.0f, -2.0f };
+	b2CreateEmitter( waterId, &emitterDef );
+	for ( int i = 0; i < 30; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	int count = b2Fluid_GetParticleCount( fluidId );
+	b2DestroyWorld( worldId );
+	return count;
+}
+
+// An emitter on a body: its mouth and velocity in the body's frame, the body's velocity added, and gone with the body
+static int FluidEmitterOnBody( void )
+{
+	// The rows follow the liquid's speed across the mouth, so a mouth moving along itself emits as a fixed one does
+	int fixedCount = CountEmitted( false );
+	ENSURE( fixedCount > 50 );
+	ENSURE( CountEmitted( true ) == fixedCount );
+
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+
+	// A sprinkler arm turned a quarter turn and spinning at 4 rad/s. Its mouth is 1 out along the arm's x and squirts
+	// out along it at 2 m/s, so in the world the mouth is 1 above the hub and the liquid leaves up at 2 m/s plus the
+	// arm's 4 m/s to the left there.
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	bodyDef.type = b2_kinematicBody;
+	bodyDef.position = ( b2Pos ){ 3.0f, 2.0f };
+	bodyDef.rotation = b2MakeRot( 0.5f * B2_PI );
+	bodyDef.angularVelocity = 4.0f;
+	b2BodyId armId = b2CreateBody( worldId, &bodyDef );
+	b2EmitterDef emitterDef = b2DefaultEmitterDef();
+	emitterDef.bodyId = armId;
+	emitterDef.point1 = ( b2Pos ){ 1.0f, -0.1f };
+	emitterDef.point2 = ( b2Pos ){ 1.0f, 0.1f };
+	emitterDef.velocity = ( b2Vec2 ){ 2.0f, 0.0f };
+	b2EmitterId emitterId = b2CreateEmitter( waterId, &emitterDef );
+	ENSURE( b2Emitter_IsValid( emitterId ) );
+	ENSURE( B2_ID_EQUALS( b2Emitter_GetDef( emitterId ).bodyId, armId ) );
+
+	// The first rows, read on the step they come out, against where the arm was at its start. The mouth takes a few steps
+	// to owe its first row.
+	b2WorldTransform t = b2Body_GetTransform( armId );
+	b2FluidParticles particles = { 0 };
+	for ( int i = 0; i < 6 && particles.count == 0; ++i )
+	{
+		t = b2Body_GetTransform( armId );
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		particles = b2Fluid_GetParticles( fluidId );
+	}
+	ENSURE( particles.count > 0 );
+	b2Vec2 mouthCentre = b2ToVec2( b2TransformWorldPoint( t, ( b2Vec2 ){ 1.0f, 0.0f } ) );
+	b2Vec2 arm = b2Sub( mouthCentre, ( b2Vec2 ){ 3.0f, 2.0f } );
+	b2Vec2 expectedVelocity = b2Add( b2RotateVector( t.q, ( b2Vec2 ){ 2.0f, 0.0f } ), b2CrossSV( 4.0f, arm ) );
+	b2Vec2 meanPosition = b2Vec2_zero, meanVelocity = b2Vec2_zero;
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		meanPosition = b2Add( meanPosition, b2ToVec2( particles.positions[i] ) );
+		meanVelocity = b2Add( meanVelocity, ( b2Vec2 ){ particles.velocitiesX[i], particles.velocitiesY[i] } );
+	}
+	meanPosition = b2MulSV( 1.0f / (float)particles.count, meanPosition );
+	meanVelocity = b2MulSV( 1.0f / (float)particles.count, meanVelocity );
+	ENSURE( b2Distance( meanPosition, mouthCentre ) < 0.15f );
+	ENSURE( b2Distance( meanVelocity, expectedVelocity ) < 0.5f );
+	// Near a quarter turn, the liquid leaves up and to the left
+	ENSURE( expectedVelocity.x < -3.0f && expectedVelocity.y > 1.0f );
+
+	// A quarter turn later the mouth is to the hub's left, and the newest particle came out there
+	for ( int i = 0; i < 22; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	particles = b2Fluid_GetParticles( fluidId );
+	int newest = 0;
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		newest = particles.ids[i] > particles.ids[newest] ? i : newest;
+	}
+	b2Vec2 mouthNow = b2ToVec2( b2TransformWorldPoint( b2Body_GetTransform( armId ), ( b2Vec2 ){ 1.0f, 0.0f } ) );
+	ENSURE( mouthNow.x < 2.3f );
+	ENSURE( b2Distance( b2ToVec2( particles.positions[newest] ), mouthNow ) < 0.3f );
+
+	// Another world's body, or one already gone, is turned away
+	b2WorldId otherWorldId = b2CreateWorld( &worldDef );
+	b2BodyId otherId = b2CreateBody( otherWorldId, &bodyDef );
+	b2EmitterDef badDef = emitterDef;
+	badDef.bodyId = otherId;
+	b2SetAssertCallback( CountRejectAssert );
+	b2SetLogCallback( CountRejectLog );
+	int logs = rejectLogs;
+	ENSURE( B2_IS_NULL( b2CreateEmitter( waterId, &badDef ) ) );
+	ENSURE( rejectLogs == logs + 1 );
+	b2SetAssertCallback( TestAssertFcn );
+	b2SetLogCallback( TestLogFcn );
+	b2DestroyWorld( otherWorldId );
+
+	// The emitter ends with its body, at once for its id and with nothing more emitted
+	b2DestroyBody( armId );
+	ENSURE( b2Emitter_IsValid( emitterId ) == false );
+	int count = b2Fluid_GetParticleCount( fluidId );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == count );
+
+	// A body destroyed between steps without anything asking is noticed by the next step
+	bodyDef.angularVelocity = 0.0f;
+	emitterDef.bodyId = b2CreateBody( worldId, &bodyDef );
+	emitterId = b2CreateEmitter( waterId, &emitterDef );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	count = b2Fluid_GetParticleCount( fluidId );
+	b2DestroyBody( emitterDef.bodyId );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == count );
+	ENSURE( b2Emitter_IsValid( emitterId ) == false );
+
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1927,5 +2072,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidMemory );
 	RUN_SUBTEST( FluidInvalidDefs );
 	RUN_SUBTEST( FluidRegions );
+	RUN_SUBTEST( FluidEmitterOnBody );
 	return 0;
 }

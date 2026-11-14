@@ -288,12 +288,35 @@ b2EmitterDef b2DefaultEmitterDef( void )
 	return def;
 }
 
-static bool IsValidEmitterDef( const b2EmitterDef* def )
+// A body must be in the emitter's own world
+static bool IsValidEmitterDef( const b2EmitterDef* def, uint16_t world0 )
 {
 	B2_CHECK_DEF( def );
+	B2_CHECK_INPUT_RETURN( B2_IS_NULL( def->bodyId ) || ( def->bodyId.world0 == world0 && b2Body_IsValid( def->bodyId ) ), false );
 	B2_CHECK_INPUT_RETURN( b2IsValidPos( def->point1 ) && b2IsValidPos( def->point2 ), false );
 	B2_CHECK_INPUT_RETURN( b2IsValidVec2( def->velocity ), false );
 	return true;
+}
+
+static void EndEmitter( b2fFluid* f, b2fEmitter* emitter )
+{
+	emitter->alive = false;
+	while ( f->emitterCount > 0 && f->emitters[f->emitterCount - 1].alive == false )
+	{
+		f->emitterCount -= 1;
+	}
+}
+
+// An emitter learns that its body is gone the next time anything looks at it, before a step or through its id. Box2D
+// keeps no list of what refers to a body, and a generation check costs nothing.
+static bool EndIfBodyGone( b2fFluid* f, b2fEmitter* emitter )
+{
+	if ( B2_IS_NON_NULL( emitter->def.bodyId ) && b2Body_IsValid( emitter->def.bodyId ) == false )
+	{
+		EndEmitter( f, emitter );
+		return true;
+	}
+	return false;
 }
 
 static b2fEmitter* FindEmitter( b2EmitterId emitterId, b2fFluid** fluid )
@@ -312,7 +335,7 @@ static b2fEmitter* FindEmitter( b2EmitterId emitterId, b2fFluid** fluid )
 	}
 
 	b2fEmitter* emitter = f->emitters + index;
-	if ( emitter->alive == false || emitterId.generation != emitter->generation )
+	if ( emitter->alive == false || emitterId.generation != emitter->generation || EndIfBodyGone( f, emitter ) )
 	{
 		return NULL;
 	}
@@ -332,7 +355,7 @@ b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def )
 {
 	b2fFluid* f;
 	int liquid = b2fGetLiquid( liquidId, &f );
-	if ( IsValidEmitterDef( def ) == false )
+	if ( IsValidEmitterDef( def, liquidId.world0 ) == false )
 	{
 		return b2_nullEmitterId;
 	}
@@ -360,15 +383,6 @@ b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def )
 	return ( b2EmitterId ){ index + 1, liquidId.world0, emitter->generation };
 }
 
-static void EndEmitter( b2fFluid* f, b2fEmitter* emitter )
-{
-	emitter->alive = false;
-	while ( f->emitterCount > 0 && f->emitters[f->emitterCount - 1].alive == false )
-	{
-		f->emitterCount -= 1;
-	}
-}
-
 void b2DestroyEmitter( b2EmitterId emitterId )
 {
 	b2fFluid* f;
@@ -389,7 +403,7 @@ bool b2Emitter_IsValid( b2EmitterId emitterId )
 void b2Emitter_SetDef( b2EmitterId emitterId, const b2EmitterDef* def )
 {
 	b2fEmitter* emitter = GetEmitter( emitterId );
-	if ( emitter != NULL && IsValidEmitterDef( def ) )
+	if ( emitter != NULL && IsValidEmitterDef( def, emitterId.world0 ) )
 	{
 		emitter->def = *def;
 	}
@@ -416,21 +430,41 @@ void b2fDestroyEmitters( b2fFluid* f, int liquid )
 // particles as fit at the spawn spacing, every other row shifted half a place. The liquid's travel across the mouth
 // is summed, a row is owed each time it passes the row spacing, and what is left over is how far that row has gone
 // since: it is put that far along the emitter's velocity, which is also where it would be by now.
+//
+// A mouth on a body is placed where the body is at the start of the step, and its velocity turned with the body. A row
+// that left a moving mouth some time ago has moved with the liquid's velocity over the ground, the mouth with the
+// body's, so it is now ahead of the mouth by the velocity relative to the mouth: the same offset as for a fixed mouth.
+// Each particle then gets the body's velocity at its own point added, which carries a sprinkler's spin.
 void b2fStepEmitters( b2fFluid* f, float timeStep )
 {
 	float spacing = SpawnSpacing( f ), rowSpacing = 0.8660254f * spacing;
 	for ( int e = 0; e < f->emitterCount; ++e )
 	{
 		b2fEmitter* emitter = f->emitters + e;
-		const b2EmitterDef* def = &emitter->def;
-		b2Vec2 mouth = b2SubPos( def->point2, def->point1 );
-		float length = b2Length( mouth );
-		if ( emitter->alive == false || def->enabled == false || length <= 0.0f || timeStep <= 0.0f )
+		if ( emitter->alive == false || EndIfBodyGone( f, emitter ) )
 		{
 			continue;
 		}
 
+		const b2EmitterDef* def = &emitter->def;
+		bool riding = B2_IS_NON_NULL( def->bodyId );
+		b2Pos point1 = def->point1;
+		b2Vec2 mouth = b2SubPos( def->point2, def->point1 );
 		b2Vec2 v = def->velocity;
+		if ( riding )
+		{
+			b2WorldTransform t = b2Body_GetTransform( def->bodyId );
+			point1 = b2TransformWorldPoint( t, b2ToVec2( def->point1 ) );
+			mouth = b2RotateVector( t.q, mouth );
+			v = b2RotateVector( t.q, v );
+		}
+
+		float length = b2Length( mouth );
+		if ( def->enabled == false || length <= 0.0f || timeStep <= 0.0f )
+		{
+			continue;
+		}
+
 		float speed = b2AbsFloat( v.x * mouth.y - v.y * mouth.x ) / length;
 		if ( speed <= 0.0f )
 		{
@@ -449,8 +483,9 @@ void b2fStepEmitters( b2fFluid* f, float timeStep )
 			emitter->rows += 1;
 			for ( int k = 0; k < count; ++k )
 			{
-				b2Pos p = b2OffsetPos( def->point1, b2MulAdd( ahead, ( (float)k + shift ) * step, mouth ) );
-				if ( AddParticle( f, emitter->liquid, p.x, p.y, f->def.particleSpacing, v ) == false )
+				b2Pos p = b2OffsetPos( point1, b2MulAdd( ahead, ( (float)k + shift ) * step, mouth ) );
+				b2Vec2 velocity = riding ? b2Add( v, b2Body_GetWorldPointVelocity( def->bodyId, p ) ) : v;
+				if ( AddParticle( f, emitter->liquid, p.x, p.y, f->def.particleSpacing, velocity ) == false )
 				{
 					// Full: nothing is owed for the time it stays full
 					emitter->travel = 0.0f;

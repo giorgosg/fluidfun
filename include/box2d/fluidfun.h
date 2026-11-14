@@ -347,16 +347,22 @@ B2_API int b2Fluid_Explode( b2FluidId fluidId, const b2ExplosionDef* def );
 /// The most emitters one fluid can hold
 #define B2_MAX_EMITTERS 32
 
-/// A mouth that liquid comes out of, fixed in the world
+/// A mouth that liquid comes out of, fixed in the world or riding a body
 typedef struct b2EmitterDef
 {
-	/// The ends of the mouth: liquid comes out across this segment
+	/// The body the mouth rides, or null for a mouth fixed in the world. With a body, point1, point2 and velocity are in
+	/// the body's frame, so the mouth moves and turns with it, and the liquid leaves with the body's own velocity at
+	/// each particle's point added: a hose on a moving cart, or a spinning sprinkler. The emitter ends when its body is
+	/// destroyed.
+	b2BodyId bodyId;
+	/// The ends of the mouth: liquid comes out across this segment. In the world, or in the body's frame with a body.
 	b2Pos point1, point2;
-	/// Velocity of the liquid as it leaves. Only the part across the mouth carries liquid out, so the flow, as area of
-	/// liquid at rest per second, is that speed times the mouth's length, and a velocity along the mouth emits nothing.
-	/// The stream is packed as a spawn is, a little tighter than at rest, and each row holds a whole number of
-	/// particles: a mouth 0.5 long at 2 m/s, with particles 0.08 apart, gives 174 particles a second, where that area
-	/// at rest holds 180.
+	/// Velocity of the liquid as it leaves, relative to the mouth. Only the part across the mouth carries liquid out, so
+	/// the flow, as area of liquid at rest per second, is that speed times the mouth's length, and a velocity along the
+	/// mouth emits nothing. The stream is packed as a spawn is, a little tighter than at rest, and each row holds a whole
+	/// number of particles: a mouth 0.5 long at 2 m/s, with particles 0.08 apart, gives 174 particles a second, where
+	/// that area at rest holds 180. A mouth on a body moving along its own velocity emits the same rows, since the rows
+	/// follow the liquid's speed across the mouth, not over the ground.
 	b2Vec2 velocity;
 	/// An emitter that is not enabled adds nothing and keeps its place in the stream
 	bool enabled;
@@ -365,22 +371,22 @@ typedef struct b2EmitterDef
 	int internalValue;
 } b2EmitterDef;
 
-/// A mouth from the origin to one metre along x, emitting nothing until given a velocity
+/// A mouth fixed in the world from the origin to one metre along x, emitting nothing until given a velocity
 B2_API b2EmitterDef b2DefaultEmitterDef( void );
 
 /// Add an emitter to a liquid. Before each step the world adds as many rows of particles across its mouth as the
 /// liquid has travelled since the last row, each where it would have got to by then, so the stream is as dense as a
 /// spawn whatever the step time and speed. A mouth narrower than the spacing gets one particle a row. Particles start
 /// at the finest size with the emitter's velocity. It stops quietly while the fluid is full at
-/// b2FluidDef::maxCapacity, and ends when its liquid is destroyed. Returns b2_nullEmitterId if the fluid already
-/// has B2_MAX_EMITTERS. Emitters do not move with bodies. Call between steps.
+/// b2FluidDef::maxCapacity, and ends when its liquid or its body is destroyed. Returns b2_nullEmitterId if the fluid
+/// already has B2_MAX_EMITTERS. Call between steps.
 B2_API b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def );
 B2_API void b2DestroyEmitter( b2EmitterId emitterId );
 
-/// Whether the id names an emitter that still exists. Destroying its liquid or its fluid ends it.
+/// Whether the id names an emitter that still exists. Destroying its liquid, its fluid or its body ends it.
 B2_API bool b2Emitter_IsValid( b2EmitterId emitterId );
 
-/// Change an emitter between steps. It keeps how far the liquid has gone since its last row.
+/// Change an emitter between steps, its body included. It keeps how far the liquid has gone since its last row.
 B2_API void b2Emitter_SetDef( b2EmitterId emitterId, const b2EmitterDef* def );
 B2_API b2EmitterDef b2Emitter_GetDef( b2EmitterId emitterId );
 

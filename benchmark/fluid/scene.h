@@ -31,6 +31,7 @@ typedef enum LabSceneType
 	lab_slime,
 	lab_jelly,
 	lab_basin,
+	lab_sprinkler,
 	lab_sceneCount
 } LabSceneType;
 

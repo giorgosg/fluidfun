@@ -347,6 +347,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 6.0f;
 			break;
 
+		case lab_sprinkler:
+			s.name = "Sprinkler";
+			s.viewCenter = (b2Vec2){ 0.0f, 3.0f };
+			s.viewHalfWidth = 6.0f;
+			s.controlLabel = "Spin speed";
+			s.control = 3.0f;
+			s.controlMin = -8.0f;
+			s.controlMax = 8.0f;
+			break;
+
 		default:
 			break;
 	}
@@ -1023,6 +1033,41 @@ static b2FluidId CreateBasin( b2WorldId worldId, LabScene* scene, const LabDef* 
 	return fluid;
 }
 
+// A sprinkler over a pool: a kinematic arm spinning at the control's rate with an emitter riding each end, squirting
+// out along the arm. The liquid leaves with the arm's speed at the mouth as well, so the jets curl. The pool's floor
+// takes away what the jets add, so the scene keeps its liquid.
+#define LAB_SPRINKLER_HALF 5.0f
+
+static void AddNozzle( LabScene* scene, b2BodyId arm, float side )
+{
+	b2EmitterDef nozzle = b2DefaultEmitterDef();
+	nozzle.bodyId = arm;
+	nozzle.point1 = (b2Pos){ side * 0.95f, -0.1f };
+	nozzle.point2 = (b2Pos){ side * 0.95f, 0.1f };
+	nozzle.velocity = (b2Vec2){ side * 3.0f, 0.0f };
+	scene->emitter = b2CreateEmitter( scene->liquids[0], &nozzle );
+}
+
+static b2FluidId CreateSprinkler( b2WorldId worldId, LabScene* scene, const LabDef* def )
+{
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float w = LAB_SPRINKLER_HALF, t = 0.3f;
+	AddBox( ground, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( ground, -w - t, 4.0f, t, 4.0f, 0.0f, 0.0f );
+	AddBox( ground, w + t, 4.0f, t, 4.0f, 0.0f, 0.0f );
+	b2FluidId fluid = AddLiquid( worldId, scene, def, (b2Vec2){ -w + def->fluid.particleSpacing, def->fluid.particleSpacing }, (b2Vec2){ w - def->fluid.particleSpacing, 0.6f } );
+
+	b2BodyId arm = AddBody( scene, worldId, b2_kinematicBody, 0.0f, 2.2f );
+	b2Capsule capsule = { { -0.8f, 0.0f }, { 0.8f, 0.0f }, 0.08f };
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2CreateCapsuleShape( arm, &shapeDef, &capsule );
+	b2Body_SetAngularVelocity( arm, scene->control );
+	scene->driven = arm;
+	AddNozzle( scene, arm, 1.0f );
+	AddNozzle( scene, arm, -1.0f );
+	return fluid;
+}
+
 b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def )
 {
 	scene->bodyCount = 0;
@@ -1091,6 +1136,9 @@ b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def 
 			break;
 		case lab_basin:
 			fluid = CreateBasin( worldId, scene, def );
+			break;
+		case lab_sprinkler:
+			fluid = CreateSprinkler( worldId, scene, def );
 			break;
 		default:
 			fluid = CreateTank( worldId, scene, def );
@@ -1227,6 +1275,17 @@ void LabStepScene( LabScene* scene, b2FluidId fluid, float timeStep )
 			b2Emitter_SetDef( scene->emitter, &tap );
 			scene->drained += b2Fluid_Remove( fluid, b2_nullLiquidId, b2MakeShapeRegion( scene->drain ), INT_MAX );
 			b2Fluid_Accelerate( fluid, b2_nullLiquidId, b2MakeShapeRegion( scene->fan ), (b2Vec2){ LAB_BASIN_FAN * timeStep, 0.0f } );
+		}
+		break;
+
+		case lab_sprinkler:
+		{
+			b2Body_SetAngularVelocity( scene->driven, scene->control );
+			float over = LiquidArea( fluid ) - scene->startArea, width = 2.0f * LAB_SPRINKLER_HALF;
+			if ( over > 0.0f )
+			{
+				b2Fluid_Remove( fluid, scene->liquids[0], b2MakeBoxRegion( (b2Pos){ -0.5f * width, 0.0f }, (b2Pos){ 0.5f * width, over / width } ), INT_MAX );
+			}
 		}
 		break;
 
