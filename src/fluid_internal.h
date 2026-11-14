@@ -18,6 +18,7 @@ typedef float b2fCoord;
 #include "box2d/math_functions.h"
 
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -343,7 +344,6 @@ struct b2fFluid
 	float h;
 	b2Vec2 worldGravity;
 	float moveLimit;
-	float movedMass;
 
 	// Density box tables, sized to the liquid's bounds
 	double *boxMass, *boxPx, *boxPy, *boxWeight, *boxMixed;
@@ -444,7 +444,8 @@ int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId );
 // Marks in adaptUsed the particles of that liquid, or of every liquid for -1, whose centres are inside the outline,
 // and clears the mark on the rest. Returns how many it marked. Between steps only, as adaptUsed is the size pass's.
 // The outline is a region, so filters play no part.
-int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline );
+// At most maxCount are marked, the first in the fluid's order.
+int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int maxCount );
 // The id of the liquid in a slot
 b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index );
 // A bit for each live liquid that collides with a shape of this filter: each one's mask includes the other's category

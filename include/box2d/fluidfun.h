@@ -233,14 +233,17 @@ B2_API int b2Liquid_SpawnCapsule( b2LiquidId liquidId, b2Pos center1, b2Pos cent
 /// A convex polygon, as Box2D makes them, placed at origin with this rotation. Its radius rounds it.
 B2_API int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, const b2Polygon* polygon, b2Vec2 velocity );
 
-/// Remove the particles whose centres are inside a box, of one liquid, or of every liquid if liquidId is null. Returns
-/// how many went. The others keep their ids, and springs to a particle that went are dropped. Call between steps.
-B2_API int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound );
+/// Remove the particles whose centres are inside a box, of one liquid, or of every liquid if liquidId is null, but no
+/// more than maxCount of them, INT_MAX for all. When there are more, the first in the fluid's own order go: row by row
+/// up the world's y axis, then any added since the last step. A capped drain feeding an emitter is a pump with a
+/// steady flow. Returns how many went. The others keep their ids, and springs to a particle that went are dropped.
+/// Call between steps.
+B2_API int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, int maxCount );
 
 /// The same for the outline of a Box2D shape where it is now, which may be a sensor: a drain is a sensor shape the
 /// caller empties each step. A circle, capsule or polygon; segments and chains have no inside and remove nothing. The
 /// shape is only a region here, so its filter and the liquids' filters play no part.
-B2_API int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId );
+B2_API int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, int maxCount );
 
 /// Pushing the liquid. These change the velocity of the particles whose centres are inside a region, of one liquid,
 /// or of every liquid if liquidId is null, and return how many they changed. They act once, between steps, and the
@@ -321,14 +324,6 @@ B2_API bool b2Emitter_IsValid( b2EmitterId emitterId );
 B2_API void b2Emitter_SetDef( b2EmitterId emitterId, const b2EmitterDef* def );
 B2_API b2EmitterDef b2Emitter_GetDef( b2EmitterId emitterId );
 
-/// Move up to maxCount particles found in the box from to a lattice in the box to, with this velocity.
-/// Call between steps. This is how a scene recycles liquid into a stream. Returns how many moved. Emitters and
-/// removal now cover most of what it was for.
-B2_API int b2Fluid_MoveParticles( b2FluidId fluidId, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount );
-
-/// The total mass moved by b2Fluid_MoveParticles so far.
-B2_API float b2Fluid_GetMovedMass( b2FluidId fluidId );
-
 /// How many particles the fluid holds, over all its liquids
 B2_API int b2Fluid_GetParticleCount( b2FluidId fluidId );
 
@@ -353,11 +348,10 @@ typedef struct b2FluidParticles
 	/// A number for each particle, unique within the fluid and kept while the particle lasts, through every step.
 	/// Particles get them in the order they are made, from zero, and a number is not given again. With adaptive sizes
 	/// a particle that splits keeps its id on one of its parts, and the others get new ones; a particle that merges
-	/// away gives its mass to neighbours, which keep their ids, and its own id is gone. b2Fluid_MoveParticles keeps
-	/// ids, so a moved particle has its id at its new place, and removing particles leaves the others' ids alone. Ids
-	/// are ints, so they stay unique for the first 2^31 particles a fluid makes, splits and emitters included. Scenes
-	/// of about 5000 particles make fewer than 7000 in 10 seconds; an emitter giving 200 particles a second makes
-	/// 2^31 in about 120 days.
+	/// away gives its mass to neighbours, which keep their ids, and its own id is gone. Removing particles leaves the
+	/// others' ids alone. Ids are ints, so they stay unique for the first 2^31 particles a fluid makes, splits and
+	/// emitters included. Scenes of about 5000 particles make fewer than 7000 in 10 seconds; an emitter giving 200
+	/// particles a second makes 2^31 in about 120 days.
 	const int* ids;
 	/// Kernel density of liquid at rest, which densities are compared with
 	float restDensity;

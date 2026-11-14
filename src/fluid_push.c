@@ -47,7 +47,7 @@ static int PushInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos
 	}
 
 	b2fOutline box = b2fMakeBoxOutline( lower, upper );
-	if ( b2fMarkInside( f, b2fPickLiquid( f, liquidId ), &box ) == 0 )
+	if ( b2fMarkInside( f, b2fPickLiquid( f, liquidId ), &box, INT_MAX ) == 0 )
 	{
 		return 0;
 	}
@@ -64,7 +64,7 @@ static int PushInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeI
 
 	int liquid = b2fPickLiquid( f, liquidId );
 	b2fOutline outline;
-	if ( b2fMakeOutline( shapeId, &outline ) == false || b2fMarkInside( f, liquid, &outline ) == 0 )
+	if ( b2fMakeOutline( shapeId, &outline ) == false || b2fMarkInside( f, liquid, &outline, INT_MAX ) == 0 )
 	{
 		return 0;
 	}
@@ -146,7 +146,7 @@ int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 	{
 		thrown |= f->liquids[l].alive && ( f->liquids[l].def.categoryBits & def->maskBits ) != 0 ? 1u << l : 0u;
 	}
-	if ( reach <= 0.0f || f->count == 0 || thrown == 0 || b2fMarkInside( f, -1, &circle ) == 0 )
+	if ( reach <= 0.0f || f->count == 0 || thrown == 0 || b2fMarkInside( f, -1, &circle, INT_MAX ) == 0 )
 	{
 		return 0;
 	}

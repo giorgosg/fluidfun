@@ -6,6 +6,7 @@
 #include "box2d/fluidfun.h"
 
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -526,7 +527,7 @@ static int FluidSpawnAndRemove( void )
 		outside[particles.ids[i]] = in == false;
 	}
 	ENSURE( inBox > 0 );
-	ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, lower, upper ) == inBox );
+	ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, lower, upper, INT_MAX ) == inBox );
 	particles = b2Fluid_GetParticles( fluidId );
 	ENSURE( particles.count == total - inBox && b2Fluid_GetParticleCount( fluidId ) == particles.count );
 	ENSURE( IdsAreUnique( particles ) );
@@ -537,13 +538,56 @@ static int FluidSpawnAndRemove( void )
 	free( outside );
 	ENSURE( b2Fluid_MeasureBox( fluidId, lower, upper ).count == 0 );
 
+	// A capped removal takes that many, from the bottom up: the upright box's lowest row and a bit, so every one that
+	// goes is within a grid row, under 0.2 m, of the box's lowest particle
+	{
+		b2Pos boxLower = { -4.6f, 0.9f }, boxUpper = { -1.4f, 3.1f };
+		particles = b2Fluid_GetParticles( fluidId );
+		int startCount = particles.count, maxId = 0;
+		float lowest = FLT_MAX;
+		for ( int i = 0; i < particles.count; ++i )
+		{
+			maxId = particles.ids[i] > maxId ? particles.ids[i] : maxId;
+			bool in = particles.positions[i].x >= boxLower.x && particles.positions[i].x <= boxUpper.x &&
+					  particles.positions[i].y >= boxLower.y && particles.positions[i].y <= boxUpper.y;
+			lowest = in && (float)particles.positions[i].y < lowest ? (float)particles.positions[i].y : lowest;
+		}
+		float* heightOf = calloc( (size_t)maxId + 1, sizeof( float ) );
+		bool* gone = calloc( (size_t)maxId + 1, sizeof( bool ) );
+		for ( int i = 0; i < particles.count; ++i )
+		{
+			heightOf[particles.ids[i]] = (float)particles.positions[i].y;
+			gone[particles.ids[i]] = true;
+		}
+		ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, boxLower, boxUpper, 10 ) == 10 );
+		particles = b2Fluid_GetParticles( fluidId );
+		ENSURE( particles.count == startCount - 10 );
+		for ( int i = 0; i < particles.count; ++i )
+		{
+			gone[particles.ids[i]] = false;
+		}
+		int goneCount = 0;
+		for ( int id = 0; id <= maxId; ++id )
+		{
+			if ( gone[id] )
+			{
+				ENSURE( heightOf[id] < lowest + 0.2f );
+				goneCount += 1;
+			}
+		}
+		ENSURE( goneCount == 10 );
+		ENSURE( b2Fluid_RemoveInBox( fluidId, b2_nullLiquidId, boxLower, boxUpper, 0 ) == 0 );
+		free( heightOf );
+		free( gone );
+	}
+
 	// Removing one liquid's particles leaves the other's, by box and by a sensor shape
 	b2LiquidDef oil = b2MakeOilDef();
 	oil.tuning.adaptiveRatio = 1.0f;
 	b2LiquidId oilId = b2CreateLiquid( fluidId, &oil );
 	int oilCount = b2Liquid_SpawnCircle( oilId, ( b2Pos ){ -0.3f, 0.0f }, 0.3f, b2Vec2_zero );
 	int before = b2Fluid_GetParticleCount( fluidId );
-	ENSURE( b2Fluid_RemoveInBox( fluidId, oilId, ( b2Pos ){ -1.0f, -1.0f }, ( b2Pos ){ 0.0f, 1.0f } ) == oilCount );
+	ENSURE( b2Fluid_RemoveInBox( fluidId, oilId, ( b2Pos ){ -1.0f, -1.0f }, ( b2Pos ){ 0.0f, 1.0f }, INT_MAX ) == oilCount );
 	ENSURE( b2Fluid_GetParticleCount( fluidId ) == before - oilCount );
 	ENSURE( b2Fluid_MeasureBox( fluidId, ( b2Pos ){ -0.5f, -0.5f }, ( b2Pos ){ -0.1f, 0.5f } ).count > 0 );
 
@@ -553,8 +597,8 @@ static int FluidSpawnAndRemove( void )
 	sensorDef.isSensor = true;
 	b2Circle drain = { { -3.0f, 2.0f }, 0.5f };
 	b2ShapeId drainId = b2CreateCircleShape( groundId, &sensorDef, &drain );
-	ENSURE( b2Fluid_RemoveInShape( fluidId, oilId, drainId ) == 0 );
-	ENSURE( b2Fluid_RemoveInShape( fluidId, waterId, drainId ) > 0 );
+	ENSURE( b2Fluid_RemoveInShape( fluidId, oilId, drainId, INT_MAX ) == 0 );
+	ENSURE( b2Fluid_RemoveInShape( fluidId, waterId, drainId, INT_MAX ) > 0 );
 	particles = b2Fluid_GetParticles( fluidId );
 	for ( int i = 0; i < particles.count; ++i )
 	{
