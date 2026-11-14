@@ -81,7 +81,11 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		cell *= 2.0f;
 	}
 
+	// At least two cells each way, since each particle reads the four cells around it: liquid in one row, such as an
+	// emitter's first row in a fluid with nothing else, would otherwise read before the tables
 	int width = (int)( extentX / cell ) + 1, height = (int)( extentY / cell ) + 1;
+	width = width > 2 ? width : 2;
+	height = height > 2 ? height : 2;
 	b2fCoord originX = minX, originY = minY;
 	int stride = width + 1, nodes = stride * ( height + 1 );
 	if ( nodes > f->boxCapacity )
