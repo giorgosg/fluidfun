@@ -224,7 +224,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 {
 	b2World* world = b2GetWorldFromId( worldId );
 	B2_ASSERT( world->locked == false );
-	B2_ASSERT( world->fluid == NULL );
 	if ( world->locked || world->fluid != NULL )
 	{
 		return b2_nullFluidId;

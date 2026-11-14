@@ -1251,6 +1251,31 @@ static int FluidFilter( void )
 	return 0;
 }
 
+// A world has one fluid: asking for a second gives the null id, as the header says, and leaves the first working
+static int FluidSecondFluid( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 1000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+
+	b2FluidId secondId = b2CreateFluid( worldId, &def );
+	ENSURE( B2_IS_NULL( secondId ) );
+	ENSURE( b2Fluid_IsValid( secondId ) == false );
+	ENSURE( b2Fluid_IsValid( fluidId ) );
+
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	int added = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.0f, 1.0f }, ( b2Pos ){ 1.0f, 2.0f }, b2Vec2_zero );
+	ENSURE( added > 0 );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == added );
+
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1259,5 +1284,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidSpawnAndRemove );
 	RUN_SUBTEST( FluidPush );
 	RUN_SUBTEST( FluidFilter );
+	RUN_SUBTEST( FluidSecondFluid );
 	return 0;
 }
