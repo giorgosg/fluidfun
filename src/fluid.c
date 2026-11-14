@@ -462,19 +462,19 @@ int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId )
 	return liquid;
 }
 
-int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline )
+int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int maxCount )
 {
 	int marked = 0;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		bool inside = ( liquid < 0 || f->liquid[i] == liquid ) && b2fInsideOutline( outline, f->pos[i] );
+		bool inside = marked < maxCount && ( liquid < 0 || f->liquid[i] == liquid ) && b2fInsideOutline( outline, f->pos[i] );
 		f->adaptUsed[i] = inside ? 1 : 0;
 		marked += inside ? 1 : 0;
 	}
 	return marked;
 }
 
-int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper )
+int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper, int maxCount )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( b2fWorldLocked( fluidId ) )
@@ -483,11 +483,11 @@ int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2
 	}
 
 	b2fOutline box = b2fMakeBoxOutline( lower, upper );
-	b2fMarkInside( f, b2fPickLiquid( f, liquidId ), &box );
+	b2fMarkInside( f, b2fPickLiquid( f, liquidId ), &box, maxCount );
 	return b2fRemoveMarked( f );
 }
 
-int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId )
+int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, int maxCount )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( b2fWorldLocked( fluidId ) )
@@ -502,7 +502,7 @@ int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId sha
 		return 0;
 	}
 
-	b2fMarkInside( f, liquid, &outline );
+	b2fMarkInside( f, liquid, &outline, maxCount );
 	return b2fRemoveMarked( f );
 }
 
@@ -647,12 +647,6 @@ void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB, float 
 		f->cohesionBetween[b][a] = cohesion;
 		UpdateLiquids( f );
 	}
-}
-
-float b2Fluid_GetMovedMass( b2FluidId fluidId )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	return f->movedMass;
 }
 
 int b2Fluid_GetParticleCount( b2FluidId fluidId )

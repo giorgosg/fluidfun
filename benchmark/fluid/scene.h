@@ -92,7 +92,13 @@ typedef struct LabScene
 	// can move the rest back
 	float keep;
 
-	// A scene's emitter, and a sensor it empties each step with what it removed so far
+	// All the liquid the scene started with, as area at rest, which a pump keeps it at
+	float startArea;
+
+	// The spacing of particles at the finest size, for scenes that spawn again as they run
+	float spacing;
+
+	// A scene's emitter, or a pump's outlet, and a sensor it empties each step with what it removed so far
 	b2EmitterId emitter;
 	b2ShapeId drain;
 	int drained;

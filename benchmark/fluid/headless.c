@@ -832,7 +832,7 @@ int main( int argc, char** argv )
 		}
 		if ( scene.type == lab_drain )
 		{
-			printf( "  pumped %d mass %.0f stall %.1fs\n", scene.pumped, (double)b2Fluid_GetMovedMass( fluid ), (double)scene.longestStall / 60.0 );
+			printf( "  pumped %d stall %.1fs\n", scene.pumped, (double)scene.longestStall / 60.0 );
 		}
 		if ( scene.type == lab_basin )
 		{

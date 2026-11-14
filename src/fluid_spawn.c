@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Adding and moving particles: spawning in shapes, emitters, and b2Fluid_MoveParticles.
+// Adding particles: spawning in shapes, and emitters.
 #include "fluid_internal.h"
 
 #include "core.h"
@@ -247,30 +247,6 @@ int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, co
 		s.halfHeight = b2MaxFloat( s.halfHeight, b2AbsFloat( v.y ) + polygon->radius );
 	}
 	return SpawnLattice( liquidId, &s, velocity );
-}
-
-int b2Fluid_MoveParticles( b2FluidId fluidId, b2AABB from, b2AABB to, b2Vec2 velocity, int maxCount )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	float spacing = SpawnSpacing( f );
-	int perRow = (int)( ( to.upperBound.x - to.lowerBound.x ) / spacing ) + 1;
-	int moved = 0;
-	for ( int i = 0; i < f->count && moved < maxCount; ++i )
-	{
-		if ( f->pos[i].x < from.lowerBound.x || f->pos[i].x > from.upperBound.x || f->pos[i].y < from.lowerBound.y || f->pos[i].y > from.upperBound.y )
-		{
-			continue;
-		}
-
-		f->pos[i].x = to.lowerBound.x + spacing * (float)( moved % perRow );
-		f->pos[i].y = to.lowerBound.y + spacing * (float)( moved / perRow );
-		f->vx[i] = velocity.x;
-		f->vy[i] = velocity.y;
-		float ratio = f->size[i] / f->spacing;
-		f->movedMass += f->liquids[f->liquid[i]].mass * ratio * ratio;
-		moved += 1;
-	}
-	return moved;
 }
 
 b2EmitterDef b2DefaultEmitterDef( void )
