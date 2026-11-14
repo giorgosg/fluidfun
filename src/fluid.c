@@ -245,6 +245,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 #define B2F_ALLOC_SORTED( type, name ) f->sorted.name = calloc( n, sizeof( type ) );
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_SORTED )
+	B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
 	B2F_WORK_FIELDS( B2F_ALLOC_FIELD )
 #undef B2F_ALLOC_FIELD
 #undef B2F_ALLOC_SORTED
@@ -276,6 +277,7 @@ void b2FreeFluid( b2fFluid* f )
 #define B2F_FREE_SORTED( type, name ) free( f->sorted.name );
 	B2F_PARTICLE_FIELDS( B2F_FREE_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_FREE_SORTED )
+	B2F_CARRIED_FIELDS( B2F_FREE_FIELD )
 	B2F_WORK_FIELDS( B2F_FREE_FIELD )
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
@@ -359,6 +361,7 @@ bool b2fGrow( b2fFluid* f, int needed )
 #define B2F_GROW_SORTED( type, name ) f->sorted.name = Resize( f->sorted.name, old, capacity, sizeof( type ), true );
 	B2F_PARTICLE_FIELDS( B2F_GROW_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_GROW_SORTED )
+	B2F_CARRIED_FIELDS( B2F_GROW_FIELD )
 	B2F_WORK_FIELDS( B2F_GROW_FIELD )
 #undef B2F_GROW_FIELD
 #undef B2F_GROW_SORTED
@@ -385,54 +388,61 @@ bool b2fGrow( b2fFluid* f, int needed )
 }
 
 // Compaction keeps the order, so each cell's run of particles stays a run and the grid from the last sort holds with
-// its starts moved down. The size pass then still runs at the next step, which reads the grid, the cells and search
-// windows, and the densities of the last substep, so those go with each particle here.
+// its starts moved down. The size pass then still runs at the next step, which reads the grid and what
+// B2F_CARRIED_FIELDS lists, so those go with each particle here.
 int b2fRemoveMarked( b2fFluid* f )
 {
-	int n = f->count, kept = 0;
-	bool keepGrid = f->gridValid && n > 0;
+	int n = f->count, first = 0;
+	while ( first < n && f->marked[first] == 0 )
+	{
+		first += 1;
+	}
+	if ( first == n )
+	{
+		return 0;
+	}
+
+	bool keepGrid = f->gridValid;
 	int* before = keepGrid ? malloc( ( (size_t)n + 1 ) * sizeof( int ) ) : NULL;
-	for ( int i = 0; i < n; ++i )
+	for ( int i = 0; keepGrid && i < first; ++i )
+	{
+		before[i] = i;
+	}
+	int kept = first;
+	for ( int i = first; i < n; ++i )
 	{
 		if ( keepGrid )
 		{
 			before[i] = kept;
 		}
-		if ( f->adaptUsed[i] )
+		if ( f->marked[i] )
 		{
 			continue;
 		}
-		if ( kept != i )
-		{
-			b2fCopyParticle( f, kept, i );
-			f->rho[kept] = f->rho[i];
-			f->cell[kept] = f->cell[i];
-			f->window[kept] = f->window[i];
-		}
+		b2fCopyParticle( f, kept, i );
+#define B2F_CARRY_FIELD( type, name ) f->name[kept] = f->name[i];
+		B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
+#undef B2F_CARRY_FIELD
 		kept += 1;
 	}
 
-	int removed = n - kept;
-	if ( removed > 0 )
+	for ( int i = kept; i < n; ++i )
 	{
-		for ( int i = kept; i < n; ++i )
-		{
-			b2fClearParticle( f, i );
-		}
-		f->count = kept;
+		b2fClearParticle( f, i );
+	}
+	f->count = kept;
 
-		if ( keepGrid )
+	if ( keepGrid )
+	{
+		before[n] = kept;
+		int entries = f->gridWidth * f->gridHeight + 2;
+		for ( int c = 0; c < entries; ++c )
 		{
-			before[n] = kept;
-			int entries = f->gridWidth * f->gridHeight + 2;
-			for ( int c = 0; c < entries; ++c )
-			{
-				f->cellStart[c] = before[f->cellStart[c]];
-			}
+			f->cellStart[c] = before[f->cellStart[c]];
 		}
 	}
 	free( before );
-	return removed;
+	return n - kept;
 }
 
 bool b2fWorldLocked( b2FluidId fluidId )
@@ -455,16 +465,16 @@ int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId )
 	return liquid;
 }
 
-int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int maxCount )
+// Marks the particles a call picks, at most maxCount, the first in the fluid's order, and clears the mark on the rest
+static void MarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int maxCount )
 {
-	int marked = 0;
+	int count = 0;
 	for ( int i = 0; i < f->count; ++i )
 	{
-		bool inside = marked < maxCount && ( liquid < 0 || f->liquid[i] == liquid ) && b2fInsideOutline( outline, f->pos[i] );
-		f->adaptUsed[i] = inside ? 1 : 0;
-		marked += inside ? 1 : 0;
+		bool picked = count < maxCount && b2fPicks( f, liquid, outline, i );
+		f->marked[i] = picked ? 1 : 0;
+		count += picked ? 1 : 0;
 	}
-	return marked;
 }
 
 int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper, int maxCount )
@@ -476,7 +486,7 @@ int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2
 	}
 
 	b2fOutline box = b2fMakeBoxOutline( lower, upper );
-	b2fMarkInside( f, b2fPickLiquid( f, liquidId ), &box, maxCount );
+	MarkInside( f, b2fPickLiquid( f, liquidId ), &box, maxCount );
 	return b2fRemoveMarked( f );
 }
 
@@ -495,7 +505,7 @@ int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId sha
 		return 0;
 	}
 
-	b2fMarkInside( f, liquid, &outline, maxCount );
+	MarkInside( f, liquid, &outline, maxCount );
 	return b2fRemoveMarked( f );
 }
 
@@ -577,7 +587,7 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 
 	for ( int i = 0; i < f->count; ++i )
 	{
-		f->adaptUsed[i] = f->liquid[i] == index ? 1 : 0;
+		f->marked[i] = f->liquid[i] == index ? 1 : 0;
 	}
 	b2fRemoveMarked( f );
 	b2fDestroyEmitters( f, index );
