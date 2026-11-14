@@ -462,7 +462,8 @@ static b2FluidId CreateHole( b2WorldId worldId, LabScene* scene, const LabDef* d
 	AddCrate( scene, worldId, 0.0f, 2.0f, 0.6f, 0.7f );
 
 	b2FluidId fluid = AddLiquid( worldId, scene, def, (b2Vec2){ -5.9f, 14.4f }, (b2Vec2){ 5.9f, 19.5f } );
-	AddPump( scene, (b2Vec2){ -5.0f, 19.5f }, (b2Vec2){ 5.0f, 19.5f }, (b2Vec2){ 0.0f, -2.0f } );
+	// A narrow outlet at the left of the reservoir's top
+	AddPump( scene, (b2Vec2){ -5.8f, 19.5f }, (b2Vec2){ -4.3f, 19.5f }, (b2Vec2){ 0.0f, -4.0f } );
 	return fluid;
 }
 
@@ -617,8 +618,9 @@ static b2FluidId CreateDrain( b2WorldId worldId, LabScene* scene, const LabDef* 
 
 	AddCrate( scene, worldId, -3.0f, 13.5f, 0.6f, 0.4f );
 	b2FluidId fluid = AddLiquid( worldId, scene, def, (b2Vec2){ -5.9f, 0.05f }, (b2Vec2){ 5.9f, 12.0f } );
-	// Above the highest the surface gets, since liquid put down onto liquid shoots particles out over the walls
-	AddPump( scene, (b2Vec2){ -5.0f, 15.5f }, (b2Vec2){ 5.0f, 15.5f }, (b2Vec2){ 0.0f, -3.0f } );
+	// A narrow outlet at the left, above the highest the surface gets, since liquid put down onto liquid shoots
+	// particles out over the walls
+	AddPump( scene, (b2Vec2){ -5.8f, 15.5f }, (b2Vec2){ -4.3f, 15.5f }, (b2Vec2){ 0.0f, -5.0f } );
 	return fluid;
 }
 
