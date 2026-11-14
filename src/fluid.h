@@ -38,7 +38,7 @@ void b2SubStep_ApplyImpulse( b2SubStepContext* context, b2BodyId bodyId, b2Vec2 
 
 // Before a step, while the world is unlocked: changes particle sizes, runs the emitters for a step of this time and
 // gathers the shapes near the liquid
-void b2PrepareFluid( struct b2fFluid* fluid, float timeStep );
+void b2PrepareFluid( struct b2fFluid* fluid, float timeStep, int subStepCount );
 
 // Once per sub-step, after the bodies have moved
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, struct b2fFluid* fluid );

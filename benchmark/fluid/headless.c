@@ -195,6 +195,10 @@ static void ApplySettings( LabDef* def )
 		def->liquid.tuning.stiffness = (float)atof( getenv( "LAB_STIFFNESS" ) );
 		def->liquid.tuning.nearStiffness = 2.5f * def->liquid.tuning.stiffness;
 	}
+	if ( getenv( "LAB_COARSEN" ) )
+	{
+		def->liquid.tuning.adaptiveCoarsenSpawns = atoi( getenv( "LAB_COARSEN" ) ) != 0;
+	}
 	if ( getenv( "LAB_DEPTH_LIMIT" ) )
 	{
 		def->liquid.tuning.adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;

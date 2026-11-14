@@ -101,6 +101,8 @@ public:
 		changed |= ImGui::SliderFloat( "Adaptive depth", &m_def->fluid.adaptiveDepth, 0.0f, 60.0f, "%.1f" );
 		changed |= ImGui::SliderFloat( "Fast speed (0 off)", &m_def->liquid.tuning.adaptiveSpeed, 0.0f, 12.0f, "%.1f" );
 		changed |= ImGui::Checkbox( "Respect depth limit", &m_def->liquid.tuning.adaptiveDepthLimit );
+		// Takes effect at the next spawn, so on restarting the scene
+		changed |= ImGui::Checkbox( "Coarsen spawns", &m_def->liquid.tuning.adaptiveCoarsenSpawns );
 		ImGui::Text( "Size changes %d", p.sizeChanges );
 		changed |= ImGui::SliderFloat( "Full box", &m_def->fluid.adaptiveFullBox, 0.5f, 1.2f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Size tolerance", &m_def->liquid.tuning.adaptiveTolerance, 0.0f, 0.45f, "%.2f" );

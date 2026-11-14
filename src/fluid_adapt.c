@@ -284,14 +284,11 @@ typedef struct b2fLiquidSizes
 	bool depthLimit;
 } b2fLiquidSizes;
 
-// Runs between steps on one thread, in particle order, so that the result does not depend on worker count.
-void b2fAdaptSizes( b2fFluid* f )
+// Runs between steps on one thread, in particle order, so that the result does not depend on worker count. Sizes change
+// by as much as elapsed seconds allow. Settling, they change as far as one pass can, and only for the particles waiting
+// since their spawn; the rest stand still and take no part.
+static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 {
-	if ( f->adaptive == false || f->gridValid == false || f->h <= 0.0f || f->count == 0 )
-	{
-		return;
-	}
-
 	f->sizeChanges = 0;
 	int n = f->count;
 
@@ -362,13 +359,20 @@ void b2fAdaptSizes( b2fFluid* f )
 	}
 	f->measureTime = b2GetMilliseconds( ticks );
 
-	// The pass runs once a step, so the time since the last one is the last step's
-	float elapsed = f->stepTime;
 	float memoryDecay = powf( 0.5f, elapsed / B2F_SPEED_MEMORY );
 
 	for ( int i = 0; i < n; ++i )
 	{
 		const b2fLiquidSizes* liquid = sizes + f->liquid[i];
+		if ( settle && ( ( f->coarsenLiquids >> f->liquid[i] & 1u ) == 0 || f->id[i] < f->coarsenFrom[f->liquid[i]] ) )
+		{
+			float s = f->size[i] / spacing;
+			f->adaptMass[i] = f->adaptTarget[i] = fineMass * s * s;
+			f->adaptUsed[i] = 0;
+			f->adaptClass[i] = b2f_good;
+			continue;
+		}
+
 		float baseMass = liquid->baseMass, fastSpeed = liquid->fastSpeed, limit = liquid->limit, tolerance = liquid->tolerance;
 		float t = f->adaptDepth[i] / liquid->reach;
 		t = t < 1.0f ? t : 1.0f;
@@ -455,7 +459,7 @@ void b2fAdaptSizes( b2fFluid* f )
 		// that small, or a quarter of the finest, so it never shrinks to a speck with too short a reach to find
 		// neighbours.
 		const b2fLiquidSizes* liquid = sizes + f->liquid[i];
-		float cap = liquid->rate * elapsed * f->adaptTarget[i], baseMass = liquid->baseMass;
+		float cap = ( settle ? 1.0f : liquid->rate * elapsed ) * f->adaptTarget[i], baseMass = liquid->baseMass;
 		float last = cap > B2F_REMOVE_FLOOR * fineMass ? cap : B2F_REMOVE_FLOOR * fineMass;
 		bool removing = cls == b2f_tooSmall && f->adaptMass[i] <= last;
 		float excess = cls == b2f_tooSmall ? f->adaptMass[i] : f->adaptMass[i] - f->adaptTarget[i];
@@ -604,4 +608,56 @@ void b2fAdaptSizes( b2fFluid* f )
 
 	f->gridValid = false;
 	(void)removed;
+}
+
+void b2fAdaptSizes( b2fFluid* f )
+{
+	if ( f->adaptive == false || f->gridValid == false || f->h <= 0.0f || f->count == 0 )
+	{
+		return;
+	}
+
+	// The pass runs once a step, so the time since the last one is the last step's
+	ChangeSizes( f, f->stepTime, false );
+}
+
+// A pass can only merge a particle into neighbours that are not merging themselves, so coarsening fine liquid by a
+// mass ratio r takes about log r / log( 7 / 6 ) passes; 100 takes 30
+#define B2F_COARSEN_PASSES 64
+
+// Particles do not move between passes, so this is the sizes the liquid would settle to if it held still, by the rules
+// of the passes during steps: those within the split and merge limits of their targets stay as they are. Each pass sorts
+// again, since merges and splits change the particles and their sizes.
+void b2fCoarsenSpawned( b2fFluid* f, float h )
+{
+	// A box graded for the guessed substep is as good as new if sizes reach as deep at the real one, which at the
+	// default settings they do for any substep up to 1/60 s, since adaptiveDepth is the shorter
+	for ( int l = 0; l < f->liquidCount; ++l )
+	{
+		const b2LiquidDef* def = &f->liquids[l].def;
+		float g = b2AbsFloat( def->gravityScale ) * b2Length( f->worldGravity );
+		if ( ( f->guessedLiquids >> l & 1u ) != 0 && b2fAdaptiveReach( f, l, g, h ) != b2fAdaptiveReach( f, l, g, B2F_FIRST_SUBSTEP ) )
+		{
+			f->coarsenLiquids |= 1u << l;
+		}
+	}
+	f->guessedLiquids = 0;
+
+	if ( f->coarsenLiquids == 0 || f->adaptive == false || f->count == 0 || h <= 0.0f )
+	{
+		f->coarsenLiquids = 0;
+		return;
+	}
+
+	f->h = h;
+	for ( int pass = 0; pass < B2F_COARSEN_PASSES; ++pass )
+	{
+		b2fSortParticlesNow( f );
+		ChangeSizes( f, 0.0f, true );
+		if ( f->sizeChanges == 0 )
+		{
+			break;
+		}
+	}
+	f->coarsenLiquids = 0;
 }

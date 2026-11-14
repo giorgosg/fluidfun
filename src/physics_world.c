@@ -939,7 +939,7 @@ void b2World_Step( b2WorldId worldId, float timeStep, int subStepCount )
 	// The fluid gathers the shapes near it and changes particle sizes while the world can still be asked things
 	if ( world->fluid != NULL )
 	{
-		b2PrepareFluid( world->fluid, timeStep );
+		b2PrepareFluid( world->fluid, timeStep, subStepCount );
 	}
 
 	world->locked = true;

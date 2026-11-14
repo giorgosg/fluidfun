@@ -200,3 +200,11 @@ void b2fSortParticles( b2fFluid* f, b2SubStepContext* context )
 	b2SubStep_ParallelFor( context, ReorderTask, f->count, 1024, f );
 	SwapArrays( f );
 }
+
+void b2fSortParticlesNow( b2fFluid* f )
+{
+	BuildGrid( f );
+	f->gridValid = true;
+	ReorderTask( 0, f->count, 0, f );
+	SwapArrays( f );
+}
