@@ -54,9 +54,17 @@ typedef struct b2LiquidTuning
 	float adaptiveTolerance;
 	/// A particle splits above this many times its target mass, and merges into its neighbours below one over it.
 	float adaptiveLimit;
-	/// Most mass a particle passes to its neighbours in one frame, as a fraction of its target. Merges and mass
-	/// sharing happen over several frames at small values. One moves everything at once.
+	/// Most mass a particle passes to its neighbours per second, as a fraction of its target. Sizes change once a
+	/// step, by this times the step's time, so merges and mass sharing take several steps at small values, and one
+	/// step at the step rate or above, which moves everything at once. The default of 3 is 0.05 a step at 60 Hz.
 	float adaptiveRate;
+	/// Particles spawned in a circle, capsule or polygon take the sizes their depth asks for before they first move: at
+	/// the start of the next step, sizes change pass after pass with nothing moving until they stop. Off, they spawn at
+	/// the finest size and coarsen over the steps after as they move, which for deep liquid means many more particles at
+	/// first and a start that boils. On, a deep spawn starts with a few times fewer particles but jolts more on its
+	/// first step, since merging leaves particles less evenly spaced than a lattice. Boxes are graded as they spawn
+	/// whatever this says, and emitted particles always start fine, as they enter at the surface.
+	bool adaptiveCoarsenSpawns;
 } b2LiquidTuning;
 
 /// One liquid: what it is like, then the solver's settings for it. A fluid can hold several liquids, which share its
@@ -220,11 +228,13 @@ B2_API void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB,
 ///
 /// A box, between two corners. Without adaptive sizes it is filled as the shapes below are, on a lattice centred on the
 /// box that keeps the points inside it, edges included. With adaptive sizes particles start at the size their distance
-/// from the edge of the box asks for, in rectangular rings, so a pool does not begin by merging all over.
+/// from the edge of the box asks for, in rectangular rings, so a pool does not begin by merging all over. That size
+/// depends on the substep length; before the first step it is taken as 60 Hz with 4 substeps, and if the first step
+/// differs, sizes far from what they should be are put right at its start, before anything moves.
 B2_API int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocity );
 
 /// A circle. This and the shapes below start every particle at the finest size, and with adaptive sizes the deeper
-/// ones coarsen over the next steps.
+/// ones coarsen before the next step (b2LiquidTuning::adaptiveCoarsenSpawns) or over the steps after.
 B2_API int b2Liquid_SpawnCircle( b2LiquidId liquidId, b2Pos center, float radius, b2Vec2 velocity );
 
 /// A capsule, the points within radius of the segment between two centres

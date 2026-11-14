@@ -1384,6 +1384,193 @@ static int FluidCrowdedSprings( void )
 	return 0;
 }
 
+// A closed square tank 6 m across, its floor at y = 0, with water 2 m deep against the wall gravity points at
+static b2LiquidId MakeAdaptiveTank( b2WorldId worldId, b2Vec2 gravity, bool depthLimit, b2FluidId* fluidId )
+{
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId tankId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon walls[4] = {
+		b2MakeOffsetBox( 4.0f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity ),
+		b2MakeOffsetBox( 4.0f, 0.5f, ( b2Vec2 ){ 0.0f, 6.5f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ -3.5f, 3.0f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ 3.5f, 3.0f }, b2Rot_identity ),
+	};
+	for ( int i = 0; i < 4; ++i )
+	{
+		b2CreatePolygonShape( tankId, &shapeDef, walls + i );
+	}
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 4000;
+	*fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveDepthLimit = depthLimit;
+	b2LiquidId waterId = b2CreateLiquid( *fluidId, &water );
+	float s = def.particleSpacing;
+	b2Pos lower = { -3.0f + s, s }, upper = { 3.0f - s, 2.0f };
+	if ( gravity.x < 0.0f )
+	{
+		lower = ( b2Pos ){ -3.0f + s, s };
+		upper = ( b2Pos ){ -1.0f, 6.0f - s };
+	}
+	else if ( gravity.x == 0.0f && gravity.y == 0.0f )
+	{
+		lower = ( b2Pos ){ -1.0f, 2.0f };
+		upper = ( b2Pos ){ 1.0f, 4.0f };
+	}
+	b2Liquid_SpawnBox( waterId, lower, upper, b2Vec2_zero );
+	return waterId;
+}
+
+// Adaptive sizes go by gravity's strength, not by its y: sideways gravity sizes a pool as gravity down does, and with no
+// gravity at all nothing reads as unsafe, nothing is divided by zero, and the depth limit does not make every particle
+// coarsest
+static int FluidAdaptiveGravity( void )
+{
+	b2Vec2 gravities[3] = { { 0.0f, -10.0f }, { -10.0f, 0.0f }, { 0.0f, 0.0f } };
+	int counts[3] = { 0 };
+	for ( int k = 0; k < 3; ++k )
+	{
+		for ( int limit = 0; limit < 2; ++limit )
+		{
+			b2WorldDef worldDef = b2DefaultWorldDef();
+			worldDef.gravity = gravities[k];
+			b2WorldId worldId = b2CreateWorld( &worldDef );
+			b2FluidId fluidId;
+			MakeAdaptiveTank( worldId, gravities[k], limit == 1, &fluidId );
+			for ( int i = 0; i < 60; ++i )
+			{
+				b2World_Step( worldId, 1.0f / 60.0f, 4 );
+			}
+
+			const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
+			float fine = f->spacing, coarse = f->liquids[0].def.tuning.adaptiveRatio * f->spacing;
+			int coarsest = 0;
+			for ( int i = 0; i < f->count; ++i )
+			{
+				ENSURE( isfinite( f->adaptPressure[i] ) && isfinite( f->adaptDepth[i] ) );
+				ENSURE( isfinite( (float)f->pos[i].x ) && isfinite( (float)f->pos[i].y ) );
+				ENSURE( f->size[i] >= 0.2f * fine && f->size[i] <= 1.01f * coarse );
+				coarsest += f->size[i] > 0.7f * coarse ? 1 : 0;
+			}
+			// On main, without gravity down the depth limit read NaN and made three in four particles coarser than 3
+			// times the finest
+			ENSURE( coarsest < f->count / 10 );
+			counts[k] = limit == 1 ? f->count : counts[k];
+			b2DestroyWorld( worldId );
+		}
+	}
+
+	// The same pool against the side wall has about as many particles as against the floor
+	ENSURE( counts[1] > 3 * counts[0] / 4 && counts[1] < 4 * counts[0] / 3 );
+	return 0;
+}
+
+// Runs a circle of water 2 m across resting in a tank at a step rate and substep count, and a crate dropped into it.
+// Gives the particle count after the first step and after half a second, and when the crate began in the liquid.
+static void RunCircleAndCrate( float hz, int subSteps, bool coarsen, int* spawned, int* firstStep, int* half, float* begin )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon walls[3] = {
+		b2MakeOffsetBox( 3.5f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ -3.5f, 4.0f }, b2Rot_identity ),
+		b2MakeOffsetBox( 0.5f, 4.0f, ( b2Vec2 ){ 3.5f, 4.0f }, b2Rot_identity ),
+	};
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2CreatePolygonShape( groundId, &shapeDef, walls + i );
+	}
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 8000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveCoarsenSpawns = coarsen;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	*spawned = b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.0f, 2.1f }, 2.0f, b2Vec2_zero );
+
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ 1.5f, 6.0f };
+	b2BodyId crateId = b2CreateBody( worldId, &bodyDef );
+	b2Polygon box = b2MakeBox( 0.3f, 0.3f );
+	shapeDef.density = 0.5f;
+	b2CreatePolygonShape( crateId, &shapeDef, &box );
+
+	*begin = -1.0f;
+	int steps = (int)( 1.5f * hz + 0.5f );
+	for ( int i = 1; i <= steps; ++i )
+	{
+		b2World_Step( worldId, 1.0f / hz, subSteps );
+		*firstStep = i == 1 ? b2Fluid_GetParticleCount( fluidId ) : *firstStep;
+		*half = i == (int)( 0.5f * hz + 0.5f ) ? b2Fluid_GetParticleCount( fluidId ) : *half;
+		if ( *begin < 0.0f && b2Fluid_GetEvents( fluidId ).bodyBeginCount > 0 )
+		{
+			*begin = (float)i / hz;
+		}
+	}
+	b2DestroyWorld( worldId );
+}
+
+// Size changes and a body's inLiquid go by seconds, not steps: at 120 Hz with the same substep, liquid coarsens about as
+// fast as at 60 Hz, and a crate begins in it at the same time. Before, 120 Hz coarsened about twice as fast, to 1203
+// particles against 1797 after half a second; now it is 1635 against 1822.
+static int FluidAdaptiveStepRate( void )
+{
+	int spawned60, first60, half60, spawned120, first120, half120;
+	float begin60, begin120;
+	RunCircleAndCrate( 60.0f, 4, false, &spawned60, &first60, &half60, &begin60 );
+	RunCircleAndCrate( 120.0f, 2, false, &spawned120, &first120, &half120, &begin120 );
+	ENSURE( spawned60 == spawned120 );
+	ENSURE( half60 < 4 * spawned60 / 5 );
+	ENSURE( b2AbsFloat( (float)( half120 - half60 ) ) < 0.2f * (float)half60 );
+	ENSURE( begin60 > 0.0f && begin120 > 0.0f && b2AbsFloat( begin120 - begin60 ) < 0.05f );
+	return 0;
+}
+
+// With adaptiveCoarsenSpawns a circle coarsens before its first step, keeping its area; without, it starts fine
+static int FluidCoarsenSpawns( void )
+{
+	int spawned, firstStep, half;
+	float begin;
+	RunCircleAndCrate( 60.0f, 4, false, &spawned, &firstStep, &half, &begin );
+	ENSURE( firstStep == spawned );
+	RunCircleAndCrate( 60.0f, 4, true, &spawned, &firstStep, &half, &begin );
+	ENSURE( firstStep < spawned / 2 );
+
+	// Area is mass, which merging keeps
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveCoarsenSpawns = true;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.0f, 0.0f }, 2.0f, b2Vec2_zero );
+	b2Pos lower = { -10.0f, -10.0f }, upper = { 10.0f, 10.0f };
+	float area = b2Fluid_MeasureBox( fluidId, lower, upper ).area;
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	b2FluidAmount after = b2Fluid_MeasureBox( fluidId, lower, upper );
+	ENSURE( b2AbsFloat( after.area - area ) < 1e-3f * area );
+	b2DestroyWorld( worldId );
+
+	// A box graded before the first step for 60 Hz and 4 substeps, stepped with 1, where sizes reach far less deep
+	// with adaptiveDepth at zero, is coarsened to fit at the start of that step
+	worldId = b2CreateWorld( &worldDef );
+	def.adaptiveDepth = 0.0f;
+	fluidId = b2CreateFluid( worldId, &def );
+	waterId = b2CreateLiquid( fluidId, &water );
+	int graded = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -5.0f, 0.0f }, ( b2Pos ){ 5.0f, 20.0f }, b2Vec2_zero );
+	b2World_Step( worldId, 1.0f / 60.0f, 1 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) < graded / 2 );
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1395,5 +1582,8 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidStaleIds );
 	RUN_SUBTEST( FluidSecondFluid );
 	RUN_SUBTEST( FluidCrowdedSprings );
+	RUN_SUBTEST( FluidAdaptiveGravity );
+	RUN_SUBTEST( FluidAdaptiveStepRate );
+	RUN_SUBTEST( FluidCoarsenSpawns );
 	return 0;
 }

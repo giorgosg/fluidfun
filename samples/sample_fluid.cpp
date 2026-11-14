@@ -101,11 +101,13 @@ public:
 		changed |= ImGui::SliderFloat( "Adaptive depth", &m_def->fluid.adaptiveDepth, 0.0f, 60.0f, "%.1f" );
 		changed |= ImGui::SliderFloat( "Fast speed (0 off)", &m_def->liquid.tuning.adaptiveSpeed, 0.0f, 12.0f, "%.1f" );
 		changed |= ImGui::Checkbox( "Respect depth limit", &m_def->liquid.tuning.adaptiveDepthLimit );
+		// Takes effect at the next spawn, so on restarting the scene
+		changed |= ImGui::Checkbox( "Coarsen spawns", &m_def->liquid.tuning.adaptiveCoarsenSpawns );
 		ImGui::Text( "Size changes %d", p.sizeChanges );
 		changed |= ImGui::SliderFloat( "Full box", &m_def->fluid.adaptiveFullBox, 0.5f, 1.2f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Size tolerance", &m_def->liquid.tuning.adaptiveTolerance, 0.0f, 0.45f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Split/merge limit", &m_def->liquid.tuning.adaptiveLimit, 1.5f, 4.0f, "%.2f" );
-		changed |= ImGui::SliderFloat( "Exchange rate", &m_def->liquid.tuning.adaptiveRate, 0.01f, 1.0f, "%.2f", ImGuiSliderFlags_Logarithmic );
+		changed |= ImGui::SliderFloat( "Exchange rate /s", &m_def->liquid.tuning.adaptiveRate, 0.5f, 60.0f, "%.1f", ImGuiSliderFlags_Logarithmic );
 		ImGui::Text( "Measure %.2f ms", p.measure );
 		changed |= ImGui::SliderFloat( "Contact pressure", &m_def->liquid.tuning.buoyancyAssist, 0.0f, 2.0f, "%.2f" );
 		changed |= ImGui::SliderFloat( "Friction", &m_def->liquid.friction, 0.0f, 1.0f, "%.2f" );

@@ -28,7 +28,8 @@ b2LiquidDef b2DefaultLiquidDef( void )
 	def.tuning.adaptiveDepthLimit = false;
 	def.tuning.adaptiveTolerance = 0.3f;
 	def.tuning.adaptiveLimit = 3.0f;
-	def.tuning.adaptiveRate = 0.05f;
+	def.tuning.adaptiveRate = 3.0f;
+	def.tuning.adaptiveCoarsenSpawns = false;
 	def.categoryBits = B2_DEFAULT_CATEGORY_BITS;
 	def.maskBits = B2_DEFAULT_MASK_BITS;
 	return def;
@@ -681,11 +682,17 @@ b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId )
 	return f->profile;
 }
 
-void b2PrepareFluid( b2fFluid* f, float timeStep )
+void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 {
 	uint64_t ticks = b2GetTicks();
 
-	// This reads where shapes and bodies were last substep, so it has to come before they are gathered again
+	// This reads where shapes and bodies were last substep, so it has to come before they are gathered again. Spawned
+	// particles waiting for their sizes get them first, at this step's substep; a spawn holds off the usual pass.
+	f->worldGravity = b2World_GetGravity( f->worldId );
+	if ( ( f->coarsenLiquids | f->guessedLiquids ) != 0 && timeStep > 0.0f )
+	{
+		b2fCoarsenSpawned( f, timeStep / (float)( subStepCount > 1 ? subStepCount : 1 ) );
+	}
 	b2fAdaptSizes( f );
 	// After the sizes, which need every particle to have a grid cell from the last sort, as new ones have not
 	b2fStepEmitters( f, timeStep );

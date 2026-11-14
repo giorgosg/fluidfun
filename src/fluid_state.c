@@ -88,22 +88,22 @@ static void RemoveRecord( b2fFluid* f, int r )
 	f->recordCount -= 1;
 }
 
-// inLiquid follows whether liquid was in reach, once that has held for B2F_WET_STEPS steps in a row
+// inLiquid follows whether liquid was in reach, once that has held for B2F_WET_TIME in a row
 static void Settle( b2fFluid* f, b2fBodyRecord* record, bool wet )
 {
 	if ( wet == record->state.inLiquid )
 	{
-		record->run = 0;
+		record->run = 0.0f;
 		return;
 	}
 
-	record->run += 1;
-	if ( record->run < B2F_WET_STEPS )
+	record->run += f->stepTime;
+	if ( record->run < B2F_WET_TIME )
 	{
 		return;
 	}
 
-	record->run = 0;
+	record->run = 0.0f;
 	record->state.inLiquid = wet;
 	if ( wet )
 	{

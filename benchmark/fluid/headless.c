@@ -5,8 +5,9 @@
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_CRATE_HALF, LAB_SUBSTEPS,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings, LAB_CAPACITY among them. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP and LAB_FRAMES with
-// LAB_FRAME_EVERY.
+// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
+// LAB_FRAME_EVERY, and LAB_START (every so many frames). LAB_HZ sets the step rate, 60 by default; frames count steps, and
+// the probes that print seconds assume 60 except LAB_START. LAB_WORLD_GRAVITY=x,y sets the world's gravity.
 #include "scene.h"
 
 #include "box2d/math_functions.h"
@@ -193,6 +194,10 @@ static void ApplySettings( LabDef* def )
 	{
 		def->liquid.tuning.stiffness = (float)atof( getenv( "LAB_STIFFNESS" ) );
 		def->liquid.tuning.nearStiffness = 2.5f * def->liquid.tuning.stiffness;
+	}
+	if ( getenv( "LAB_COARSEN" ) )
+	{
+		def->liquid.tuning.adaptiveCoarsenSpawns = atoi( getenv( "LAB_COARSEN" ) ) != 0;
 	}
 	if ( getenv( "LAB_DEPTH_LIMIT" ) )
 	{
@@ -407,7 +412,22 @@ int main( int argc, char** argv )
 		def.fluid.capacity = 2000000;
 		LabSceneSettings( scene.type, &def );
 		ApplySettings( &def );
+		if ( getenv( "LAB_WORLD_GRAVITY" ) )
+		{
+			b2Vec2 gravity = b2Vec2_zero;
+			sscanf( getenv( "LAB_WORLD_GRAVITY" ), "%f,%f", &gravity.x, &gravity.y );
+			b2World_SetGravity( worldId, gravity );
+		}
+		float hz = getenv( "LAB_HZ" ) ? (float)atof( getenv( "LAB_HZ" ) ) : 60.0f;
+		uint64_t createTicks = b2GetTicks();
 		b2FluidId fluid = LabCreateScene( worldId, &scene, &def );
+		float createTime = b2GetMilliseconds( createTicks );
+		int startEvery = getenv( "LAB_START" ) ? atoi( getenv( "LAB_START" ) ) : 0;
+		int peakCount = b2Fluid_GetParticleCount( fluid );
+		if ( startEvery > 0 )
+		{
+			printf( "START create %.2f ms, %d particles\n", (double)createTime, peakCount );
+		}
 		// LAB_SECOND_LIQUID: add a liquid like the first with no particles, which runs the passes for several
 		// liquids on the same physics, to time them
 		if ( getenv( "LAB_SECOND_LIQUID" ) )
@@ -457,7 +477,7 @@ int main( int argc, char** argv )
 		double measureSum = 0.0;
 		for ( int i = 0; i < frames; ++i )
 		{
-			LabStepScene( &scene, fluid, 1.0f / 60.0f );
+			LabStepScene( &scene, fluid, 1.0f / hz );
 			// LAB_SINK=start,end: between those seconds drive every moving body down at 4 m/s, as dragging it to the
 			// floor with the mouse does, then let go. SINK lines give each body's height every half second.
 			if ( getenv( "LAB_SINK" ) )
@@ -490,8 +510,59 @@ int main( int argc, char** argv )
 				}
 			}
 
-			b2World_Step( worldId, 1.0f / 60.0f, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : ( scene.subSteps > 0 ? scene.subSteps : 4 ) );
+			uint64_t stepTicks = b2GetTicks();
+			b2World_Step( worldId, 1.0f / hz, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : ( scene.subSteps > 0 ? scene.subSteps : 4 ) );
+			float stepTime = b2GetMilliseconds( stepTicks );
 			b2FluidProfile p = b2Fluid_GetProfile( fluid );
+
+			// LAB_START: how liquid settles after it spawns. Every so many frames: the particle count and its peak so far,
+			// size changes, the rms of density over rest less one, the same less the mean of a band 0.25 m high, which takes
+			// out the weight's squeeze and leaves the noise, and the rms and the largest speed. The first step's time comes first.
+			if ( startEvery > 0 )
+			{
+				b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+				int n = particles.count;
+				peakCount = n > peakCount ? n : peakCount;
+				if ( i == 0 )
+				{
+					printf( "START first step %.2f ms, prepare %.2f ms\n", (double)stepTime, (double)p.prepare );
+				}
+				if ( ( i + 1 ) % startEvery == 0 )
+				{
+					enum { bandCount = 512 };
+					static double bandSum[bandCount];
+					static int bandN[bandCount];
+					memset( bandSum, 0, sizeof( bandSum ) );
+					memset( bandN, 0, sizeof( bandN ) );
+					const b2Pos* pos = particles.positions;
+					const float* rho = particles.densities;
+					float rest = particles.restDensity;
+					double raw = 0.0, speed = 0.0, fastest = 0.0;
+					for ( int k = 0; k < n; ++k )
+					{
+						int band = (int)floor( pos[k].y / 0.25 );
+						band = band < 0 ? 0 : ( band >= bandCount ? bandCount - 1 : band );
+						double e = rho[k] / rest - 1.0;
+						bandSum[band] += e;
+						bandN[band] += 1;
+						raw += e * e;
+						double v2 = (double)particles.velocitiesX[k] * particles.velocitiesX[k] + (double)particles.velocitiesY[k] * particles.velocitiesY[k];
+						speed += v2;
+						fastest = v2 > fastest ? v2 : fastest;
+					}
+					double noise = 0.0;
+					for ( int k = 0; k < n; ++k )
+					{
+						int band = (int)floor( pos[k].y / 0.25 );
+						band = band < 0 ? 0 : ( band >= bandCount ? bandCount - 1 : band );
+						double e = rho[k] / rest - 1.0 - bandSum[band] / bandN[band];
+						noise += e * e;
+					}
+					printf( "START t %.3f n %d peak %d changes %d rms %.4f noise %.4f speed %.4f fastest %.2f\n", (double)( i + 1 ) / (double)hz, n,
+							peakCount, p.sizeChanges, n > 0 ? sqrt( raw / n ) : 0.0, n > 0 ? sqrt( noise / n ) : 0.0, n > 0 ? sqrt( speed / n ) : 0.0,
+							sqrt( fastest ) );
+				}
+			}
 			measureSum += p.measure;
 			if ( settle >= 0.0f )
 			{

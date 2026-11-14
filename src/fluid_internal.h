@@ -169,15 +169,15 @@ typedef struct b2fBodyRecord
 {
 	b2BodyId id;
 	b2FluidBodyState state;
-	// Steps in a row whose liquid within reach disagrees with state.inLiquid; it flips at B2F_WET_STEPS
-	int run;
+	// Seconds of steps in a row whose liquid within reach disagrees with state.inLiquid; it flips at B2F_WET_TIME
+	float run;
 	// Whether the body was near the liquid this step, and had liquid in reach
 	bool seen, wet;
 } b2fBodyRecord;
 
-// A body's inLiquid changes after this many steps in a row with liquid in reach, or without it, so that a splash
-// passing by does not begin and end it every step
-#define B2F_WET_STEPS 3
+// A body's inLiquid changes after this many seconds of steps in a row with liquid in reach, or without it, so that a
+// splash passing by does not begin and end it every step. At 60 Hz that is three steps, and at 120 Hz six.
+#define B2F_WET_TIME 0.045f
 
 // A sensor shape near the liquid this step, or one that held liquid last step
 typedef struct b2fSensor
@@ -320,6 +320,11 @@ struct b2fFluid
 	float maxRadius;
 	bool gridValid;
 	int nextParticleId;
+	// Particles spawned since the last step that take their sizes at the start of the next one, before they move: those
+	// of each liquid with a bit in coarsenLiquids and an id from coarsenFrom of that liquid on. Liquids in
+	// guessedLiquids were graded for B2F_FIRST_SUBSTEP before the first step, and join them if the step's differs.
+	uint32_t coarsenLiquids, guessedLiquids;
+	int coarsenFrom[B2F_MAX_LIQUIDS];
 	float wallTable[B2F_WALL_TABLE_SIZE + 1][4];
 
 	int gridWidth, gridHeight, gridCapacity;
@@ -455,6 +460,8 @@ uint32_t b2fLiquidsCollidingWith( const b2fFluid* f, b2Filter filter );
 
 // grid.c
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
+// The same on one thread, outside a step
+void b2fSortParticlesNow( b2fFluid* f );
 
 // solver.c
 void b2fPredict( b2fFluid* f, b2SubStepContext* context );
@@ -490,4 +497,9 @@ void b2fFreeState( b2fFluid* f );
 
 // adapt.c
 void b2fAdaptSizes( b2fFluid* f );
+// Gives particles waiting since their spawn the sizes their depth asks for, with no movement, for a step of h a substep
+void b2fCoarsenSpawned( b2fFluid* f, float h );
+// The substep a box spawned before the first step is graded for, that of 60 Hz with 4 substeps
+#define B2F_FIRST_SUBSTEP ( 1.0f / 240.0f )
+// The depth at which a liquid's particles reach its coarsest size, for gravity of strength g and substeps of h
 float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h );
