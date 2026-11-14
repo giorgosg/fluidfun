@@ -174,6 +174,9 @@ typedef struct b2World
 	// The world's fluid, if it has one, and how many it has had, which a fluid id carries
 	struct b2fFluid* fluid;
 	int fluidSerial;
+	// How many liquids and emitters have been made in this world slot, through every fluid and every world it has
+	// held. Each new one takes the next count as its id's generation, so no old id fits it until the count wraps.
+	uint16_t liquidSerial, emitterSerial;
 	bool enableRestitutionPropagation;
 	float maxLinearSpeed;
 	float contactSpeed;

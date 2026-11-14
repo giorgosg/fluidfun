@@ -257,13 +257,6 @@ b2EmitterDef b2DefaultEmitterDef( void )
 	return def;
 }
 
-// An emitter id carries a count that changes with the world in the slot, the fluid the world has, and each emitter
-// destroyed in the emitter's own slot, as a liquid id does
-static uint16_t EmitterGeneration( const b2World* world, const b2fEmitter* emitter )
-{
-	return (uint16_t)( 31 * world->generation + 7 * world->fluidSerial + emitter->generation );
-}
-
 static b2fEmitter* FindEmitter( b2EmitterId emitterId, b2fFluid** fluid )
 {
 	b2World* world = b2FindWorld( emitterId.world0 );
@@ -280,7 +273,7 @@ static b2fEmitter* FindEmitter( b2EmitterId emitterId, b2fFluid** fluid )
 	}
 
 	b2fEmitter* emitter = f->emitters + index;
-	if ( emitter->alive == false || emitterId.generation != EmitterGeneration( world, emitter ) )
+	if ( emitter->alive == false || emitterId.generation != emitter->generation )
 	{
 		return NULL;
 	}
@@ -319,15 +312,14 @@ b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def )
 
 	f->emitterCount = index < f->emitterCount ? f->emitterCount : index + 1;
 	b2fEmitter* emitter = f->emitters + index;
-	uint16_t generation = emitter->generation;
-	*emitter = ( b2fEmitter ){ .def = *def, .liquid = liquid, .alive = true, .generation = generation };
-	return ( b2EmitterId ){ index + 1, liquidId.world0, EmitterGeneration( world, emitter ) };
+	world->emitterSerial += 1;
+	*emitter = ( b2fEmitter ){ .def = *def, .liquid = liquid, .alive = true, .generation = world->emitterSerial };
+	return ( b2EmitterId ){ index + 1, liquidId.world0, emitter->generation };
 }
 
 static void EndEmitter( b2fFluid* f, b2fEmitter* emitter )
 {
 	emitter->alive = false;
-	emitter->generation += 1;
 	while ( f->emitterCount > 0 && f->emitters[f->emitterCount - 1].alive == false )
 	{
 		f->emitterCount -= 1;

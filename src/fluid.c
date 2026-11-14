@@ -224,7 +224,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 {
 	b2World* world = b2GetWorldFromId( worldId );
 	B2_ASSERT( world->locked == false );
-	B2_ASSERT( world->fluid == NULL );
 	if ( world->locked || world->fluid != NULL )
 	{
 		return b2_nullFluidId;
@@ -506,17 +505,9 @@ int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId sha
 	return b2fRemoveMarked( f );
 }
 
-// A liquid id carries a count that changes with the world in the slot, the fluid the world has, and each liquid
-// destroyed in the liquid's own slot
-static uint16_t LiquidGeneration( const b2World* world, const b2fLiquid* liquid )
-{
-	return (uint16_t)( 31 * world->generation + 7 * world->fluidSerial + liquid->generation );
-}
-
 b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index )
 {
-	const b2World* world = b2GetWorldFromId( f->worldId );
-	return ( b2LiquidId ){ index + 1, world->worldId, LiquidGeneration( world, f->liquids + index ) };
+	return ( b2LiquidId ){ index + 1, (uint16_t)( f->worldId.index1 - 1 ), f->liquids[index].generation };
 }
 
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid )
@@ -525,7 +516,7 @@ int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid )
 	b2fFluid* f = world->fluid;
 	int index = liquidId.index1 - 1;
 	B2_ASSERT( f != NULL && 0 <= index && index < f->liquidCount );
-	B2_ASSERT( f->liquids[index].alive && liquidId.generation == LiquidGeneration( world, f->liquids + index ) );
+	B2_ASSERT( f->liquids[index].alive && liquidId.generation == f->liquids[index].generation );
 	*fluid = f;
 	return index;
 }
@@ -541,7 +532,7 @@ bool b2Liquid_IsValid( b2LiquidId liquidId )
 	const b2fFluid* f = world->fluid;
 	int index = liquidId.index1 - 1;
 	return 0 <= index && index < f->liquidCount && f->liquids[index].alive &&
-		   liquidId.generation == LiquidGeneration( world, f->liquids + index );
+		   liquidId.generation == f->liquids[index].generation;
 }
 
 b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
@@ -568,13 +559,15 @@ b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 	f->liquidCount = index < f->liquidCount ? f->liquidCount : index + 1;
 	f->liquids[index].def = *def;
 	f->liquids[index].alive = true;
+	world->liquidSerial += 1;
+	f->liquids[index].generation = world->liquidSerial;
 	for ( int other = 0; other < B2F_MAX_LIQUIDS; ++other )
 	{
 		f->cohesionBetween[index][other] = 0.0f;
 		f->cohesionBetween[other][index] = 0.0f;
 	}
 	UpdateLiquids( f );
-	return ( b2LiquidId ){ index + 1, fluidId.world0, LiquidGeneration( world, f->liquids + index ) };
+	return ( b2LiquidId ){ index + 1, fluidId.world0, f->liquids[index].generation };
 }
 
 void b2DestroyLiquid( b2LiquidId liquidId )
@@ -596,7 +589,6 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 	b2fDestroyEmitters( f, index );
 
 	f->liquids[index].alive = false;
-	f->liquids[index].generation += 1;
 	while ( f->liquidCount > 0 && f->liquids[f->liquidCount - 1].alive == false )
 	{
 		f->liquidCount -= 1;

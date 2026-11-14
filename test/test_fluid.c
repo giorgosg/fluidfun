@@ -2,6 +2,9 @@
 
 #include "test_macros.h"
 
+#include "fluid_internal.h"
+#include "physics_world.h"
+
 #include "box2d/box2d.h"
 #include "box2d/fluidfun.h"
 
@@ -1251,6 +1254,136 @@ static int FluidFilter( void )
 	return 0;
 }
 
+// A liquid or emitter id stays invalid after its fluid is destroyed and the world given a new one, however often its
+// slot was used. A slot used eight times in one fluid once gave the same generation as its first use in the next.
+static int FluidStaleIds( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 100;
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2EmitterDef mouth = b2DefaultEmitterDef();
+
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidId staleLiquids[8];
+	for ( int i = 0; i < 8; ++i )
+	{
+		staleLiquids[i] = b2CreateLiquid( fluidId, &water );
+		ENSURE( b2Liquid_GetIndex( staleLiquids[i] ) == 0 );
+		if ( i < 7 )
+		{
+			b2DestroyLiquid( staleLiquids[i] );
+		}
+	}
+	b2EmitterId staleEmitters[8];
+	for ( int i = 0; i < 8; ++i )
+	{
+		staleEmitters[i] = b2CreateEmitter( staleLiquids[7], &mouth );
+		ENSURE( staleEmitters[i].index1 == 1 );
+		if ( i < 7 )
+		{
+			b2DestroyEmitter( staleEmitters[i] );
+		}
+	}
+	ENSURE( b2Liquid_IsValid( staleLiquids[7] ) && b2Emitter_IsValid( staleEmitters[7] ) );
+	b2DestroyFluid( fluidId );
+
+	b2FluidId nextId = b2CreateFluid( worldId, &def );
+	b2LiquidId liquidId = b2CreateLiquid( nextId, &water );
+	b2EmitterId emitterId = b2CreateEmitter( liquidId, &mouth );
+	ENSURE( b2Liquid_IsValid( liquidId ) && b2Emitter_IsValid( emitterId ) );
+	for ( int i = 0; i < 8; ++i )
+	{
+		ENSURE( b2Liquid_IsValid( staleLiquids[i] ) == false );
+		ENSURE( b2Emitter_IsValid( staleEmitters[i] ) == false );
+	}
+
+	b2DestroyWorld( worldId );
+
+	// Nor does a new world in the same slot bring back a liquid id of the old one's, after its slot was used 32 times
+	worldId = b2CreateWorld( &worldDef );
+	fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidId stale = b2_nullLiquidId;
+	for ( int i = 0; i < 32; ++i )
+	{
+		stale = b2CreateLiquid( fluidId, &water );
+		if ( i < 31 )
+		{
+			b2DestroyLiquid( stale );
+		}
+	}
+	b2DestroyWorld( worldId );
+	b2WorldId sameSlotId = b2CreateWorld( &worldDef );
+	ENSURE( sameSlotId.index1 == worldId.index1 );
+	nextId = b2CreateFluid( sameSlotId, &def );
+	liquidId = b2CreateLiquid( nextId, &water );
+	ENSURE( b2Liquid_IsValid( liquidId ) );
+	ENSURE( b2Liquid_IsValid( stale ) == false );
+	b2DestroyWorld( sameSlotId );
+	return 0;
+}
+
+// A world has one fluid: asking for a second gives the null id, as the header says, and leaves the first working
+static int FluidSecondFluid( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 1000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+
+	b2FluidId secondId = b2CreateFluid( worldId, &def );
+	ENSURE( B2_IS_NULL( secondId ) );
+	ENSURE( b2Fluid_IsValid( secondId ) == false );
+	ENSURE( b2Fluid_IsValid( fluidId ) );
+
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	int added = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.0f, 1.0f }, ( b2Pos ){ 1.0f, 2.0f }, b2Vec2_zero );
+	ENSURE( added > 0 );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2Fluid_GetParticleCount( fluidId ) == added );
+
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
+// A particle with more neighbours than the pair list holds still forms springs, with the neighbours the list has.
+// Three spawns on the same box crowd every particle with about three times the neighbours of liquid at rest.
+static int FluidCrowdedSprings( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 4000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef jelly = b2MakeJellyDef();
+	b2LiquidId jellyId = b2CreateLiquid( fluidId, &jelly );
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2Liquid_SpawnBox( jellyId, ( b2Pos ){ -0.5f, -0.5f }, ( b2Pos ){ 0.5f, 0.5f }, b2Vec2_zero );
+	}
+	b2World_Step( worldId, 1.0f / 60.0f, 1 );
+
+	const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
+	int crowded = 0, springless = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		if ( f->pairCount[i] < 0 )
+		{
+			crowded += 1;
+			springless += f->springs[i].count == 0 ? 1 : 0;
+		}
+	}
+	ENSURE( crowded > 0 );
+	ENSURE( springless == 0 );
+
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1259,5 +1392,8 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidSpawnAndRemove );
 	RUN_SUBTEST( FluidPush );
 	RUN_SUBTEST( FluidFilter );
+	RUN_SUBTEST( FluidStaleIds );
+	RUN_SUBTEST( FluidSecondFluid );
+	RUN_SUBTEST( FluidCrowdedSprings );
 	return 0;
 }
