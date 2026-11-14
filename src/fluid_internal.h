@@ -271,7 +271,7 @@ struct b2fFluid
 	float spacing;
 	float radius;	 // interaction radius h, twice the spacing
 	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
-	float mass;	 // of a finest particle of liquid 0, the unit adaptive sizes count mass in
+	float fineArea;	 // the area a finest particle fills at rest, which adaptive sizes count mass in, whatever the liquid
 	float restDensity;
 	// Room for this many particles in every per-particle array, which b2fGrow doubles up to maxCapacity
 	int capacity, maxCapacity;

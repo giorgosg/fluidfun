@@ -118,10 +118,6 @@ static void UpdateLiquids( b2fFluid* f )
 		}
 	}
 
-	// Adaptive sizes count mass in finest particles of the first liquid, as a measure of area. Without one, any
-	// mass does.
-	f->mass = f->liquidCount > 0 && f->liquids[0].alive ? f->liquids[0].mass : 0.8660254f * spacing * spacing / B2F_REST_FILL;
-
 	if ( f->springy && f->springs == NULL )
 	{
 		size_t n = (size_t)f->capacity + 1, slots = 1;
@@ -238,6 +234,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->spacing = def->particleSpacing / B2F_REST_PITCH;
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
+	f->fineArea = 0.8660254f * f->spacing * f->spacing / B2F_REST_FILL;
 	UpdateLiquids( f );
 	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
