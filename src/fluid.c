@@ -709,7 +709,7 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCou
 {
 	(void)subStepCount;
 	f->checkSprings = subStepIndex == 0;
-	// The sort below reorders particles, and a substep callback can read them before the step ends
+	// The sort below reorders particles
 	f->restSizesStale = true;
 	f->stepTime += h;
 	f->stepSubSteps += 1;

@@ -21,8 +21,6 @@
 #include "shape.h"
 #include "solver_set.h"
 
-#include "box2d/box2d.h"
-
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -856,8 +854,8 @@ static b2SolverStage* b2InitColorStages( b2SolverStage* stage, b2SolverStageType
 	return stage;
 }
 
-// State for b2World_SetSubStepCallback. stepContext is null when no bodies are awake, in which
-// case the solver and its spinning workers are not running.
+// State for the fluid's sub-step, see fluid.h. stepContext is null when no bodies are awake, in
+// which case the solver and its spinning workers are not running.
 typedef struct b2SubStepContext
 {
 	b2World* world;
@@ -1308,12 +1306,6 @@ static void b2SolverTask( void* taskContext )
 			{
 				b2FluidSubStep( &subStepContext, subStepIndex, subStepCount, context->h, subStepWorld->fluid );
 			}
-
-			if ( subStepWorld->subStepFcn != NULL )
-			{
-				subStepWorld->subStepFcn( &subStepContext, subStepIndex, subStepCount, context->h, subStepWorld->subStepContext );
-				(void)b2GetMillisecondsAndReset( &ticks );
-			}
 		}
 
 		context->subStep = NULL;
@@ -1448,21 +1440,14 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 	int awakeBodyCount = awakeSet->bodySims.count;
 	if ( awakeBodyCount == 0 )
 	{
-		if ( world->subStepFcn != NULL || world->fluid != NULL )
+		// The fluid keeps moving while every body sleeps
+		if ( world->fluid != NULL )
 		{
 			b2SubStepContext subStepContext = { 0 };
 			subStepContext.world = world;
 			for ( int i = 0; i < stepContext->subStepCount; ++i )
 			{
-				if ( world->fluid != NULL )
-				{
-					b2FluidSubStep( &subStepContext, i, stepContext->subStepCount, stepContext->h, world->fluid );
-				}
-
-				if ( world->subStepFcn != NULL )
-				{
-					world->subStepFcn( &subStepContext, i, stepContext->subStepCount, stepContext->h, world->subStepContext );
-				}
+				b2FluidSubStep( &subStepContext, i, stepContext->subStepCount, stepContext->h, world->fluid );
 			}
 		}
 		return;

@@ -213,7 +213,7 @@ typedef struct b2StepContext
 
 	b2SolverStage* stages;
 
-	// Active while the sub-step callback runs inside the solver, otherwise null
+	// Active while the fluid's sub-step runs inside the solver, otherwise null
 	struct b2SubStepContext* subStep;
 	int stageCount;
 	bool enableWarmStarting;

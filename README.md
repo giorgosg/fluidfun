@@ -11,7 +11,7 @@ fluidfun is not part of Box2D and is not made by its author.
 ## What it does
 
 - **Double density relaxation** (Clavet et al. 2005), with viscosity, cohesion and wet friction at shapes.
-- **Two-way coupling** with Box2D bodies, through a sub-step callback the fork adds.
+- **Two-way coupling** with Box2D bodies: the solver runs the fluid at the end of every sub-step.
 - **Adaptive particle sizes** (after Winchenbach et al. 2017): particles are fine at the surface and around bodies,
   and coarser deep down. A deep pool needs far fewer particles.
 - **Several liquids** that keep apart, each with its own density, stiffness, viscosity and cohesion. Light liquids
@@ -26,21 +26,11 @@ fluidfun is not part of Box2D and is not made by its author.
 
 ## Changes to Box2D
 
-Besides the liquid code (`src/fluid*.c`, `include/box2d/fluidfun.h`), the fork changes Box2D in two ways.
-
-The world owns its fluid: `b2World_Step` prepares it before the step, runs it at the end of every solver sub-step and
-has it work out body states and events after the step, and `b2DestroyWorld` frees it. `b2World_Explode` throws the
-world's liquid as well as its bodies. A fluid is named by a `b2FluidId`, as bodies and shapes are by theirs.
-
-There is also a callback that runs at the end of every solver sub-step, after the fluid, with access to the step's
-workers and to body motion. The fluid is built on the same three `b2SubStep_` functions.
-
-```c
-b2World_SetSubStepCallback( worldId, fcn, context );
-b2SubStep_ParallelFor( context, task, itemCount, minRange, taskContext );
-b2SubStep_GetBodyMotion( context, bodyId, &body );
-b2SubStep_ApplyImpulse( context, bodyId, impulse, angularImpulse );
-```
+Besides the liquid code (`src/fluid*.c`, `include/box2d/fluidfun.h`), the fork changes Box2D in one way: the world
+owns its fluid. `b2World_Step` prepares it before the step, runs it at the end of every solver sub-step, on the
+step's workers and with the bodies' motion part way through the step, and has it work out body states and events
+after the step. `b2DestroyWorld` frees it, and `b2World_Explode` throws the world's liquid as well as its bodies. A
+fluid is named by a `b2FluidId`, as bodies and shapes are by theirs.
 
 The rest is upstream Box2D. The library builds and installs as `fluidfun`, so it can sit next to a stock Box2D:
 `#include <fluidfun/fluidfun.h>` and link `fluidfun::fluidfun`.

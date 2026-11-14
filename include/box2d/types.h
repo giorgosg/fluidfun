@@ -36,33 +36,6 @@ typedef void* b2EnqueueTaskCallbackFcn( b2TaskCallbackFcn* task, void* taskConte
 /// @ingroup world
 typedef void b2FinishTaskCallbackFcn( void* userTask, void* userContext );
 
-/// Opaque context for code running inside a sub-step callback.
-/// @ingroup world
-typedef struct b2SubStepContext b2SubStepContext;
-
-/// Called at the end of every solver sub-step, on the thread running the solver, with the world
-/// locked. Also called when no bodies are awake, so that it keeps running while bodies sleep.
-/// @ingroup world
-typedef void b2SubStepFcn( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, void* userContext );
-
-/// Runs part of a parallel loop started with b2SubStep_ParallelFor.
-/// @ingroup world
-typedef void b2SubStepTaskFcn( int startIndex, int endIndex, int workerIndex, void* taskContext );
-
-/// Motion of a body part way through a step, see b2SubStep_GetBodyMotion.
-/// @ingroup world
-typedef struct b2SubStepBody
-{
-	b2Pos center;
-	b2Rot rotation;
-	b2Vec2 localCenter;
-	b2Vec2 linearVelocity;
-	float angularVelocity;
-	/// Zero unless the body is awake
-	float invMass;
-	float invInertia;
-} b2SubStepBody;
-
 /// Optional friction mixing callback. This intentionally provides no context objects because this
 /// is called from a worker thread.
 /// @warning This function should not attempt to modify Box2D state or user application state.
