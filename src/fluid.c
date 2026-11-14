@@ -32,6 +32,7 @@ b2LiquidDef b2DefaultLiquidDef( void )
 	def.tuning.adaptiveCoarsenSpawns = false;
 	def.categoryBits = B2_DEFAULT_CATEGORY_BITS;
 	def.maskBits = B2_DEFAULT_MASK_BITS;
+	def.internalValue = B2_SECRET_COOKIE;
 	return def;
 }
 
@@ -96,7 +97,48 @@ b2FluidDef b2DefaultFluidDef( void )
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;
 	def.maxCapacity = 1000000;
+	def.internalValue = B2_SECRET_COOKIE;
 	return def;
+}
+
+// The defs are checked as Box2D checks its own: an assert, and a log and a refusal in builds without asserts. Each
+// range is what the field's documentation allows; SETTINGS.md has what the values do.
+static bool IsValidFluidDef( const b2FluidDef* def )
+{
+	B2_CHECK_DEF( def );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->particleSpacing ) && def->particleSpacing > 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->adaptiveDepth ) && def->adaptiveDepth >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->adaptiveFullBox ) && def->adaptiveFullBox > 0.0f, false );
+	B2_CHECK_INPUT_RETURN( def->capacity >= 0 && def->maxCapacity >= 0, false );
+	return true;
+}
+
+static bool IsValidLiquidDef( const b2LiquidDef* def )
+{
+	B2_CHECK_DEF( def );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->density ) && def->density > 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->viscosity ) && def->viscosity >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->cohesion ) && def->cohesion >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->adhesion ) && def->adhesion >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->friction ) && 0.0f <= def->friction && def->friction <= 1.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->gravityScale ), false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->springStiffness ) && def->springStiffness >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->plasticity ) && def->plasticity >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( def->yieldRatio ) && def->yieldRatio >= 0.0f, false );
+
+	const b2LiquidTuning* t = &def->tuning;
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->stiffness ) && t->stiffness >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->nearStiffness ) && t->nearStiffness >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->tensilePressure ) && 0.0f <= t->tensilePressure && t->tensilePressure <= 1.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->quadraticViscosity ) && t->quadraticViscosity >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->buoyancyAssist ) && t->buoyancyAssist >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->addedMass ) && 0.0f <= t->addedMass && t->addedMass <= 1.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->adaptiveRatio ) && t->adaptiveRatio >= 1.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->adaptiveSpeed ) && t->adaptiveSpeed >= 0.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->adaptiveTolerance ) && 0.0f <= t->adaptiveTolerance && t->adaptiveTolerance < 1.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->adaptiveLimit ) && t->adaptiveLimit > 1.0f, false );
+	B2_CHECK_INPUT_RETURN( b2IsValidFloat( t->adaptiveRate ) && t->adaptiveRate >= 0.0f, false );
+	return true;
 }
 
 // The id table b2fRelaxSprings fills: a power of two at least twice the room for particles
@@ -225,6 +267,11 @@ b2fFluid* b2fGetFluid( b2FluidId fluidId )
 
 b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 {
+	if ( IsValidFluidDef( def ) == false )
+	{
+		return b2_nullFluidId;
+	}
+
 	b2World* world = b2GetWorldFromId( worldId );
 	B2_ASSERT( world->locked == false );
 	if ( world->locked || world->fluid != NULL )
@@ -319,6 +366,11 @@ void b2FreeFluid( b2fFluid* f )
 void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
+	if ( IsValidFluidDef( def ) == false )
+	{
+		return;
+	}
+
 	float spacing = f->def.particleSpacing;
 	int capacity = f->def.capacity;
 	f->def = *def;
@@ -544,6 +596,11 @@ bool b2Liquid_IsValid( b2LiquidId liquidId )
 b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
+	if ( IsValidLiquidDef( def ) == false )
+	{
+		return b2_nullLiquidId;
+	}
+
 	b2World* world = b2GetWorld( fluidId.world0 );
 	B2_ASSERT( world->locked == false );
 	if ( world->locked )
@@ -606,6 +663,10 @@ void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
 {
 	b2fFluid* f;
 	int index = b2fGetLiquid( liquidId, &f );
+	if ( IsValidLiquidDef( def ) == false )
+	{
+		return;
+	}
 	f->liquids[index].def = *def;
 	UpdateLiquids( f );
 }
@@ -639,6 +700,7 @@ void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB, float 
 	b2fFluid *f, *other;
 	int a = b2fGetLiquid( liquidA, &f ), b = b2fGetLiquid( liquidB, &other );
 	B2_ASSERT( f == other );
+	B2_CHECK_INPUT( b2IsValidFloat( cohesion ) && cohesion >= 0.0f );
 	if ( f == other && a != b )
 	{
 		f->cohesionBetween[a][b] = cohesion;
