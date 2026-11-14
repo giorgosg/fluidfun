@@ -92,8 +92,9 @@ b2LiquidDef b2MakeDoughDef( void )
 b2FluidDef b2DefaultFluidDef( void )
 {
 	b2FluidDef def = { 0 };
-	def.particleSpacing = 0.08f;
-	def.adaptiveDepth = 12.0f;
+	// Lengths are in the caller's units, as b2SetLengthUnitsPerMeter sets them, as Box2D's own defaults are
+	def.particleSpacing = 0.08f * b2_lengthUnitsPerMeter;
+	def.adaptiveDepth = 12.0f * b2_lengthUnitsPerMeter;
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;
 	def.maxCapacity = 1000000;

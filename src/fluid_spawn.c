@@ -282,7 +282,7 @@ int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, co
 b2EmitterDef b2DefaultEmitterDef( void )
 {
 	b2EmitterDef def = { 0 };
-	def.point2 = (b2Pos){ 1.0f, 0.0f };
+	def.point2 = (b2Pos){ b2_lengthUnitsPerMeter, 0.0f };
 	def.enabled = true;
 	def.internalValue = B2_SECRET_COOKIE;
 	return def;

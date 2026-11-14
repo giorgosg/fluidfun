@@ -2055,6 +2055,98 @@ static int FluidEmitterOnBody( void )
 	return 0;
 }
 
+// One scene built in metres or in another length unit, with every length and gravity scaled by it, and defaults left
+// to scale themselves: a pool with adaptive sizes in a tank, a crate floating in it, and a ball of water dropped in
+typedef struct UnitsResult
+{
+	int count;
+	float area, meanHeight, crateHeight, submerged;
+	// The liquid's push up on a crate sunk to the floor, over its weight
+	float sunkLift;
+	bool inLiquid;
+} UnitsResult;
+
+static UnitsResult RunInUnits( float unitsPerMeter )
+{
+	b2SetLengthUnitsPerMeter( unitsPerMeter );
+	float u = unitsPerMeter;
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = ( b2Vec2 ){ 0.0f, -10.0f * u };
+	worldDef.workerCount = 1;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon floor = b2MakeOffsetBox( 3.0f * u, 0.5f * u, ( b2Vec2 ){ 0.0f, -0.5f * u }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &floor );
+	for ( int side = -1; side <= 1; side += 2 )
+	{
+		b2Polygon wall = b2MakeOffsetBox( 0.5f * u, 2.0f * u, ( b2Vec2 ){ (float)side * 2.5f * u, 2.0f * u }, b2Rot_identity );
+		b2CreatePolygonShape( groundId, &shapeDef, &wall );
+	}
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ 0.8f * u, 1.4f * u };
+	b2BodyId crateId = b2CreateBody( worldId, &bodyDef );
+	shapeDef.density = 0.5f;
+	b2Polygon crate = b2MakeBox( 0.3f * u, 0.3f * u );
+	b2CreatePolygonShape( crateId, &shapeDef, &crate );
+	bodyDef.position = ( b2Pos ){ -1.2f * u, 0.25f * u };
+	b2BodyId sunkId = b2CreateBody( worldId, &bodyDef );
+	shapeDef.density = 2.0f;
+	b2Polygon block = b2MakeBox( 0.25f * u, 0.25f * u );
+	b2CreatePolygonShape( sunkId, &shapeDef, &block );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 4.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.95f * u, 0.0f }, ( b2Pos ){ 1.95f * u, 1.0f * u }, b2Vec2_zero );
+	b2Liquid_SpawnCircle( waterId, ( b2Pos ){ -0.8f * u, 2.0f * u }, 0.3f * u, ( b2Vec2 ){ 1.0f * u, 0.0f } );
+	// The bodies' readings are averaged over the last half second, since they vary from step to step
+	UnitsResult r = { 0 };
+	for ( int i = 0; i < 120; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		if ( i >= 90 )
+		{
+			r.sunkLift += b2Fluid_GetBodyState( fluidId, sunkId ).force.y / ( 30.0f * b2Body_GetMass( sunkId ) * 10.0f * u );
+			r.crateHeight += (float)b2Body_GetPosition( crateId ).y / ( 30.0f * u );
+			r.submerged += b2Fluid_GetBodyState( fluidId, crateId ).submerged / 30.0f;
+		}
+	}
+
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	r.count = particles.count;
+	double height = 0.0;
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		height += particles.positions[i].y;
+	}
+	r.meanHeight = (float)( height / particles.count ) / u;
+	r.area = b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeBoxRegion( ( b2Pos ){ -10.0f * u, -10.0f * u }, ( b2Pos ){ 10.0f * u, 10.0f * u } ) ).area / ( u * u );
+	r.inLiquid = b2Fluid_GetBodyState( fluidId, crateId ).inLiquid;
+	b2DestroyWorld( worldId );
+	b2SetLengthUnitsPerMeter( 1.0f );
+	return r;
+}
+
+// Lengths follow b2GetLengthUnitsPerMeter: the same scene in metres and in centimetres moves the same
+static int FluidLengthUnits( void )
+{
+	UnitsResult metres = RunInUnits( 1.0f );
+	UnitsResult centimetres = RunInUnits( 100.0f );
+	ENSURE( b2GetLengthUnitsPerMeter() == 1.0f );
+	ENSURE( metres.inLiquid && centimetres.inLiquid );
+	ENSURE( fabsf( (float)( centimetres.count - metres.count ) ) < 0.05f * (float)metres.count );
+	ENSURE( fabsf( centimetres.area - metres.area ) < 0.01f * metres.area );
+	ENSURE( fabsf( centimetres.meanHeight - metres.meanHeight ) < 0.02f );
+	ENSURE( fabsf( centimetres.crateHeight - metres.crateHeight ) < 0.03f );
+	ENSURE( fabsf( centimetres.submerged - metres.submerged ) < 0.1f );
+	ENSURE( fabsf( centimetres.sunkLift - metres.sunkLift ) < 0.05f );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -2073,5 +2165,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidInvalidDefs );
 	RUN_SUBTEST( FluidRegions );
 	RUN_SUBTEST( FluidEmitterOnBody );
+	RUN_SUBTEST( FluidLengthUnits );
 	return 0;
 }

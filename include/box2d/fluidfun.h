@@ -25,7 +25,8 @@ typedef struct b2LiquidTuning
 	/// merge over and over. The default of a half closes them without tearing holes.
 	float tensilePressure;
 	/// Viscosity that grows with the square of the closing speed, which damps only fast impacts. Between two liquids
-	/// it is the mean of theirs.
+	/// it is the mean of theirs. It is per length unit, so a value tuned in metres is divided by
+	/// b2GetLengthUnitsPerMeter for other units; the default of zero needs nothing.
 	float quadraticViscosity;
 	/// Share of its buoyancy a body is made up to where the particles' push falls short of it. Still liquid pushes on
 	/// a body with the weight of the liquid it displaces. Particles cannot fill a gap narrower than a few of them, so a
@@ -129,7 +130,9 @@ typedef struct b2LiquidDef
 typedef struct b2FluidDef
 {
 	/// How far apart particles of water-like liquid rest, away from the weight of deep liquid. The interaction radius
-	/// is 1.78 times this. A liquid with much more cohesion than the default rests closer.
+	/// is 1.78 times this. A liquid with much more cohesion than the default rests closer. Like every length and speed
+	/// here, it is in Box2D's length units: the defaults (0.08 m here, 12 m for adaptiveDepth) are scaled by
+	/// b2GetLengthUnitsPerMeter when b2DefaultFluidDef is called, as Box2D's own defaults are.
 	float particleSpacing;
 	/// How far from anything that is not liquid particles reach the coarsest size, in length units. Air, walls
 	/// and bodies all count, so liquid is fine around each of them. Other liquids do not count. Zero or anything
