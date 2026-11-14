@@ -97,7 +97,9 @@ static void AddSprings( b2fFluid* f, int i )
 	}
 	sp->count = kept;
 
-	int n = f->pairCount[i];
+	// A particle with more neighbours than the list holds (pairCount -1) takes springs from the ones the list has,
+	// which are more than it can hold springs to
+	int n = f->pairCount[i] >= 0 ? f->pairCount[i] : B2F_PAIRS_PER_PARTICLE;
 	const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
 	for ( int p = 0; p < n && sp->count < B2F_SPRINGS_PER_PARTICLE; ++p )
 	{

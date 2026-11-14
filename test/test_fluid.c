@@ -2,6 +2,9 @@
 
 #include "test_macros.h"
 
+#include "fluid_internal.h"
+#include "physics_world.h"
+
 #include "box2d/box2d.h"
 #include "box2d/fluidfun.h"
 
@@ -1276,6 +1279,41 @@ static int FluidSecondFluid( void )
 	return 0;
 }
 
+// A particle with more neighbours than the pair list holds still forms springs, with the neighbours the list has.
+// Three spawns on the same box crowd every particle with about three times the neighbours of liquid at rest.
+static int FluidCrowdedSprings( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 4000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef jelly = b2MakeJellyDef();
+	b2LiquidId jellyId = b2CreateLiquid( fluidId, &jelly );
+	for ( int i = 0; i < 3; ++i )
+	{
+		b2Liquid_SpawnBox( jellyId, ( b2Pos ){ -0.5f, -0.5f }, ( b2Pos ){ 0.5f, 0.5f }, b2Vec2_zero );
+	}
+	b2World_Step( worldId, 1.0f / 60.0f, 1 );
+
+	const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
+	int crowded = 0, springless = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		if ( f->pairCount[i] < 0 )
+		{
+			crowded += 1;
+			springless += f->springs[i].count == 0 ? 1 : 0;
+		}
+	}
+	ENSURE( crowded > 0 );
+	ENSURE( springless == 0 );
+
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1285,5 +1323,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidPush );
 	RUN_SUBTEST( FluidFilter );
 	RUN_SUBTEST( FluidSecondFluid );
+	RUN_SUBTEST( FluidCrowdedSprings );
 	return 0;
 }
