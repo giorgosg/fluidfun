@@ -1445,7 +1445,7 @@ static int FluidAdaptiveGravity( void )
 			}
 
 			const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
-			float fine = f->spacing, coarse = f->liquids[0].def.tuning.adaptiveRatio * f->spacing;
+			float fine = f->def.particleSpacing, coarse = f->liquids[0].def.tuning.adaptiveRatio * fine;
 			int coarsest = 0;
 			for ( int i = 0; i < f->count; ++i )
 			{
