@@ -128,7 +128,6 @@ static void UpdateLiquids( b2fFluid* f )
 		f->springs = calloc( n, sizeof( b2fSprings ) );
 		f->sortedSprings = calloc( n, sizeof( b2fSprings ) );
 		f->idMap = malloc( slots * sizeof( b2fIdSlot ) );
-		f->newIndex = calloc( n, sizeof( int ) );
 	}
 
 	for ( int a = 0; a < f->liquidCount; ++a )
@@ -286,7 +285,6 @@ void b2FreeFluid( b2fFluid* f )
 	free( f->springs );
 	free( f->sortedSprings );
 	free( f->idMap );
-	free( f->newIndex );
 	free( f->cellStart );
 	free( f->blockSize );
 	free( f->blockReach );
@@ -373,7 +371,6 @@ bool b2fGrow( b2fFluid* f, int needed )
 	{
 		f->springs = Resize( f->springs, old, capacity, sizeof( b2fSprings ), true );
 		f->sortedSprings = Resize( f->sortedSprings, old, capacity, sizeof( b2fSprings ), true );
-		f->newIndex = Resize( f->newIndex, old, capacity, sizeof( int ), true );
 		size_t n = (size_t)capacity + 1, slots = 1;
 		while ( slots < 2 * n )
 		{

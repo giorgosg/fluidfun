@@ -90,7 +90,6 @@ static void AddSprings( b2fFluid* f, int i )
 		if ( sp->rest[s] >= 0.0f )
 		{
 			sp->id[kept] = sp->id[s];
-			sp->index[kept] = sp->index[s];
 			sp->rest[kept] = sp->rest[s];
 			kept += 1;
 		}
@@ -117,7 +116,6 @@ static void AddSprings( b2fFluid* f, int i )
 		if ( found == false )
 		{
 			sp->id[sp->count] = id;
-			sp->index[sp->count] = j;
 			sp->rest[sp->count] = pairs[p].l;
 			sp->count += 1;
 		}
@@ -427,9 +425,18 @@ static void VelocityTask( int start, int end, int worker, void* context )
 // rest length follows the length by Clavet's equation 8, past the yield ratio, and a spring whose rest length
 // reaches h is marked gone, as is one whose partner has gone, holds no spring back, or is now another liquid.
 // Both ends read the same positions and rest length, so they work a spring out the same way.
+//
+// Each spring finds its partner by id in a table of where each id is this substep. Ids are given out in order as
+// liquid spawns and splits, so particles near each other mostly have near ids, and taking the slot straight from the
+// id keeps their slots near too. With a scrambling hash the spring scenes ran 2 to 4% slower.
+static inline unsigned int IdSlot( const b2fFluid* f, int id )
+{
+	return (unsigned int)id & (unsigned int)f->idMapMask;
+}
+
 static inline int FindParticle( const b2fFluid* f, int id )
 {
-	unsigned int slot = ( (unsigned int)id * 2654435761u ) & (unsigned int)f->idMapMask;
+	unsigned int slot = IdSlot( f, id );
 	while ( f->idMap[slot].id != -1 )
 	{
 		if ( f->idMap[slot].id == id )
@@ -446,7 +453,6 @@ static void SpringTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float dt = f->h, fine = f->def.particleSpacing;
-	int count = f->count;
 	bool check = f->checkSprings;
 	for ( int i = start; i < end; ++i )
 	{
@@ -461,14 +467,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 			for ( int s = 0; s < sp->count; ++s )
 			{
 				float L = sp->rest[s];
-				int j = -1;
-				if ( L >= 0.0f )
-				{
-					int last = sp->index[s];
-					j = last >= 0 && last < count ? f->newIndex[last] : -1;
-					j = j >= 0 && j < count && f->id[j] == sp->id[s] ? j : FindParticle( f, sp->id[s] );
-					sp->index[s] = j;
-				}
+				int j = L >= 0.0f ? FindParticle( f, sp->id[s] ) : -1;
 				// Only the first substep of a step checks the partner holds the spring too, which costs as much as
 				// the rest. A spring held at one end comes from a partner with no free slot, and lasts one step.
 				bool mutual = j >= 0 && f->liquid[j] == f->liquid[i] && check == false;
@@ -540,7 +539,7 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 	memset( f->idMap, 0xFF, (size_t)slots * sizeof( b2fIdSlot ) );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		unsigned int slot = ( (unsigned int)f->id[i] * 2654435761u ) & (unsigned int)f->idMapMask;
+		unsigned int slot = IdSlot( f, f->id[i] );
 		while ( f->idMap[slot].id != -1 )
 		{
 			slot = ( slot + 1 ) & (unsigned int)f->idMapMask;

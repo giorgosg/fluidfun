@@ -97,16 +97,14 @@ static inline float b2fLatticeSize( float size )
 
 #define B2F_DECLARE_FIELD( type, name ) type* name;
 
-// Springs a particle holds, each to a partner by id, since indices change with every sort. Both ends hold the same
-// spring, and work it out the same way, so it stays the same at both.
+// Springs a particle holds, each to a partner by id, since indices change with every sort and with removals, merges
+// and splits between steps. The spring pass finds each partner in an id table it builds every substep. Both ends
+// hold the same spring, and work it out the same way, so it stays the same at both.
 #define B2F_SPRINGS_PER_PARTICLE 16
 
 typedef struct b2fSprings
 {
 	int id[B2F_SPRINGS_PER_PARTICLE];
-	// Where the partner was last seen, which the sort's newIndex maps on; the id check catches it when merges and
-	// splits have moved it since
-	int index[B2F_SPRINGS_PER_PARTICLE];
 	float rest[B2F_SPRINGS_PER_PARTICLE];
 	int count;
 } b2fSprings;
@@ -330,8 +328,6 @@ struct b2fFluid
 	b2fSprings* sortedSprings;
 	b2fIdSlot* idMap;
 	int idMapMask;
-	// Each particle's index after the last sort, by its index before it
-	int* newIndex;
 	bool springy;	 // some liquid has springs
 	bool checkSprings;	 // the first substep of a step, which checks both ends hold each spring
 
