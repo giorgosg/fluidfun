@@ -1836,7 +1836,7 @@ static int FluidRegions( void )
 	b2BodyId bodyId = b2CreateBody( worldId, &bodyDef );
 	b2ShapeDef sensorDef = b2DefaultShapeDef();
 	sensorDef.isSensor = true;
-	b2Transform pose = { bodyDef.position, bodyDef.rotation };
+	b2Transform pose = { { 0.3f, -0.2f }, bodyDef.rotation };
 
 	b2Polygon box = b2MakeOffsetBox( 0.7f, 0.4f, ( b2Vec2 ){ 0.2f, 0.1f }, b2MakeRot( 0.3f ) );
 	b2ShapeId boxId = b2CreatePolygonShape( bodyId, &sensorDef, &box );
@@ -1870,7 +1870,7 @@ static int FluidRegions( void )
 
 	// The proxy's points are relative to its origin, which may be far from them
 	b2ShapeProxy local = b2MakeProxy( &circle.center, 1, circle.radius );
-	b2Pos center = b2TransformWorldPoint( ( b2WorldTransform ){ pose.p, pose.q }, b2Vec2_zero );
+	b2Pos center = bodyDef.position;
 	b2ShapeProxy moved = b2MakeOffsetProxy( &local.points[0], 1, circle.radius, b2Vec2_zero, pose.q );
 	ENSURE( abs( b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeProxyRegion( center, &moved ) ).count -
 				 b2Fluid_Measure( fluidId, b2_nullLiquidId, b2MakeShapeRegion( circleId ) ).count ) <= 1 );
