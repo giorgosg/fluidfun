@@ -238,7 +238,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->spacing = def->particleSpacing / B2F_REST_PITCH;
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
-	f->margin = 0.5f * f->spacing;
 	UpdateLiquids( f );
 	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
@@ -739,8 +738,6 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCou
 	b2Vec2 gravity = b2World_GetGravity( f->worldId );
 	f->h = h;
 	f->worldGravity = gravity;
-	f->gravityX = f->liquids[0].def.gravityScale * gravity.x;
-	f->gravityY = f->liquids[0].def.gravityScale * gravity.y;
 
 	b2fUpdateBodies( f, context );
 	b2fPredict( f, context );

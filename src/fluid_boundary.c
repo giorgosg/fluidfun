@@ -396,16 +396,10 @@ static void ContactTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float h = f->radius, tableScale = (float)B2F_WALL_TABLE_SIZE / h;
-	bool adaptive = f->adaptive, filtered = f->shapesFiltered;
+	bool filtered = f->shapesFiltered;
 	for ( int i = start; i < end; ++i )
 	{
-		if ( adaptive )
-		{
-			h = 2.0f * f->size[i];
-			tableScale = (float)B2F_WALL_TABLE_SIZE / h;
-		}
-
+		float h = 2.0f * f->size[i], tableScale = (float)B2F_WALL_TABLE_SIZE / h;
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float density = 0.0f, nearDensity = 0.0f;
 		int count = 0;
@@ -482,14 +476,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float margin = f->margin, h = f->h, inv = 1.0f / h, friction = f->liquids[0].def.friction, m = f->mass;
-	bool adaptive = f->adaptive, multi = f->liquidCount > 1, filtered = f->shapesFiltered;
-	float baseMass = f->mass, spacing = f->spacing, added = f->liquids[0].def.tuning.addedMass;
-
-	// What a patch needs of the liquid around its body: the density its buoyancy goes by, and how high the liquid
-	// stands on the body, against gravity, which is also the share under that the caller reads
-	const b2LiquidDef* def = &f->liquids[0].def;
-	float buoyantDensity = def->tuning.buoyancyAssist * def->density * def->gravityScale;
+	float h = f->h, inv = 1.0f / h, spacing = f->spacing;
+	bool adaptive = f->adaptive, filtered = f->shapesFiltered;
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
 	float spray = 0.4f * f->restDensity;
@@ -503,21 +491,14 @@ static void CollideTask( int start, int end, int worker, void* context )
 		int last = (int)( (int64_t)f->count * ( chunk + 1 ) / B2F_CHUNK_COUNT );
 		for ( int i = first; i < last; ++i )
 		{
-			if ( multi )
-			{
-				const b2fLiquid* liquid = f->liquids + f->liquid[i];
-				baseMass = liquid->mass;
-				m = baseMass;
-				friction = liquid->def.friction;
-				buoyantDensity = liquid->def.tuning.buoyancyAssist * liquid->def.density * liquid->def.gravityScale;
-				added = liquid->def.tuning.addedMass;
-			}
-			if ( adaptive )
-			{
-				float ratio = f->size[i] / spacing;
-				m = baseMass * ratio * ratio;
-				margin = 0.5f * f->size[i];
-			}
+			// The particle's mass goes with its area. What a patch needs of the liquid around its body is the density
+			// its buoyancy goes by, and how high the liquid stands on the body, against gravity, which is also the share
+			// under that the caller reads.
+			const b2fLiquid* liquid = f->liquids + f->liquid[i];
+			const b2LiquidDef* def = &liquid->def;
+			float ratio = f->size[i] / spacing, m = liquid->mass * ratio * ratio, margin = 0.5f * f->size[i];
+			float friction = def->friction, added = def->tuning.addedMass;
+			float buoyantDensity = def->tuning.buoyancyAssist * def->density * def->gravityScale;
 
 			const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
 			for ( int c = 0; c < f->contactCount[i]; ++c )
@@ -878,14 +859,10 @@ static void ShareTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float h = f->h, added = f->liquids[0].def.tuning.addedMass;
-	bool multi = f->liquidCount > 1;
+	float h = f->h;
 	for ( int i = start; i < end; ++i )
 	{
-		if ( multi )
-		{
-			added = f->liquids[f->liquid[i]].def.tuning.addedMass;
-		}
+		float added = f->liquids[f->liquid[i]].def.tuning.addedMass;
 
 		const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
 		int count = f->contactCount[i];

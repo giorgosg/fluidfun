@@ -339,17 +339,11 @@ static void ApplyTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float limit = f->moveLimit * f->radius, limit2 = limit * limit, dt = f->h;
-	bool adaptive = f->adaptive;
+	float dt = f->h;
 	float restRatio = 1.0f + B2F_SQUEEZE_SURFACE, invRest = 1.0f / f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		if ( adaptive )
-		{
-			limit = f->moveLimit * 2.0f * f->size[i];
-			limit2 = limit * limit;
-		}
-
+		float limit = f->moveLimit * 2.0f * f->size[i], limit2 = limit * limit;
 		if ( limit > 0.0f )
 		{
 			float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i];
@@ -380,7 +374,7 @@ static void ApplyTask( int start, int end, int worker, void* context )
 		if ( f->contactCount[i] > 0 )
 		{
 			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
-			float h = adaptive ? 2.0f * f->size[i] : f->radius;
+			float h = 2.0f * f->size[i];
 			float excess = TensileClamp( f->rho[i] - f->restDensity, def->tuning.tensilePressure );
 			ApplyWallMoves( f, i, def->tuning.stiffness * h * excess, def->tuning.nearStiffness * h * f->rhoNear[i], def->adhesion, h );
 		}
@@ -391,18 +385,12 @@ static void PredictTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float h = f->h, gx = h * f->gravityX, gy = h * f->gravityY;
-	bool multi = f->liquidCount > 1;
+	float h = f->h;
 	for ( int i = start; i < end; ++i )
 	{
-		if ( multi )
-		{
-			float scale = h * f->liquids[f->liquid[i]].def.gravityScale;
-			gx = scale * f->worldGravity.x;
-			gy = scale * f->worldGravity.y;
-		}
-		f->vx[i] += gx;
-		f->vy[i] += gy;
+		float scale = h * f->liquids[f->liquid[i]].def.gravityScale;
+		f->vx[i] += scale * f->worldGravity.x;
+		f->vy[i] += scale * f->worldGravity.y;
 		f->prev[i].x = f->pos[i].x;
 		f->prev[i].y = f->pos[i].y;
 		f->pos[i].x += h * f->vx[i];
@@ -457,7 +445,6 @@ static void SpringTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float dt = f->h, spacing = f->spacing;
-	bool adaptive = f->adaptive;
 	int count = f->count;
 	bool check = f->checkSprings;
 	for ( int i = start; i < end; ++i )
@@ -498,7 +485,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 					continue;
 				}
 
-				float sj = f->size[j], h = adaptive ? si + sj : f->radius;
+				float sj = f->size[j], h = si + sj;
 				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), r = sqrtf( dx * dx + dy * dy );
 				float k = def->springStiffness * ( 1.0f - L / h );
 				if ( k > 0.0f && r > 1e-6f )
@@ -531,11 +518,9 @@ static void SpringApplyTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	bool adaptive = f->adaptive;
-	float limit = f->moveLimit * f->radius;
 	for ( int i = start; i < end; ++i )
 	{
-		float cap = adaptive ? f->moveLimit * 2.0f * f->size[i] : limit;
+		float cap = f->moveLimit * 2.0f * f->size[i];
 		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i], scale = d2 > cap * cap ? cap / sqrtf( d2 ) : 1.0f;
 		f->pos[i].x += scale * f->dx[i];
 		f->pos[i].y += scale * f->dy[i];

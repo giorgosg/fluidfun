@@ -268,7 +268,6 @@ struct b2fFluid
 	float spacing;
 	float radius;	 // interaction radius h, twice the spacing
 	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
-	float margin;	 // collision radius of a particle
 	float mass;	 // of a finest particle of liquid 0, the unit adaptive sizes count mass in
 	float restDensity;
 	// Room for this many particles in every per-particle array, which b2fGrow doubles up to maxCapacity
@@ -341,7 +340,7 @@ struct b2fFluid
 	int patchCount, patchCapacity;
 
 	// Set per substep. Gravity is liquid 0's, after its gravity scale.
-	float h, gravityX, gravityY;
+	float h;
 	b2Vec2 worldGravity;
 	float moveLimit;
 	float movedMass;
