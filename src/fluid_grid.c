@@ -7,9 +7,10 @@
 #define B2F_BLOCK_SHIFT 2
 #define B2F_BLOCK_CELLS ( 1 << B2F_BLOCK_SHIFT )
 
-// Particles i and j interact closer than s_i + s_j. If j is the larger, they are closer than 2 s_j, so each block
-// takes the size of the largest particle within twice its size of the block. A particle's reach is then its own size
-// plus the larger of its own and its block's, which finds every neighbour, so pairs are always found from both sides.
+// Particles i and j interact closer than s_i + s_j, with sizes on the solver's lattice, as everywhere in this file. If
+// j is the larger, they are closer than 2 s_j, so each block takes the size of the largest particle within twice its
+// size of the block. A particle's reach is then its own size plus the larger of its own and its block's, which finds
+// every neighbour, so pairs are always found from both sides.
 // Points k blocks apart are at least k - 1 blocks apart, so a size reaches ceil( 2 size / block ) blocks.
 static void SpreadBlockSizes( b2fFluid* f, int bw, int bh )
 {
@@ -56,7 +57,8 @@ static void BuildGrid( b2fFluid* f )
 	{
 		for ( int i = 0; i < f->count; ++i )
 		{
-			largest = largest > f->size[i] ? largest : f->size[i];
+			float size = b2fLatticeSize( f->size[i] );
+			largest = largest > size ? largest : size;
 		}
 		f->maxRadius = 2.0f * largest;
 	}
@@ -120,7 +122,8 @@ static void BuildGrid( b2fFluid* f )
 		{
 			int b = ( cy >> B2F_BLOCK_SHIFT ) * bw + ( cx >> B2F_BLOCK_SHIFT );
 			f->sortBlock[i] = b;
-			f->blockSize[b] = f->blockSize[b] > f->size[i] ? f->blockSize[b] : f->size[i];
+			float size = b2fLatticeSize( f->size[i] );
+			f->blockSize[b] = f->blockSize[b] > size ? f->blockSize[b] : size;
 		}
 	}
 
@@ -169,7 +172,7 @@ static void ReorderTask( int start, int end, int worker, void* context )
 		if ( f->uniformWindow == 0 )
 		{
 			float near = f->blockReach[f->sortBlock[p]];
-			float s = f->size[p], reach = s + ( near > s ? near : s );
+			float s = b2fLatticeSize( f->size[p] ), reach = s + ( near > s ? near : s );
 			f->window[i] = (int)ceilf( reach * inverse );
 		}
 	}

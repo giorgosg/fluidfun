@@ -24,10 +24,10 @@ static inline void Density( b2fFluid* f, int i, float* density, float* nearDensi
 	int n = 0;
 	FOR_NEIGHBOURS( f, i, j )
 	{
-		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = si + sj;
+		float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, sj = f->size[j], h = b2fLatticeSize( si + sj );
 		if ( d2 < h * h && j != i && ( all || ( sees >> f->liquid[j] & 1u ) != 0 ) )
 		{
-			float mean = 0.5f * h, w = sj * sj / ( mean * mean );
+			float mean = 0.5f * ( si + sj ), w = sj * sj / ( mean * mean );
 			float l = sqrtf( d2 ), q = 1.0f - l / h;
 			a += w * q * q;
 			b += w * q * q * q;
@@ -50,7 +50,7 @@ static inline void Density( b2fFluid* f, int i, float* density, float* nearDensi
 // heavier than the liquid off the floor.
 static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nearPressure, float adhesion, float h )
 {
-	float limit = 0.5f * f->size[i];
+	float limit = 0.5f * b2fLatticeSize( f->size[i] );
 	b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
 	for ( int c = 0; c < f->contactCount[i]; ++c )
 	{
@@ -251,7 +251,7 @@ static void DensityTask( int start, int end, int worker, void* context )
 	{
 		Density( f, i, f->rho + i, f->rhoNear + i );
 		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
-		float hi2 = 4.0f * f->size[i] * f->size[i];
+		float hi = 2.0f * b2fLatticeSize( f->size[i] ), hi2 = hi * hi;
 		f->pressure[i] = def->tuning.stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tuning.tensilePressure );
 		f->nearPressure[i] = def->tuning.nearStiffness * hi2 * f->rhoNear[i];
 		if ( springy )
@@ -289,8 +289,8 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 #define B2F_PAIR( j, l )                                                                                             \
 	{                                                                                                                  \
 		const b2fLiquidPair* pair = row + f->liquid[j];                                                                \
-		float sj = f->size[j], h = si + sj;                                                                            \
-		float q = 1.0f - l / h, mean = 0.5f * h, w = pair->weight * sj * sj / ( mean * mean );                       \
+		float sj = f->size[j], h = b2fLatticeSize( si + sj );                                                          \
+		float q = 1.0f - l / h, mean = 0.5f * ( si + sj ), w = pair->weight * sj * sj / ( mean * mean );             \
 		float pull = pair->cohesion * h * h * q * ( 1.0f - 2.0f * q );                                                 \
 		float d = 0.5f * w * ( ( pressure + f->pressure[j] ) * q + ( nearPressure + f->nearPressure[j] ) * q * q - pull ) / ( h * l ); \
 		moveX -= d * dx;                                                                                               \
@@ -321,7 +321,7 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 		{
 			FOR_NEIGHBOURS( f, i, j )
 			{
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = si + f->size[j];
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = b2fLatticeSize( si + f->size[j] );
 				if ( d2 < reach * reach && d2 > 1e-12f && j != i && ( all || ( sees >> f->liquid[j] & 1u ) != 0 ) )
 				{
 					float l = sqrtf( d2 );
@@ -345,7 +345,7 @@ static void ApplyTask( int start, int end, int worker, void* context )
 	float restRatio = 1.0f + B2F_SQUEEZE_SURFACE, invRest = 1.0f / f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		float limit = f->moveLimit * 2.0f * f->size[i], limit2 = limit * limit;
+		float radius = 2.0f * b2fLatticeSize( f->size[i] ), limit = f->moveLimit * radius, limit2 = limit * limit;
 		if ( limit > 0.0f )
 		{
 			float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i];
@@ -376,9 +376,8 @@ static void ApplyTask( int start, int end, int worker, void* context )
 		if ( f->contactCount[i] > 0 )
 		{
 			const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
-			float h = 2.0f * f->size[i];
 			float excess = TensileClamp( f->rho[i] - f->restDensity, def->tuning.tensilePressure );
-			ApplyWallMoves( f, i, def->tuning.stiffness * h * excess, def->tuning.nearStiffness * h * f->rhoNear[i], def->adhesion, h );
+			ApplyWallMoves( f, i, def->tuning.stiffness * radius * excess, def->tuning.nearStiffness * radius * f->rhoNear[i], def->adhesion, radius );
 		}
 	}
 }
@@ -446,7 +445,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	float dt = f->h, spacing = f->spacing;
+	float dt = f->h, fine = f->def.particleSpacing;
 	int count = f->count;
 	bool check = f->checkSprings;
 	for ( int i = start; i < end; ++i )
@@ -457,7 +456,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 		if ( def->springStiffness > 0.0f )
 		{
 			b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-			float si = f->size[i], wi = spacing * spacing / ( si * si );
+			float si = f->size[i], wi = fine * fine / ( si * si );
 			int self = f->id[i];
 			for ( int s = 0; s < sp->count; ++s )
 			{
@@ -487,12 +486,12 @@ static void SpringTask( int start, int end, int worker, void* context )
 					continue;
 				}
 
-				float sj = f->size[j], h = si + sj;
+				float sj = f->size[j], h = b2fLatticeSize( si + sj );
 				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), r = sqrtf( dx * dx + dy * dy );
 				float k = def->springStiffness * ( 1.0f - L / h );
 				if ( k > 0.0f && r > 1e-6f )
 				{
-					float wj = spacing * spacing / ( sj * sj );
+					float wj = fine * fine / ( sj * sj );
 					float share = wi / ( wi + wj + 1.0f / ( k * dt * dt ) );
 					float move = share * ( r - L ) / r;
 					moveX += move * dx;
@@ -522,7 +521,7 @@ static void SpringApplyTask( int start, int end, int worker, void* context )
 	b2fFluid* f = context;
 	for ( int i = start; i < end; ++i )
 	{
-		float cap = f->moveLimit * 2.0f * f->size[i];
+		float cap = f->moveLimit * 2.0f * b2fLatticeSize( f->size[i] );
 		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i], scale = d2 > cap * cap ? cap / sqrtf( d2 ) : 1.0f;
 		f->pos[i].x += scale * f->dx[i];
 		f->pos[i].y += scale * f->dy[i];

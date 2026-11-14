@@ -44,6 +44,17 @@ typedef float b2fCoord;
 #define B2F_REST_PITCH 1.125f
 // How much the fill grows per unit of density over rest density, from lattices 1 to 1.13 spacings apart
 #define B2F_FILL_SLOPE 0.75f
+
+// Particle sizes are kept as the caller sees them, how far apart particles of that size rest, so particleSpacing at
+// the finest. The kernel works on the lattice above instead, where two particles interact within the sum of their
+// sizes: this is a size on that lattice, half the particle's interaction radius. A multiply rather than a divide,
+// since the passes take it for every pair: dividing made the density pass 5 to 10% slower in the Tank, Pool and
+// Layers.
+static inline float b2fLatticeSize( float size )
+{
+	return ( 1.0f / B2F_REST_PITCH ) * size;
+}
+
 #define B2F_WALL_TABLE_SIZE 128
 
 // Neighbours the density pass keeps per particle for the move pass. A particle with more keeps none, and the
@@ -266,12 +277,12 @@ struct b2fFluid
 {
 	b2WorldId worldId;
 	b2FluidDef def;
-	// Spacing of the lattice rest density is counted from, particleSpacing over B2F_REST_PITCH. Particle sizes, the
-	// interaction radius and every length inside the library are in these, not in particleSpacing.
+	// Spacing of the lattice rest density is counted from, particleSpacing over B2F_REST_PITCH. The interaction
+	// radius and the solver's lengths go by it; particle sizes are in particleSpacing (b2fLatticeSize).
 	float spacing;
 	float radius;	 // interaction radius h, twice the spacing
 	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
-	float mass;	 // of a finest particle of liquid 0, the unit adaptive sizes count mass in
+	float fineArea;	 // the area a finest particle fills at rest, which adaptive sizes count mass in, whatever the liquid
 	float restDensity;
 	// Room for this many particles in every per-particle array, which b2fGrow doubles up to maxCapacity
 	int capacity, maxCapacity;
@@ -357,12 +368,6 @@ struct b2fFluid
 	unsigned char* boxLiquid;
 	float *boxDepth, *boxFlow, *boxPressure;
 	int boxCapacity;
-
-	// Particle sizes as the caller sees them, in rest spacings, refilled by b2Fluid_GetParticles when marked stale.
-	// Whatever may change a size or the order of particles marks them: adapting sizes and each substep's sort, adding
-	// and removing particles, and destroying a liquid. Moving particles changes neither.
-	float* restSizes;
-	bool restSizesStale;
 
 	b2FluidProfile profile;
 	float measureTime;

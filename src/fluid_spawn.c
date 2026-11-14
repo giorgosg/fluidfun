@@ -29,7 +29,6 @@ static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float 
 	f->id[i] = f->nextParticleId++;
 	f->size[i] = size;
 	f->liquid[i] = (unsigned char)liquid;
-	f->restSizesStale = true;
 
 	// The particle has no grid cell until the next sub-step sorts it, so sizes must not adapt before then: the search
 	// for partners would read past the grid
@@ -68,6 +67,8 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 {
 	const b2LiquidDef* def = &f->liquids[liquid].def;
 	float spacing = f->spacing, ratio = def->tuning.adaptiveRatio;
+	// The size of a particle spawned this far apart, per unit of that distance
+	float sizePerPitch = B2F_REST_PITCH / B2F_SPAWN_SPACING;
 	// As in the size pass, only gravity's strength matters, since depth is measured the same way in every direction
 	float g = b2AbsFloat( def->gravityScale ) * b2Length( b2World_GetGravity( f->worldId ) );
 	float h = f->h;
@@ -100,7 +101,7 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 			float length = 2.0f * ( across ? a : b );
 			int count = (int)( length / pitch + 0.5f );
 			count = count > 1 ? count : 1;
-			float step = length / (float)count, size = sqrtf( step * 2.0f * ( across ? b : a ) / 0.8660254f ) / B2F_SPAWN_SPACING;
+			float step = length / (float)count, size = sizePerPitch * sqrtf( step * 2.0f * ( across ? b : a ) / 0.8660254f );
 			for ( int i = 0; i < count; ++i )
 			{
 				float u = -0.5f * length + ( (float)i + 0.5f ) * step;
@@ -119,7 +120,7 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 		int count = (int)( perimeter / pitch + 0.5f );
 		count = count > 4 ? count : 4;
 		float step = perimeter / (float)count;
-		float size = sqrtf( step * dy / 0.8660254f ) / B2F_SPAWN_SPACING;
+		float size = sizePerPitch * sqrtf( step * dy / 0.8660254f );
 		for ( int i = 0; i < count; ++i )
 		{
 			float u = ( (float)i + ( ring & 1 ? 0.5f : 0.0f ) ) * step;
@@ -203,7 +204,7 @@ static int FillLattice( b2fFluid* f, int liquid, const b2fSpawnShape* s, b2Vec2 
 				continue;
 			}
 			b2Pos world = b2OffsetPos( s->center, p );
-			if ( AddParticle( f, liquid, world.x, world.y, f->spacing, velocity ) == false )
+			if ( AddParticle( f, liquid, world.x, world.y, f->def.particleSpacing, velocity ) == false )
 			{
 				return added;
 			}
@@ -436,7 +437,7 @@ void b2fStepEmitters( b2fFluid* f, float timeStep )
 			for ( int k = 0; k < count; ++k )
 			{
 				b2Pos p = b2OffsetPos( def->point1, b2MulAdd( ahead, ( (float)k + shift ) * step, mouth ) );
-				if ( AddParticle( f, emitter->liquid, p.x, p.y, f->spacing, v ) == false )
+				if ( AddParticle( f, emitter->liquid, p.x, p.y, f->def.particleSpacing, v ) == false )
 				{
 					// Full: nothing is owed for the time it stays full
 					emitter->travel = 0.0f;

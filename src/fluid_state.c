@@ -142,12 +142,12 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 	}
 	memset( f->bodyLiquidMass, 0, (size_t)needed * sizeof( float ) );
 
-	float spacing = f->spacing;
+	float fineSize = f->def.particleSpacing;
 	for ( int i = 0; i < f->count; ++i )
 	{
 		const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
 		int count = f->contactCount[i];
-		float ratio = f->size[i] / spacing;
+		float ratio = f->size[i] / fineSize;
 		float m = f->liquids[f->liquid[i]].mass * ratio * ratio;
 		for ( int c = 0; c < count; ++c )
 		{
@@ -402,7 +402,6 @@ static void MeasureSensors( b2fFluid* f )
 		shapeCount += 1;
 	}
 
-	float pitch = B2F_REST_PITCH;
 	for ( int i = 0; i < f->count; ++i )
 	{
 		b2Pos p = f->pos[i];
@@ -416,8 +415,7 @@ static void MeasureSensors( b2fFluid* f )
 			b2fSensorShape* s = shapes + k;
 			if ( ( s->liquids >> f->liquid[i] & 1u ) != 0 && b2fInsideOutline( &s->outline, p ) )
 			{
-				float size = pitch * f->size[i];
-				s->area += 0.8660254 * size * size;
+				s->area += 0.8660254 * f->size[i] * f->size[i];
 			}
 		}
 	}
@@ -554,7 +552,6 @@ b2FluidAmount b2Fluid_MeasureBox( b2FluidId fluidId, b2Pos lowerBound, b2Pos upp
 	b2fFluid* f = b2fGetFluid( fluidId );
 	int count = 0;
 	double area = 0.0, mass = 0.0;
-	float pitch = B2F_REST_PITCH;
 	for ( int i = 0; i < f->count; ++i )
 	{
 		b2Pos p = f->pos[i];
@@ -563,8 +560,7 @@ b2FluidAmount b2Fluid_MeasureBox( b2FluidId fluidId, b2Pos lowerBound, b2Pos upp
 			continue;
 		}
 
-		float size = pitch * f->size[i];
-		double a = 0.8660254 * size * size;
+		double a = 0.8660254 * f->size[i] * f->size[i];
 		count += 1;
 		area += a;
 		mass += a * f->liquids[f->liquid[i]].def.density;
@@ -578,7 +574,7 @@ bool b2Fluid_GetSurfaceHeight( b2FluidId fluidId, b2Pos point, b2Pos* surface )
 	b2Vec2 gravity = b2World_GetGravity( f->worldId );
 	float g = b2Length( gravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, gravity ) : ( b2Vec2 ){ 0.0f, 1.0f };
-	float reach = 2.0f * f->def.particleSpacing, spray = 0.4f * f->restDensity, pitch = B2F_REST_PITCH;
+	float reach = 2.0f * f->def.particleSpacing, spray = 0.4f * f->restDensity;
 	float best = -FLT_MAX;
 	bool found = false;
 	for ( int i = 0; i < f->count; ++i )
@@ -590,7 +586,7 @@ bool b2Fluid_GetSurfaceHeight( b2FluidId fluidId, b2Pos point, b2Pos* surface )
 			continue;
 		}
 
-		float height = b2Dot( d, up ) + 0.5f * pitch * f->size[i];
+		float height = b2Dot( d, up ) + 0.5f * f->size[i];
 		best = height > best ? height : best;
 		found = true;
 	}
