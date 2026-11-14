@@ -1306,7 +1306,7 @@ static void b2SolverTask( void* taskContext )
 			{
 				// The fluid times itself, see b2Fluid_GetProfile. Restart the clock so its time is not counted in
 				// the next sub-step's integrateVelocities, or after the last one in restitution or storeImpulses.
-				b2FluidSubStep( &subStepContext, subStepIndex, subStepCount, context->h, subStepWorld->fluid );
+				b2FluidSubStep( &subStepContext, subStepIndex, context->h, subStepWorld->fluid );
 				(void)b2GetMillisecondsAndReset( &ticks );
 			}
 		}
@@ -1450,7 +1450,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 			subStepContext.world = world;
 			for ( int i = 0; i < stepContext->subStepCount; ++i )
 			{
-				b2FluidSubStep( &subStepContext, i, stepContext->subStepCount, stepContext->h, world->fluid );
+				b2FluidSubStep( &subStepContext, i, stepContext->h, world->fluid );
 			}
 		}
 		return;

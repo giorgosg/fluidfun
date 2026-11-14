@@ -434,7 +434,6 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	}
 
 	// Removing one particle at a time gives n+1 to n merges, which can always find partners
-	int removed = 0;
 	for ( int i = 0; i < n; ++i )
 	{
 		int cls = f->adaptClass[i];
@@ -509,26 +508,20 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		if ( removing )
 		{
 			f->adaptMass[i] = 0.0f;
-			removed += 1;
 		}
 	}
 
-	// Close the gaps left by removed particles, and carry the classes along for the splits below
-	int kept = 0;
+	// Particles take the sizes of their new masses, and those with none left are removed; the classes and targets go
+	// with the rest for the splits below
 	for ( int i = 0; i < n; ++i )
 	{
-		if ( f->adaptMass[i] <= 0.0f )
+		f->marked[i] = f->adaptMass[i] <= 0.0f ? 1 : 0;
+		if ( f->marked[i] == 0 )
 		{
-			continue;
+			f->size[i] = fineSize * sqrtf( f->adaptMass[i] / fineArea );
 		}
-
-		b2fCopyParticle( f, kept, i );
-		f->size[kept] = fineSize * sqrtf( f->adaptMass[i] / fineArea );
-		f->adaptClass[kept] = f->adaptClass[i];
-		f->adaptTarget[kept] = f->adaptTarget[i];
-		kept += 1;
 	}
-	f->count = kept;
+	int kept = n - b2fRemoveMarked( f );
 
 	// Children sit on a ring, with one in the middle past four, and copy the parent's velocity
 	for ( int i = 0; i < kept; ++i )
@@ -608,7 +601,6 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	}
 
 	f->gridValid = false;
-	(void)removed;
 }
 
 void b2fAdaptSizes( b2fFluid* f )

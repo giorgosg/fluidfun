@@ -81,25 +81,30 @@ static inline float b2fLatticeSize( float size )
 	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size )            \
 		X( float, speedMemory ) X( int, id ) X( unsigned char, liquid )
 
-// Working values per particle, rebuilt every substep or every frame, so sorting does not carry them
+// Working values that compaction carries along with the particle fields, though sorting does not. The size pass at
+// the start of a step reads the grid, cells and search windows of the last sort and the densities of the last
+// substep, so removing particles between steps keeps those with each particle. The size pass's own compaction keeps
+// the classes and targets for the splits that follow it.
+#define B2F_CARRIED_FIELDS( X )                                                                                         \
+	X( float, rho ) X( int, cell ) X( int, window ) X( unsigned char, adaptClass ) X( float, adaptTarget )
+
+// Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. marked is
+// scratch for the calls that remove particles, and adaptUsed is the size pass's own.
 #define B2F_WORK_FIELDS( X )                                                                                            \
-	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rho ) X( float, rhoNear ) X( float, pressure ) X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) \
-		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, window ) X( int, sortCell ) X( int, sortBlock ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
-			X( float, adaptMass ) X( float, adaptTarget ) X( float, adaptPressure ) X( unsigned char, adaptClass )      \
-				X( unsigned char, adaptUsed )
+	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rhoNear ) X( float, pressure ) X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) \
+		X( int, contactCount ) X( int, pairCount ) X( int, sortCell ) X( int, sortBlock ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
+			X( float, adaptMass ) X( float, adaptPressure ) X( unsigned char, adaptUsed ) X( unsigned char, marked )
 
 #define B2F_DECLARE_FIELD( type, name ) type* name;
 
-// Springs a particle holds, each to a partner by id, since indices change with every sort. Both ends hold the same
-// spring, and work it out the same way, so it stays the same at both.
+// Springs a particle holds, each to a partner by id, since indices change with every sort and with removals, merges
+// and splits between steps. The spring pass finds each partner in an id table it builds every substep. Both ends
+// hold the same spring, and work it out the same way, so it stays the same at both.
 #define B2F_SPRINGS_PER_PARTICLE 16
 
 typedef struct b2fSprings
 {
 	int id[B2F_SPRINGS_PER_PARTICLE];
-	// Where the partner was last seen, which the sort's newIndex maps on; the id check catches it when merges and
-	// splits have moved it since
-	int index[B2F_SPRINGS_PER_PARTICLE];
 	float rest[B2F_SPRINGS_PER_PARTICLE];
 	int count;
 } b2fSprings;
@@ -313,6 +318,7 @@ struct b2fFluid
 	{
 		B2F_PARTICLE_FIELDS( B2F_DECLARE_FIELD )
 	} sorted;
+	B2F_CARRIED_FIELDS( B2F_DECLARE_FIELD )
 	B2F_WORK_FIELDS( B2F_DECLARE_FIELD )
 	b2fContact* contacts;
 	b2fPair* pairs;
@@ -321,9 +327,7 @@ struct b2fFluid
 	b2fSprings* springs;
 	b2fSprings* sortedSprings;
 	b2fIdSlot* idMap;
-	int idMapMask;
-	// Each particle's index after the last sort, by its index before it
-	int* newIndex;
+	int idMapMask, idMapShift;
 	bool springy;	 // some liquid has springs
 	bool checkSprings;	 // the first substep of a step, which checks both ends hold each spring
 
@@ -358,10 +362,9 @@ struct b2fFluid
 	b2fPatch* patches;
 	int patchCount, patchCapacity;
 
-	// Set per substep. Gravity is liquid 0's, after its gravity scale.
+	// Set per substep. Gravity is the world's; each liquid scales it by its gravityScale.
 	float h;
 	b2Vec2 worldGravity;
-	float moveLimit;
 
 	// Density box tables, sized to the liquid's bounds
 	double *boxMass, *boxPx, *boxPy, *boxWeight, *boxMixed;
@@ -444,8 +447,8 @@ b2fFluid* b2fGetFluid( b2FluidId fluidId );
 // Makes room for at least needed particles, doubling, up to maxCapacity. Only between steps or in b2PrepareFluid.
 // Returns false if needed is past maxCapacity.
 bool b2fGrow( b2fFluid* f, int needed );
-// Removes the particles marked in adaptUsed, which only the size pass reads and it writes them first. Keeps the order
-// of the rest, and the grid from the last sort with it. Returns how many went.
+// Removes the particles with their mark set, keeping the order of the rest, and the grid from the last sort with it.
+// The particle fields and the carried fields go with each particle. Between steps only. Returns how many went.
 int b2fRemoveMarked( b2fFluid* f );
 // The liquid's index in its fluid
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
@@ -453,11 +456,6 @@ int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
 bool b2fWorldLocked( b2FluidId fluidId );
 // The liquid a call that picks particles acts on, or -1 for every liquid when the id is null
 int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId );
-// Marks in adaptUsed the particles of that liquid, or of every liquid for -1, whose centres are inside the outline,
-// and clears the mark on the rest. Returns how many it marked. Between steps only, as adaptUsed is the size pass's.
-// The outline is a region, so filters play no part.
-// At most maxCount are marked, the first in the fluid's order.
-int b2fMarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int maxCount );
 // The id of the liquid in a slot
 b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index );
 // A bit for each live liquid that collides with a shape of this filter: each one's mask includes the other's category
@@ -495,6 +493,12 @@ bool b2fMakeOutline( b2ShapeId shapeId, b2fOutline* outline );
 b2fOutline b2fMakeBoxOutline( b2Pos lower, b2Pos upper );
 b2fOutline b2fMakeCircleOutline( b2Pos center, float radius );
 bool b2fInsideOutline( const b2fOutline* outline, b2Pos p );
+// Whether a call that picks particles in a region takes particle i: one of that liquid, or of any for -1, whose centre
+// is inside the outline. The outline is a region, so filters play no part.
+static inline bool b2fPicks( const b2fFluid* f, int liquid, const b2fOutline* outline, int i )
+{
+	return ( liquid < 0 || f->liquid[i] == liquid ) && b2fInsideOutline( outline, f->pos[i] );
+}
 // Notes a sensor shape near the liquid this step, which counts the liquids in the mask. One that counts none is left out.
 void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId, uint32_t liquids );
 void b2fFinishStep( b2fFluid* f );

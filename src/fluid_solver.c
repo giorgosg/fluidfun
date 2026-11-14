@@ -90,7 +90,6 @@ static void AddSprings( b2fFluid* f, int i )
 		if ( sp->rest[s] >= 0.0f )
 		{
 			sp->id[kept] = sp->id[s];
-			sp->index[kept] = sp->index[s];
 			sp->rest[kept] = sp->rest[s];
 			kept += 1;
 		}
@@ -117,7 +116,6 @@ static void AddSprings( b2fFluid* f, int i )
 		if ( found == false )
 		{
 			sp->id[sp->count] = id;
-			sp->index[sp->count] = j;
 			sp->rest[sp->count] = pairs[p].l;
 			sp->count += 1;
 		}
@@ -345,16 +343,13 @@ static void ApplyTask( int start, int end, int worker, void* context )
 	float restRatio = 1.0f + B2F_SQUEEZE_SURFACE, invRest = 1.0f / f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
-		float radius = 2.0f * b2fLatticeSize( f->size[i] ), limit = f->moveLimit * radius, limit2 = limit * limit;
-		if ( limit > 0.0f )
+		float radius = 2.0f * b2fLatticeSize( f->size[i] ), limit = B2F_MOVE_LIMIT * radius;
+		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i];
+		if ( d2 > limit * limit )
 		{
-			float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i];
-			if ( d2 > limit2 )
-			{
-				float scale = limit / sqrtf( d2 );
-				f->dx[i] *= scale;
-				f->dy[i] *= scale;
-			}
+			float scale = limit / sqrtf( d2 );
+			f->dx[i] *= scale;
+			f->dy[i] *= scale;
 		}
 		// Viscosity changes velocity, and the position follows it for the rest of the substep. Velocity itself is
 		// derived from the change in position at the end of the substep, so only the position needs the change.
@@ -427,9 +422,19 @@ static void VelocityTask( int start, int end, int worker, void* context )
 // rest length follows the length by Clavet's equation 8, past the yield ratio, and a spring whose rest length
 // reaches h is marked gone, as is one whose partner has gone, holds no spring back, or is now another liquid.
 // Both ends read the same positions and rest length, so they work a spring out the same way.
+//
+// Each spring finds its partner by id in a table of where each id is this substep. The slot is the high bits of the id
+// times 2^32 over the golden ratio (Fibonacci hashing). Ids only grow, so after spawns, splits and drains the live
+// ids can span many table sizes: the id itself, or the low bits of the product, would put ids that differ by a
+// multiple of the table size in the same slot, and a block of such ids would make one long run to probe through.
+static inline unsigned int IdSlot( const b2fFluid* f, int id )
+{
+	return ( (unsigned int)id * 2654435761u ) >> f->idMapShift;
+}
+
 static inline int FindParticle( const b2fFluid* f, int id )
 {
-	unsigned int slot = ( (unsigned int)id * 2654435761u ) & (unsigned int)f->idMapMask;
+	unsigned int slot = IdSlot( f, id );
 	while ( f->idMap[slot].id != -1 )
 	{
 		if ( f->idMap[slot].id == id )
@@ -446,7 +451,6 @@ static void SpringTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float dt = f->h, fine = f->def.particleSpacing;
-	int count = f->count;
 	bool check = f->checkSprings;
 	for ( int i = start; i < end; ++i )
 	{
@@ -461,14 +465,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 			for ( int s = 0; s < sp->count; ++s )
 			{
 				float L = sp->rest[s];
-				int j = -1;
-				if ( L >= 0.0f )
-				{
-					int last = sp->index[s];
-					j = last >= 0 && last < count ? f->newIndex[last] : -1;
-					j = j >= 0 && j < count && f->id[j] == sp->id[s] ? j : FindParticle( f, sp->id[s] );
-					sp->index[s] = j;
-				}
+				int j = L >= 0.0f ? FindParticle( f, sp->id[s] ) : -1;
 				// Only the first substep of a step checks the partner holds the spring too, which costs as much as
 				// the rest. A spring held at one end comes from a partner with no free slot, and lasts one step.
 				bool mutual = j >= 0 && f->liquid[j] == f->liquid[i] && check == false;
@@ -521,7 +518,7 @@ static void SpringApplyTask( int start, int end, int worker, void* context )
 	b2fFluid* f = context;
 	for ( int i = start; i < end; ++i )
 	{
-		float cap = f->moveLimit * 2.0f * b2fLatticeSize( f->size[i] );
+		float cap = B2F_MOVE_LIMIT * 2.0f * b2fLatticeSize( f->size[i] );
 		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i], scale = d2 > cap * cap ? cap / sqrtf( d2 ) : 1.0f;
 		f->pos[i].x += scale * f->dx[i];
 		f->pos[i].y += scale * f->dy[i];
@@ -531,16 +528,18 @@ static void SpringApplyTask( int start, int end, int worker, void* context )
 void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 {
 	// Where each id is now, in a table at least twice the particle count, filled in index order
-	int slots = 1;
+	int slots = 2, bits = 1;
 	while ( slots < 2 * f->count )
 	{
 		slots *= 2;
+		bits += 1;
 	}
 	f->idMapMask = slots - 1;
+	f->idMapShift = 32 - bits;
 	memset( f->idMap, 0xFF, (size_t)slots * sizeof( b2fIdSlot ) );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		unsigned int slot = ( (unsigned int)f->id[i] * 2654435761u ) & (unsigned int)f->idMapMask;
+		unsigned int slot = IdSlot( f, f->id[i] );
 		while ( f->idMap[slot].id != -1 )
 		{
 			slot = ( slot + 1 ) & (unsigned int)f->idMapMask;

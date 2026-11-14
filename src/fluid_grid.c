@@ -165,7 +165,6 @@ static void ReorderTask( int start, int end, int worker, void* context )
 		if ( f->springs != NULL )
 		{
 			f->sortedSprings[i] = f->springs[p];
-			f->newIndex[p] = i;
 		}
 
 		f->cell[i] = f->sortCell[p];

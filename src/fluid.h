@@ -41,7 +41,7 @@ void b2SubStep_ApplyImpulse( b2SubStepContext* context, b2BodyId bodyId, b2Vec2 
 void b2PrepareFluid( struct b2fFluid* fluid, float timeStep, int subStepCount );
 
 // Once per sub-step, after the bodies have moved
-void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, int subStepCount, float h, struct b2fFluid* fluid );
+void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, struct b2fFluid* fluid );
 
 // After a step, while the world is unlocked: works out what the liquid tells the caller, body states, events and
 // the liquid in sensors
