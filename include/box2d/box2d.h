@@ -254,20 +254,6 @@ B2_API void b2World_SetFrictionCallback( b2WorldId worldId, b2FrictionCallbackFc
 /// Set the restitution callback. Passing NULL resets to default.
 B2_API void b2World_SetRestitutionCallback( b2WorldId worldId, b2RestitutionCallbackFcn* callback );
 
-/// Set a callback to run at the end of every solver sub-step. Pass null to remove it.
-B2_API void b2World_SetSubStepCallback( b2WorldId worldId, b2SubStepFcn* fcn, void* context );
-
-/// Run a parallel loop on the workers of the current step. Only call from a sub-step callback.
-/// The loop finishes before this returns.
-B2_API void b2SubStep_ParallelFor( b2SubStepContext* context, b2SubStepTaskFcn* task, int itemCount, int minRange,
-								   void* taskContext );
-
-/// Get a body's motion as of this sub-step. Returns true if the body is awake.
-B2_API bool b2SubStep_GetBodyMotion( b2SubStepContext* context, b2BodyId bodyId, b2SubStepBody* body );
-
-/// Change an awake body's velocity. Call from the sub-step callback itself, not from a parallel task.
-B2_API void b2SubStep_ApplyImpulse( b2SubStepContext* context, b2BodyId bodyId, b2Vec2 impulse, float angularImpulse );
-
 /// Set the worker count. Must be in the range [1, B2_MAX_WORKERS]
 B2_API void b2World_SetWorkerCount( b2WorldId worldId, int count );
 

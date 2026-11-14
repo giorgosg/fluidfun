@@ -2137,18 +2137,6 @@ void b2World_SetRestitutionCallback( b2WorldId worldId, b2RestitutionCallbackFcn
 	world->restitutionCallback = callback;
 }
 
-void b2World_SetSubStepCallback( b2WorldId worldId, b2SubStepFcn* fcn, void* context )
-{
-	b2World* world = b2GetUnlockedWorldFromId( worldId );
-	if ( world == NULL )
-	{
-		return;
-	}
-
-	world->subStepFcn = fcn;
-	world->subStepContext = context;
-}
-
 void b2World_SetWorkerCount( b2WorldId worldId, int count )
 {
 	b2World* world = b2GetUnlockedWorldFromId( worldId );

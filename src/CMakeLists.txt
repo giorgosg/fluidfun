@@ -76,8 +76,9 @@ set(BOX2D_SOURCE_FILES
 	wheel_joint.c
 )
 
-# fluidfun: particle liquids, built into the same library on the sub-step callback
+# fluidfun: particle liquids, built into the same library. The solver runs the fluid at the end of every sub-step.
 set(FLUIDFUN_SOURCE_FILES
+	fluid.h
 	fluid_internal.h
 	fluid.c
 	fluid_adapt.c

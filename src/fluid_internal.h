@@ -3,6 +3,7 @@
 #pragma once
 
 #include "box2d/fluidfun.h"
+#include "fluid.h"
 
 // Inside the library the fluid is a plain struct; callers hold a b2FluidId
 typedef struct b2fFluid b2fFluid;
