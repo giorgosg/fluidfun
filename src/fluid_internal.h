@@ -358,8 +358,8 @@ struct b2fFluid
 	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
 	float fineArea;	 // the area a finest particle fills at rest, which adaptive sizes count mass in, whatever the liquid
 	float restDensity;
-	// Room for this many particles in every per-particle array, which b2fGrow doubles up to maxCapacity
-	int capacity, maxCapacity;
+	// Room for this many particles in every per-particle array, which b2fGrow doubles up to def.maxCapacity
+	int capacity;
 	int count;
 
 	b2fEmitter emitters[B2F_MAX_EMITTERS];

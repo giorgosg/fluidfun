@@ -283,7 +283,8 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->world = world;
 	f->def = *def;
 	f->capacity = def->capacity > 0 ? def->capacity : 0;
-	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
+	// Never below the room the fluid starts with, so the def holds the limit growing goes by
+	f->def.maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
 	f->spacing = b2fLatticeSize( def->particleSpacing );
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
@@ -400,13 +401,12 @@ void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity )
 {
 	B2_CHECK_INPUT( maxCapacity >= 0 );
 	b2fFluid* f = b2fGetFluid( fluidId );
-	f->def.maxCapacity = maxCapacity;
-	f->maxCapacity = maxCapacity > f->capacity ? maxCapacity : f->capacity;
+	f->def.maxCapacity = maxCapacity > f->capacity ? maxCapacity : f->capacity;
 }
 
 int b2Fluid_GetMaxCapacity( b2FluidId fluidId )
 {
-	return b2fGetFluid( fluidId )->maxCapacity;
+	return b2fGetFluid( fluidId )->def.maxCapacity;
 }
 
 float b2Fluid_GetParticleSpacing( b2FluidId fluidId )
@@ -440,7 +440,7 @@ bool b2fGrow( b2fFluid* f, int needed )
 	{
 		return true;
 	}
-	if ( needed > f->maxCapacity )
+	if ( needed > f->def.maxCapacity )
 	{
 		return false;
 	}
@@ -450,7 +450,7 @@ bool b2fGrow( b2fFluid* f, int needed )
 	{
 		grown *= 2;
 	}
-	int old = f->capacity, capacity = grown < f->maxCapacity ? (int)grown : f->maxCapacity;
+	int old = f->capacity, capacity = grown < f->def.maxCapacity ? (int)grown : f->def.maxCapacity;
 
 #define B2F_GROW_FIELD( type, name ) f->name = Resize( f->name, old, capacity, sizeof( type ), true );
 #define B2F_GROW_SORTED( type, name ) f->sorted.name = Resize( f->sorted.name, old, capacity, sizeof( type ), true );
@@ -601,7 +601,8 @@ b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 		return b2_nullLiquidId;
 	}
 
-	// The lowest free slot, so that the first liquid of a fluid is the one the uniform density pass reads
+	// The lowest free slot, so that a fluid can go on making and destroying liquids within B2_MAX_LIQUIDS. The lowest
+	// also keeps the first liquid of a fluid the one the uniform density pass reads.
 	int index = 0;
 	while ( index < f->liquidCount && f->liquids[index].alive )
 	{
@@ -659,6 +660,12 @@ void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
 	b2fFluid* f;
 	int index = b2fGetLiquid( liquidId, &f );
 	if ( IsValidLiquidDef( def ) == false )
+	{
+		return;
+	}
+	b2World* world = b2GetWorld( liquidId.world0 );
+	B2_ASSERT( world->locked == false );
+	if ( world->locked )
 	{
 		return;
 	}
