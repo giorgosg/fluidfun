@@ -58,19 +58,54 @@ static double BoxSum( const double* table, int stride, int x0, int y0, int x1, i
 	return table[y1 * stride + x1] - table[y0 * stride + x1] - table[y1 * stride + x0] + table[y0 * stride + x0];
 }
 
-// Boxes count the particles of the liquids in counted, a bit per liquid, and give depths to those in measured.
-static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach, const float* perMetre, bool wantFlow,
-						uint32_t counted, uint32_t measured )
+// Which particles a measurement takes: all of them, those near the bulk the grid covers, or the rest
+enum
 {
-	b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
+	b2f_allParticles,
+	b2f_nearBulk,
+	b2f_awayFromBulk
+};
+
+static inline bool Takes( const b2fFluid* f, int i, int part, const b2fBox* near )
+{
+	if ( part == b2f_allParticles )
+	{
+		return true;
+	}
+	b2Pos p = f->pos[i];
+	bool inside = near->minX <= p.x && p.x <= near->maxX && near->minY <= p.y && p.y <= near->maxY;
+	return inside == ( part == b2f_nearBulk );
+}
+
+// Boxes count the particles of the liquids in counted, a bit per liquid, and give depths to those in measured, of the
+// particles in part. Returns false, measuring nothing, when part has no particles.
+static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach, const float* perMetre, bool wantFlow,
+						uint32_t counted, uint32_t measured, int part, const b2fBox* near )
+{
+	b2fCoord minX = 0.0f, maxX = 0.0f, minY = 0.0f, maxY = 0.0f;
 	float largest = 0.0f;
+	bool any = false;
 	for ( int i = 0; i < f->count; ++i )
 	{
+		if ( Takes( f, i, part, near ) == false )
+		{
+			continue;
+		}
+		if ( any == false )
+		{
+			minX = maxX = f->pos[i].x;
+			minY = maxY = f->pos[i].y;
+			any = true;
+		}
 		minX = minX < f->pos[i].x ? minX : f->pos[i].x;
 		maxX = maxX > f->pos[i].x ? maxX : f->pos[i].x;
 		minY = minY < f->pos[i].y ? minY : f->pos[i].y;
 		maxY = maxY > f->pos[i].y ? maxY : f->pos[i].y;
 		largest = largest > f->size[i] ? largest : f->size[i];
+	}
+	if ( any == false )
+	{
+		return false;
 	}
 
 	float spacing = f->spacing, cell = B2F_BOX_CELL * spacing;
@@ -113,7 +148,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	float fineSize = f->def.particleSpacing, inverse = 1.0f / ( fineSize * fineSize );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		if ( ( counted >> f->liquid[i] & 1u ) == 0 )
+		if ( ( counted >> f->liquid[i] & 1u ) == 0 || Takes( f, i, part, near ) == false )
 		{
 			continue;
 		}
@@ -138,7 +173,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		memset( f->boxMixed, 0, (size_t)nodes * sizeof( double ) );
 		for ( int i = 0; i < f->count; ++i )
 		{
-			if ( ( counted >> f->liquid[i] & 1u ) == 0 )
+			if ( ( counted >> f->liquid[i] & 1u ) == 0 || Takes( f, i, part, near ) == false )
 			{
 				continue;
 			}
@@ -265,7 +300,7 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	// Blended between cells, so a target does not step as a particle crosses one
 	for ( int i = 0; i < f->count; ++i )
 	{
-		if ( ( measured >> f->liquid[i] & 1u ) == 0 )
+		if ( ( measured >> f->liquid[i] & 1u ) == 0 || Takes( f, i, part, near ) == false )
 		{
 			continue;
 		}
@@ -280,6 +315,26 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		flow[i] = a * f->boxFlow[c] + b * f->boxFlow[c + 1] + e * f->boxFlow[c + width] + d * f->boxFlow[c + width + 1];
 		pressureDepth[i] = a * f->boxPressure[c] + b * f->boxPressure[c + 1] + e * f->boxPressure[c + width] + d * f->boxPressure[c + width + 1];
 	}
+	return true;
+}
+
+// Depth for the particles of the liquids in measured, counting those in counted. Where the grid covers only the bulk of
+// the liquid, liquid far from it would make the cells coarse for every particle, so the bulk, and particles within the
+// grid's border of it, are measured apart from the rest, each in cells over their own bounds. Particles away from the
+// bulk count only each other, so a stray drop reads as a drop, and a pool far away as a pool, with cells as coarse as
+// the spread of everything outside the bulk takes.
+static void MeasureDepth( b2fFluid* f, float reach, const float* perMetre, bool wantFlow, uint32_t counted, uint32_t measured )
+{
+	if ( f->gridBulkOnly == false )
+	{
+		BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_allParticles, NULL );
+		return;
+	}
+
+	float margin = (float)f->gridBorder * f->gridCell;
+	b2fBox near = { f->gridBulk.minX - margin, f->gridBulk.minY - margin, f->gridBulk.maxX + margin, f->gridBulk.maxY + margin };
+	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_nearBulk, &near );
+	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_awayFromBulk, &near );
 }
 
 // What the size pass reads per liquid
@@ -343,7 +398,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	uint64_t ticks = b2GetTicks();
 	if ( f->liquidsFiltered == false )
 	{
-		BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, deepest, perMetre, wantFlow, UINT32_MAX, UINT32_MAX );
+		MeasureDepth( f, deepest, perMetre, wantFlow, UINT32_MAX, UINT32_MAX );
 	}
 	else
 	{
@@ -359,7 +414,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			{
 				measured |= f->liquids[k].alive && f->liquidSees[k] == f->liquidSees[l] ? 1u << k : 0u;
 			}
-			BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, deepest, perMetre, wantFlow, f->liquidSees[l], measured );
+			MeasureDepth( f, deepest, perMetre, wantFlow, f->liquidSees[l], measured );
 			done |= measured;
 		}
 	}

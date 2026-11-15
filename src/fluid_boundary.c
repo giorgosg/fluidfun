@@ -108,6 +108,28 @@ static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 	b2World* world = f->world;
 	const b2Shape* source = b2Array_Get( world->shapes, (int)userData );
 
+	// With several queries, a shape an earlier one took is not taken again
+	if ( f->gatherMarking )
+	{
+		int index = (int)userData;
+		if ( index >= f->gatherMarkCapacity )
+		{
+			int capacity = f->gatherMarkCapacity == 0 ? 64 : f->gatherMarkCapacity;
+			while ( capacity <= index )
+			{
+				capacity *= 2;
+			}
+			f->gatherMark = b2fGrowArray( f->gatherMark, f->gatherMarkCapacity, capacity, sizeof( int ) );
+			memset( f->gatherMark + f->gatherMarkCapacity, 0, (size_t)( capacity - f->gatherMarkCapacity ) * sizeof( int ) );
+			f->gatherMarkCapacity = capacity;
+		}
+		if ( f->gatherMark[index] == f->gatherSerial )
+		{
+			return true;
+		}
+		f->gatherMark[index] = f->gatherSerial;
+	}
+
 	// The liquid passes through sensors, which only count the liquid in them once a step
 	uint32_t liquids = b2fLiquidsCollidingWith( f, source->filter );
 	if ( source->sensorIndex != B2_NULL_INDEX )
@@ -561,6 +583,90 @@ static void FindPatches( b2fFluid* f )
 	}
 }
 
+// A particle outside the bulk, by the square of the grid outside it that it is in
+typedef struct b2fSquare
+{
+	int64_t y, x;
+	b2fCoord px, py;
+} b2fSquare;
+
+static int CompareSquares( const void* a, const void* b )
+{
+	const b2fSquare *p = a, *q = b;
+	if ( p->y != q->y )
+	{
+		return p->y < q->y ? -1 : 1;
+	}
+	if ( p->x != q->x )
+	{
+		return p->x < q->x ? -1 : 1;
+	}
+	if ( p->py != q->py )
+	{
+		return p->py < q->py ? -1 : 1;
+	}
+	return ( p->px > q->px ) - ( p->px < q->px );
+}
+
+static int64_t SquareOf( b2fCoord v, b2fCoord origin, double side )
+{
+	double t = floor( (double)( v - origin ) / side ), most = 1099511627776.0;
+	return (int64_t)( t < -most ? -most : ( t > most ? most : t ) );
+}
+
+// Boxes to gather shapes in when liquid lies outside the bulk: the bulk grown by grow, then for each square four times
+// grow a side, in order along rows, the bounds of the particles outside the bulk in it, grown the same. Every particle
+// is in one of them. Fewer boxes than particles; the caller frees room for as many as there are particles.
+static b2AABB* GatherBoxes( const b2fFluid* f, const b2fBox* bulk, float grow, int* boxCount )
+{
+	b2AABB* boxes = b2Alloc( (size_t)f->count * sizeof( b2AABB ) );
+	b2Pos origin = { bulk->minX, bulk->minY };
+	b2AABB aabb = { { -grow, -grow }, { (float)( bulk->maxX - bulk->minX ) + grow, (float)( bulk->maxY - bulk->minY ) + grow } };
+	boxes[0] = b2OffsetAABB( aabb, origin );
+	int count = 1;
+
+	int outside = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		b2Pos p = f->pos[i];
+		outside += p.x < bulk->minX || p.x > bulk->maxX || p.y < bulk->minY || p.y > bulk->maxY ? 1 : 0;
+	}
+	outside = outside > 0 ? outside : 1;
+	b2fSquare* squares = b2Alloc( (size_t)outside * sizeof( b2fSquare ) );
+	double side = 4.0 * (double)grow;
+	int k = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		b2Pos p = f->pos[i];
+		if ( p.x < bulk->minX || p.x > bulk->maxX || p.y < bulk->minY || p.y > bulk->maxY )
+		{
+			squares[k++] = ( b2fSquare ){ SquareOf( p.y, bulk->minY, side ), SquareOf( p.x, bulk->minX, side ), p.x, p.y };
+		}
+	}
+	qsort( squares, (size_t)k, sizeof( b2fSquare ), CompareSquares );
+
+	for ( int first = 0; first < k; )
+	{
+		b2fBox box = { squares[first].px, squares[first].py, squares[first].px, squares[first].py };
+		int next = first + 1;
+		while ( next < k && squares[next].y == squares[first].y && squares[next].x == squares[first].x )
+		{
+			box.minX = box.minX < squares[next].px ? box.minX : squares[next].px;
+			box.maxX = box.maxX > squares[next].px ? box.maxX : squares[next].px;
+			box.minY = box.minY < squares[next].py ? box.minY : squares[next].py;
+			box.maxY = box.maxY > squares[next].py ? box.maxY : squares[next].py;
+			next += 1;
+		}
+		b2Pos corner = { box.minX, box.minY };
+		b2AABB around = { { -grow, -grow }, { (float)( box.maxX - box.minX ) + grow, (float)( box.maxY - box.minY ) + grow } };
+		boxes[count++] = b2OffsetAABB( around, corner );
+		first = next;
+	}
+	b2Free( squares, (size_t)outside * sizeof( b2fSquare ) );
+	*boxCount = count;
+	return boxes;
+}
+
 // Shapes near the liquid, gathered once a step
 void b2fGatherShapes( b2fFluid* f )
 {
@@ -574,14 +680,9 @@ void b2fGatherShapes( b2fFluid* f )
 	}
 	if ( f->count > 0 )
 	{
-		b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
 		float maxSpeed2 = 0.0f;
 		for ( int i = 0; i < f->count; ++i )
 		{
-			minX = minX < f->pos[i].x ? minX : f->pos[i].x;
-			maxX = maxX > f->pos[i].x ? maxX : f->pos[i].x;
-			minY = minY < f->pos[i].y ? minY : f->pos[i].y;
-			maxY = maxY > f->pos[i].y ? maxY : f->pos[i].y;
 			float speed2 = f->vx[i] * f->vx[i] + f->vy[i] * f->vy[i];
 			maxSpeed2 = maxSpeed2 > speed2 ? maxSpeed2 : speed2;
 		}
@@ -589,14 +690,42 @@ void b2fGatherShapes( b2fFluid* f )
 		// The reach of the coarsest particle, and a generous margin, since bodies and particles both move during the
 		// step: a metre in the caller's units
 		float grow = f->maxRadius + 0.1f * sqrtf( maxSpeed2 ) + b2_lengthUnitsPerMeter;
-		b2Pos origin = { minX, minY };
-		b2AABB aabb = { { -grow, -grow }, { (float)( maxX - minX ) + grow, (float)( maxY - minY ) + grow } };
+
+		// One box over all the liquid, or with liquid outside the bulk the grid would cover, one over the bulk and one
+		// over the liquid in each square outside it that has some, so the shapes between are not gathered
+		b2fBox all, bulk;
+		int border = f->adaptive ? (int)ceilf( f->maxRadius / f->cellSize ) + 1 : 1;
+		bool bulkOnly = b2fFindBulk( f, f->cellSize, border, &all, &bulk );
+		int boxCount = 1;
+		b2AABB single;
+		b2AABB* boxes = &single;
+		if ( bulkOnly == false )
+		{
+			b2Pos origin = { all.minX, all.minY };
+			b2AABB aabb = { { -grow, -grow }, { (float)( all.maxX - all.minX ) + grow, (float)( all.maxY - all.minY ) + grow } };
+			boxes[0] = b2OffsetAABB( aabb, origin );
+		}
+		else
+		{
+			boxes = GatherBoxes( f, &bulk, grow, &boxCount );
+		}
+
 		// Every shape, in the order b2World_OverlapAABB would give them: the trees of static, kinematic and dynamic
-		// bodies in turn. Shapes are left out by the liquids' filters alone, in OverlapShape.
-		b2AABB box = b2OffsetAABB( aabb, origin );
+		// bodies in turn, and within each, the boxes in turn. Shapes are left out by the liquids' filters alone, in
+		// OverlapShape.
+		f->gatherMarking = boxCount > 1;
+		f->gatherSerial += f->gatherMarking ? 1 : 0;
 		for ( int i = 0; i < b2_bodyTypeCount; ++i )
 		{
-			b2DynamicTree_OverlapAABB( f->world->broadPhase.trees + i, box, B2_DEFAULT_MASK_BITS, OverlapShape, f );
+			for ( int k = 0; k < boxCount; ++k )
+			{
+				b2DynamicTree_OverlapAABB( f->world->broadPhase.trees + i, boxes[k], B2_DEFAULT_MASK_BITS, OverlapShape, f );
+			}
+		}
+		f->gatherMarking = false;
+		if ( bulkOnly )
+		{
+			b2Free( boxes, (size_t)f->count * sizeof( b2AABB ) );
 		}
 	}
 
