@@ -318,6 +318,16 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	return id;
 }
 
+b2FluidId b2World_GetFluid( b2WorldId worldId )
+{
+	b2World* world = b2GetWorldFromId( worldId );
+	if ( world == NULL || world->fluid == NULL )
+	{
+		return b2_nullFluidId;
+	}
+	return ( b2FluidId ){ world->fluidSerial, world->worldId, world->generation };
+}
+
 // A fluid with room for capacity particles and no liquids, as b2CreateFluid makes one, and as a snapshot restores one
 b2fFluid* b2fMakeFluid( b2World* world, const b2FluidDef* def, int capacity )
 {

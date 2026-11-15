@@ -195,6 +195,9 @@ B2_API b2LiquidDef b2MakeDoughDef( void );
 /// recording of a world with a fluid replays without it, and bodies the liquid moved then go their own way.
 B2_API b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def );
 
+/// The world's fluid, or b2_nullFluidId if it has none: for a world loaded from a snapshot or stood up by a replay
+B2_API b2FluidId b2World_GetFluid( b2WorldId worldId );
+
 /// Remove a world's fluid and every particle in it. Destroying the world does this too. Call between steps.
 B2_API void b2DestroyFluid( b2FluidId fluidId );
 
