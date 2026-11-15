@@ -769,6 +769,7 @@ int main( int argc, char** argv )
 				printf( "LV %d %.4f n=%d fine %d at y %.2f, coarse %d at y %.2f\n", i, my / m, n, fine, fine > 0 ? fineY / fine : 0.0,
 						coarse, coarse > 0 ? coarseY / coarse : 0.0 );
 			}
+			sum.prepare += p.prepare;
 			sum.sort += p.sort;
 			sum.density += p.density;
 			sum.collide += p.collide;
@@ -1018,8 +1019,8 @@ int main( int argc, char** argv )
 		}
 
 		float f = (float)frames;
-		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f) top=%.2f hash=%016llx\n",
-				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, top,
+		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f) prepare %.2f top=%.2f hash=%016llx\n",
+				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, sum.prepare / f, top,
 				(unsigned long long)hash );
 		printf( "  leaked %d, measure %.3f ms/frame, capacity %d\n", scene.leaked, measureSum / f, b2Fluid_GetCapacity( fluid ) );
 		if ( w == ( oneRun ? 2u : 0u ) )

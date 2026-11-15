@@ -854,7 +854,7 @@ static b2SolverStage* b2InitColorStages( b2SolverStage* stage, b2SolverStageType
 	return stage;
 }
 
-// State for the fluid's sub-step, see fluid.h. stepContext is null when no bodies are awake, in
+// State for the fluid's parallel loops, see fluid.h. stepContext is null when no bodies are awake, in
 // which case the solver and its spinning workers are not running.
 typedef struct b2SubStepContext
 {
@@ -863,7 +863,7 @@ typedef struct b2SubStepContext
 	b2SolverStage* stage;
 	int stageIndex;
 	int syncIndex;
-	b2SubStepTaskFcn* task;
+	b2ParallelForCallback* task;
 	void* taskContext;
 	int itemCount;
 	int blockSize;
@@ -934,7 +934,7 @@ static void b2ExecuteBlock( b2SolverStage* stage, b2StepContext* context, b2Solv
 			}
 			break;
 
-		case b2_stageUser:
+		case b2_stageFluid:
 		{
 			// A loop that needs fewer blocks than the stage has leaves the rest empty
 			b2SubStepContext* subStep = context->subStep;
@@ -1043,7 +1043,7 @@ static void b2ExecuteMainStage( b2SolverStage* stage, b2StepContext* context, ui
 	}
 }
 
-void b2SubStep_ParallelFor( b2SubStepContext* context, b2SubStepTaskFcn* task, int itemCount, int minRange, void* taskContext )
+void b2SubStep_ParallelFor( b2SubStepContext* context, b2ParallelForCallback* task, int itemCount, int minRange, void* taskContext )
 {
 	if ( itemCount <= 0 )
 	{
@@ -1100,52 +1100,6 @@ void b2SubStep_ParallelFor( b2SubStepContext* context, b2SubStepTaskFcn* task, i
 
 	uint32_t syncBits = ( (uint32_t)context->syncIndex << 16 ) | (uint32_t)context->stageIndex;
 	b2ExecuteMainStage( stage, stepContext, syncBits );
-}
-
-bool b2SubStep_GetBodyMotion( b2SubStepContext* context, b2BodyId bodyId, b2SubStepBody* result )
-{
-	b2World* world = context->world;
-	b2Body* body = b2GetBodyFullId( world, bodyId );
-	b2SolverSet* set = b2Array_Get( world->solverSets, body->setIndex );
-	b2BodySim* sim = b2Array_Get( set->bodySims, body->localIndex );
-
-	result->invMass = 0.0f;
-	result->invInertia = 0.0f;
-	result->localCenter = sim->localCenter;
-
-	if ( body->setIndex == b2_awakeSet )
-	{
-		b2BodyState* state = b2Array_Get( set->bodyStates, body->localIndex );
-		result->center = b2OffsetPos( sim->center, state->deltaPosition );
-		result->rotation = b2NormalizeRot( b2MulRot( state->deltaRotation, sim->transform.q ) );
-		result->linearVelocity = state->linearVelocity;
-		result->angularVelocity = state->angularVelocity;
-		result->invMass = sim->invMass;
-		result->invInertia = sim->invInertia;
-		return true;
-	}
-
-	result->center = sim->center;
-	result->rotation = sim->transform.q;
-	result->linearVelocity = b2Vec2_zero;
-	result->angularVelocity = 0.0f;
-	return false;
-}
-
-void b2SubStep_ApplyImpulse( b2SubStepContext* context, b2BodyId bodyId, b2Vec2 impulse, float angularImpulse )
-{
-	b2World* world = context->world;
-	b2Body* body = b2GetBodyFullId( world, bodyId );
-	if ( body->setIndex != b2_awakeSet )
-	{
-		return;
-	}
-
-	b2SolverSet* set = b2Array_Get( world->solverSets, body->setIndex );
-	b2BodySim* sim = b2Array_Get( set->bodySims, body->localIndex );
-	b2BodyState* state = b2Array_Get( set->bodyStates, body->localIndex );
-	state->linearVelocity = b2MulAdd( state->linearVelocity, sim->invMass, impulse );
-	state->angularVelocity += sim->invInertia * angularImpulse;
 }
 
 // Parallel solver task
@@ -1643,7 +1597,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		// b2_stageStoreImpulses
 		stageCount += 1;
 
-		// b2_stageUser
+		// b2_stageFluid
 		stageCount += 1;
 
 		b2SolverStage* stages = b2StackAlloc( &world->stack, stageCount * sizeof( b2SolverStage ), "stages" );
@@ -1652,7 +1606,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 			b2StackAlloc( &world->stack, contactPrepareDim.count * sizeof( b2SyncBlock ), "contact blocks" );
 		b2SyncBlock* jointBlocks = b2StackAlloc( &world->stack, jointPrepareDim.count * sizeof( b2SyncBlock ), "joint blocks" );
 		b2SyncBlock* graphBlocks = b2StackAlloc( &world->stack, graphBlockCount * sizeof( b2SyncBlock ), "graph blocks" );
-		b2SyncBlock* userBlocks = b2StackAlloc( &world->stack, maxBlockCount * sizeof( b2SyncBlock ), "user blocks" );
+		b2SyncBlock* fluidBlocks = b2StackAlloc( &world->stack, maxBlockCount * sizeof( b2SyncBlock ), "fluid blocks" );
 
 		// Split an awake island. This modifies:
 		// - stack allocator
@@ -1717,10 +1671,10 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		stage = b2InitColorStages( stage, b2_stageRestitution, 1, activeColorCount, graphColorBlocks, graphBlockCounts,
 								   activeColorIndices );
 		stage = b2InitStage( stage, b2_stageStoreImpulses, contactBlocks, contactPrepareDim.count, UINT8_MAX );
-		stage = b2InitStage( stage, b2_stageUser, userBlocks, maxBlockCount, UINT8_MAX );
+		stage = b2InitStage( stage, b2_stageFluid, fluidBlocks, maxBlockCount, UINT8_MAX );
 		for ( int i = 0; i < maxBlockCount; ++i )
 		{
-			b2AtomicStoreInt( &userBlocks[i].syncIndex, 0 );
+			b2AtomicStoreInt( &fluidBlocks[i].syncIndex, 0 );
 		}
 
 		B2_ASSERT( (int)( stage - stages ) == stageCount );
@@ -1830,7 +1784,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		// Finalize bodies. Must happen after the constraint solver and after island splitting.
 		b2ParallelFor( world, &b2FinalizeBodiesTask, awakeBodyCount, 64, stepContext );
 
-		b2StackFree( &world->stack, userBlocks );
+		b2StackFree( &world->stack, fluidBlocks );
 		b2StackFree( &world->stack, graphBlocks );
 		b2StackFree( &world->stack, jointBlocks );
 		b2StackFree( &world->stack, contactBlocks );

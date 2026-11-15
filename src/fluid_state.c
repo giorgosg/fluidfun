@@ -3,6 +3,8 @@
 // and queries on the particles. All of it reads what the step left and changes nothing the passes use.
 #include "fluid_internal.h"
 
+#include "physics_world.h"
+
 // Grows an array of events by one and returns the new slot
 static void* Push( void** array, int* count, int* capacity, size_t size )
 {
@@ -676,7 +678,7 @@ b2FluidAmount b2Fluid_Measure( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRe
 bool b2Fluid_GetSurfaceHeight( b2FluidId fluidId, b2Pos point, b2Pos* surface )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
-	b2Vec2 gravity = b2World_GetGravity( f->worldId );
+	b2Vec2 gravity = f->world->gravity;
 	float g = b2Length( gravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, gravity ) : ( b2Vec2 ){ 0.0f, 1.0f };
 	float reach = 2.0f * f->def.particleSpacing, spray = 0.4f * f->restDensity;

@@ -280,7 +280,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	}
 
 	b2fFluid* f = b2AllocZero( sizeof( b2fFluid ) );
-	f->worldId = worldId;
+	f->world = world;
 	f->def = *def;
 	f->capacity = def->capacity > 0 ? def->capacity : 0;
 	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
@@ -347,6 +347,7 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f->blockReach, (size_t)f->blockCapacity * sizeof( float ) );
 	b2Free( f->shapes, (size_t)f->shapeCapacity * sizeof( b2fShape ) );
 	b2Free( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
+	b2Free( f->bodyOfIndex, (size_t)f->bodyOfIndexCapacity * sizeof( int ) );
 	b2Free( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );
 	b2Free( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
 	b2fShapeBins* bins[2] = { &f->shapeBins, &f->fixedBins };
@@ -556,7 +557,7 @@ int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region
 
 b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index )
 {
-	return ( b2LiquidId ){ index + 1, (uint16_t)( f->worldId.index1 - 1 ), f->liquids[index].generation };
+	return ( b2LiquidId ){ index + 1, f->world->worldId, f->liquids[index].generation };
 }
 
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid )
@@ -742,7 +743,7 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 
 	// Spawned particles waiting for their sizes get them first, at this step's substep, and settle into place, which
 	// gathers the shapes itself, where they are now
-	f->worldGravity = b2World_GetGravity( f->worldId );
+	f->worldGravity = f->world->gravity;
 	if ( f->coarsenLiquids != 0 && timeStep > 0.0f )
 	{
 		b2fCoarsenSpawned( f, timeStep / (float)( subStepCount > 1 ? subStepCount : 1 ) );
@@ -785,11 +786,10 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFl
 	uint64_t start = b2GetTicks();
 	uint64_t ticks = start;
 
-	b2Vec2 gravity = b2World_GetGravity( f->worldId );
+	// Gravity cannot change during a step, so it is still the one b2PrepareFluid read
 	f->h = h;
-	f->worldGravity = gravity;
 
-	b2fUpdateBodies( f, context );
+	b2fUpdateBodies( f );
 	b2fPredict( f, context );
 	b2fSortParticles( f, context );
 	f->profile.sort += b2GetMillisecondsAndReset( &ticks );

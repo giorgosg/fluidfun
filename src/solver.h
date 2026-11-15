@@ -74,7 +74,7 @@ typedef enum b2SolverStageType
 	b2_stageRelax,
 	b2_stageRestitution,
 	b2_stageStoreImpulses,
-	b2_stageUser
+	b2_stageFluid
 } b2SolverStageType;
 
 typedef enum b2SolverBlockType
