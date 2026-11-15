@@ -319,6 +319,10 @@ static void ReorderTask( int start, int end, int worker, void* context )
 		int p = f->permutation[i];
 #define B2F_REORDER_FIELD( type, name ) f->sorted.name[i] = f->name[p];
 		B2F_PARTICLE_FIELDS( B2F_REORDER_FIELD )
+		if ( f->speedMemory != NULL )
+		{
+			B2F_SPEED_FIELDS( B2F_REORDER_FIELD )
+		}
 #undef B2F_REORDER_FIELD
 		if ( f->springs != NULL )
 		{
@@ -344,6 +348,10 @@ static void SwapArrays( b2fFluid* f )
 		f->sorted.name = t;                                                                                            \
 	}
 	B2F_PARTICLE_FIELDS( B2F_SWAP_FIELD )
+	if ( f->speedMemory != NULL )
+	{
+		B2F_SPEED_FIELDS( B2F_SWAP_FIELD )
+	}
 #undef B2F_SWAP_FIELD
 	if ( f->springs != NULL )
 	{

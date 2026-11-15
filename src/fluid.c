@@ -95,7 +95,7 @@ b2FluidDef b2DefaultFluidDef( void )
 	def.particleSpacing = 0.08f * b2_lengthUnitsPerMeter;
 	def.adaptiveDepth = 12.0f * b2_lengthUnitsPerMeter;
 	def.adaptiveFullBox = 0.9f;
-	def.capacity = 100000;
+	def.capacity = 4096;
 	def.maxCapacity = 1000000;
 	def.internalValue = B2_SECRET_COOKIE;
 	return def;
@@ -159,6 +159,7 @@ static void UpdateLiquids( b2fFluid* f )
 	float spacing = f->spacing;
 	f->adaptive = false;
 	f->springy = false;
+	bool fastSpeed = false;
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
 		b2fLiquid* liquid = f->liquids + a;
@@ -166,14 +167,35 @@ static void UpdateLiquids( b2fFluid* f )
 		f->cohesionBetween[a][a] = liquid->def.cohesion;
 		if ( liquid->alive )
 		{
-			f->adaptive = f->adaptive || liquid->def.tuning.adaptiveRatio > 1.0f;
+			bool adaptive = liquid->def.tuning.adaptiveRatio > 1.0f;
+			f->adaptive = f->adaptive || adaptive;
+			fastSpeed = fastSpeed || ( adaptive && liquid->def.tuning.adaptiveSpeed > 0.0f );
 			f->springy = f->springy || liquid->def.springStiffness > 0.0f;
 		}
 	}
 
+	// Fields only adaptive sizes use are made the first time some liquid needs them, zeroed, as they would have been
+	// at the start, and kept from then on
+	size_t n = (size_t)f->capacity + 1;
+	if ( f->adaptive && f->adaptMass == NULL )
+	{
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+		B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
+		B2F_ADAPT_FIELDS( B2F_ALLOC_FIELD )
+#undef B2F_ALLOC_FIELD
+	}
+	if ( fastSpeed && f->speedMemory == NULL )
+	{
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+#define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
+		B2F_SPEED_FIELDS( B2F_ALLOC_FIELD )
+		B2F_SPEED_FIELDS( B2F_ALLOC_SORTED )
+#undef B2F_ALLOC_FIELD
+#undef B2F_ALLOC_SORTED
+	}
+
 	if ( f->springy && f->springs == NULL )
 	{
-		size_t n = (size_t)f->capacity + 1;
 		f->springs = b2AllocZero( n * sizeof( b2fSprings ) );
 		f->sortedSprings = b2AllocZero( n * sizeof( b2fSprings ) );
 		f->idMap = b2Alloc( IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
@@ -298,7 +320,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 #define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_SORTED )
-	B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
 	B2F_WORK_FIELDS( B2F_ALLOC_FIELD )
 #undef B2F_ALLOC_FIELD
 #undef B2F_ALLOC_SORTED
@@ -331,8 +352,17 @@ void b2FreeFluid( b2fFluid* f )
 #define B2F_FREE_SORTED( type, name ) b2Free( f->sorted.name, n * sizeof( type ) );
 	B2F_PARTICLE_FIELDS( B2F_FREE_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_FREE_SORTED )
-	B2F_CARRIED_FIELDS( B2F_FREE_FIELD )
 	B2F_WORK_FIELDS( B2F_FREE_FIELD )
+	if ( f->adaptMass != NULL )
+	{
+		B2F_CARRIED_FIELDS( B2F_FREE_FIELD )
+		B2F_ADAPT_FIELDS( B2F_FREE_FIELD )
+	}
+	if ( f->speedMemory != NULL )
+	{
+		B2F_SPEED_FIELDS( B2F_FREE_FIELD )
+		B2F_SPEED_FIELDS( B2F_FREE_SORTED )
+	}
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
 	b2Free( f->contacts, n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
@@ -456,8 +486,17 @@ bool b2fGrow( b2fFluid* f, int needed )
 #define B2F_GROW_SORTED( type, name ) f->sorted.name = Resize( f->sorted.name, old, capacity, sizeof( type ), true );
 	B2F_PARTICLE_FIELDS( B2F_GROW_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_GROW_SORTED )
-	B2F_CARRIED_FIELDS( B2F_GROW_FIELD )
 	B2F_WORK_FIELDS( B2F_GROW_FIELD )
+	if ( f->adaptMass != NULL )
+	{
+		B2F_CARRIED_FIELDS( B2F_GROW_FIELD )
+		B2F_ADAPT_FIELDS( B2F_GROW_FIELD )
+	}
+	if ( f->speedMemory != NULL )
+	{
+		B2F_SPEED_FIELDS( B2F_GROW_FIELD )
+		B2F_SPEED_FIELDS( B2F_GROW_SORTED )
+	}
 #undef B2F_GROW_FIELD
 #undef B2F_GROW_SORTED
 	f->contacts = Resize( f->contacts, old, capacity, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ), true );
@@ -490,9 +529,12 @@ int b2fRemoveMarked( b2fFluid* f )
 		if ( kept != i )
 		{
 			b2fCopyParticle( f, kept, i );
+			if ( f->adaptMass != NULL )
+			{
 #define B2F_CARRY_FIELD( type, name ) f->name[kept] = f->name[i];
-			B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
+				B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
 #undef B2F_CARRY_FIELD
+			}
 		}
 		kept += 1;
 	}

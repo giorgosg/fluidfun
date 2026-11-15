@@ -135,12 +135,14 @@ typedef struct b2FluidDef
 	float adaptiveFullBox;
 	/// How many particles the fluid makes room for at the start, over all its liquids. When a spawn, an emitter or a
 	/// particle splitting needs more, the fluid doubles its room, up to maxCapacity. Growing happens only between steps
-	/// and does not change how the liquid moves.
+	/// and does not change how the liquid moves. The default of 4096 is about 2 MB, and a scene with more grows into
+	/// it once.
 	int capacity;
-	/// The most particles the fluid will grow to hold. Each particle of room takes 537 bytes, and 814 to 834 once some
-	/// liquid has springs (569 and 844 to 864 when Box2D is built for large worlds), so the default of 1,000,000 is up to
-	/// 0.54 GB, or 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above
-	/// this is kept as the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it.
+	/// The most particles the fluid will grow to hold. Each particle of room takes 499 bytes with uniform sizes, 529
+	/// once some liquid has adaptive sizes, as the default liquid does, and 537 once one also has adaptiveSpeed;
+	/// springs add 280 to 296, and a build for large worlds 32 more. So the default of 1,000,000 is up to 0.54 GB, or
+	/// 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above this is kept as
+	/// the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it.
 	int maxCapacity;
 
 	/// Used internally to detect a valid definition. DO NOT SET.
