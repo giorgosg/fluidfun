@@ -32,18 +32,20 @@ static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float 
 	return true;
 }
 
-// The particles a spawn adds from here on take their sizes at the start of the next step, before they move, or do if
-// the step's substep turns out not to be the one guessed. Ids only grow, so every particle of this liquid from the
-// next id on is new.
-static void CoarsenFromHere( b2fFluid* f, int liquid, bool guessed )
+// With adaptive sizes, the particles a spawn adds from here on take their sizes at the start of the next step, before
+// they move. Ids only grow, so every particle of this liquid from the next id on is new.
+static void CoarsenFromHere( b2fFluid* f, int liquid )
 {
+	if ( f->liquids[liquid].def.tuning.adaptiveRatio <= 1.0f )
+	{
+		return;
+	}
 	uint32_t bit = 1u << liquid;
-	if ( ( ( f->coarsenLiquids | f->guessedLiquids ) & bit ) == 0 )
+	if ( ( f->coarsenLiquids & bit ) == 0 )
 	{
 		f->coarsenFrom[liquid] = f->nextParticleId;
 	}
-	f->coarsenLiquids |= guessed ? 0u : bit;
-	f->guessedLiquids |= guessed ? bit : 0u;
+	f->coarsenLiquids |= bit;
 }
 
 static bool SpawnCalled( b2LiquidId liquidId )
@@ -53,107 +55,9 @@ static bool SpawnCalled( b2LiquidId liquidId )
 	return world->locked == false;
 }
 
-// With adaptive sizes particles start at the size they would settle to, so a pool does not begin by merging all
-// over. Density boxes read depth as distance to whatever is not liquid, walls and floor included, so this grades
-// by distance to the nearest edge of the box: rectangular rings from the edge inwards, each as coarse as its
-// distance asks, with its particles spread evenly around it. How deep sizes reach depends on the substep, which is
-// only known once the fluid has stepped. Before that it is taken as B2F_FIRST_SUBSTEP and the particles are looked at
-// again at the start of the first step, which puts right any far from the size the real substep asks for.
-static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos upper, b2Vec2 velocity )
-{
-	const b2LiquidDef* def = &f->liquids[liquid].def;
-	float spacing = f->spacing, ratio = def->tuning.adaptiveRatio;
-	// The size of a particle spawned this far apart, per unit of that distance
-	float sizePerPitch = B2F_REST_PITCH / B2F_SPAWN_SPACING;
-	// As in the size pass, only gravity's strength matters, since depth is measured the same way in every direction
-	float g = b2AbsFloat( def->gravityScale ) * b2Length( b2World_GetGravity( f->worldId ) );
-	float h = f->h;
-	if ( h <= 0.0f )
-	{
-		h = B2F_FIRST_SUBSTEP;
-		CoarsenFromHere( f, liquid, true );
-	}
-	float reach = b2fAdaptiveReach( f, liquid, g, h );
-	b2fCoord cx = 0.5f * ( lower.x + upper.x ), cy = 0.5f * ( lower.y + upper.y );
-	int added = 0, ring = 0;
-	float inset = 0.0f;
-	while ( true )
-	{
-		float a = (float)( 0.5f * ( upper.x - lower.x ) ) - inset, b = (float)( 0.5f * ( upper.y - lower.y ) ) - inset;
-		if ( a <= 0.0f || b <= 0.0f )
-		{
-			break;
-		}
-
-		float t = inset / reach;
-		t = t < 1.0f ? t : 1.0f;
-		float pitch = B2F_SPAWN_SPACING * spacing * sqrtf( 1.0f + ( ratio * ratio - 1.0f ) * t );
-		float dy = 0.8660254f * pitch;
-
-		// What is left is too thin for a ring, so it gets one line down its middle
-		if ( a < dy || b < dy )
-		{
-			bool across = a > b;
-			float length = 2.0f * ( across ? a : b );
-			int count = (int)( length / pitch + 0.5f );
-			count = count > 1 ? count : 1;
-			float step = length / (float)count, size = sizePerPitch * sqrtf( step * 2.0f * ( across ? b : a ) / 0.8660254f );
-			for ( int i = 0; i < count; ++i )
-			{
-				float u = -0.5f * length + ( (float)i + 0.5f ) * step;
-				if ( AddParticle( f, liquid, across ? cx + u : cx, across ? cy : cy + u, size, velocity ) == false )
-				{
-					return added;
-				}
-				added += 1;
-			}
-			break;
-		}
-
-		// Walk the ring's middle line, from the lower left corner anticlockwise
-		float ha = a - 0.5f * dy, hb = b - 0.5f * dy;
-		float perimeter = 4.0f * ( ha + hb );
-		int count = (int)( perimeter / pitch + 0.5f );
-		count = count > 4 ? count : 4;
-		float step = perimeter / (float)count;
-		float size = sizePerPitch * sqrtf( step * dy / 0.8660254f );
-		for ( int i = 0; i < count; ++i )
-		{
-			float u = ( (float)i + ( ring & 1 ? 0.5f : 0.0f ) ) * step;
-			b2fCoord x, y;
-			if ( u < 2.0f * ha )
-			{
-				x = cx - ha + u, y = cy - hb;
-			}
-			else if ( u < 2.0f * ( ha + hb ) )
-			{
-				x = cx + ha, y = cy - hb + ( u - 2.0f * ha );
-			}
-			else if ( u < 2.0f * ( 2.0f * ha + hb ) )
-			{
-				x = cx + ha - ( u - 2.0f * ( ha + hb ) ), y = cy + hb;
-			}
-			else
-			{
-				x = cx - ha, y = cy + hb - ( u - 2.0f * ( 2.0f * ha + hb ) );
-			}
-
-			if ( AddParticle( f, liquid, x, y, size, velocity ) == false )
-			{
-				return added;
-			}
-			added += 1;
-		}
-		inset += dy;
-		ring += 1;
-	}
-	return added;
-}
-
 // A lattice at the finest size over the shape's bounds, centred on a point near the shape, keeping the points inside
-// it, edges included. The test takes points relative to that centre, in float. Every shape spawns this way, and a box
-// too unless its liquid has adaptive sizes without adaptiveCoarsenSpawns. With adaptive sizes and adaptiveCoarsenSpawns
-// the new particles take their sizes, and settle into place, at the start of the next step.
+// it, edges included. The test takes points relative to that centre, in float. Every shape spawns this way. With
+// adaptive sizes the new particles take their sizes, and settle into place, at the start of the next step.
 typedef struct b2fSpawnShape
 {
 	b2ShapeType type;
@@ -179,15 +83,18 @@ static bool InsideSpawnShape( const b2fSpawnShape* s, b2Vec2 p )
 	}
 }
 
-static int FillLattice( b2fFluid* f, int liquid, const b2fSpawnShape* s, b2Vec2 velocity )
+static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 velocity )
 {
+	b2fFluid* f;
+	int liquid = b2fGetLiquid( liquidId, &f );
+	if ( SpawnCalled( liquidId ) == false )
+	{
+		return 0;
+	}
+
 	float spacing = SpawnSpacing( f ), rowSpacing = 0.8660254f * spacing;
 	int rows = (int)( s->halfHeight / rowSpacing ) + 1, columns = (int)( s->halfWidth / spacing ) + 1;
-	const b2LiquidTuning* tuning = &f->liquids[liquid].def.tuning;
-	if ( tuning->adaptiveRatio > 1.0f && tuning->adaptiveCoarsenSpawns )
-	{
-		CoarsenFromHere( f, liquid, false );
-	}
+	CoarsenFromHere( f, liquid );
 	int added = 0;
 	for ( int row = -rows; row <= rows; ++row )
 	{
@@ -210,32 +117,8 @@ static int FillLattice( b2fFluid* f, int liquid, const b2fSpawnShape* s, b2Vec2 
 	return added;
 }
 
-static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 velocity )
-{
-	b2fFluid* f;
-	int liquid = b2fGetLiquid( liquidId, &f );
-	if ( SpawnCalled( liquidId ) == false )
-	{
-		return 0;
-	}
-	return FillLattice( f, liquid, s, velocity );
-}
-
 int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lower, b2Pos upper, b2Vec2 velocity )
 {
-	b2fFluid* f;
-	int liquid = b2fGetLiquid( liquidId, &f );
-	if ( SpawnCalled( liquidId ) == false )
-	{
-		return 0;
-	}
-
-	const b2LiquidTuning* tuning = &f->liquids[liquid].def.tuning;
-	if ( tuning->adaptiveRatio > 1.0f && tuning->adaptiveCoarsenSpawns == false )
-	{
-		return CreateGradedParticles( f, liquid, lower, upper, velocity );
-	}
-
 	float halfWidth = 0.5f * (float)( upper.x - lower.x ), halfHeight = 0.5f * (float)( upper.y - lower.y );
 	b2fSpawnShape s = {
 		.type = b2_polygonShape,
@@ -245,7 +128,7 @@ int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lower, b2Pos upper, b2Vec2 vel
 		.halfWidth = halfWidth,
 		.halfHeight = halfHeight,
 	};
-	return FillLattice( f, liquid, &s, velocity );
+	return SpawnLattice( liquidId, &s, velocity );
 }
 
 int b2Liquid_SpawnCircle( b2LiquidId liquidId, b2Pos center, float radius, b2Vec2 velocity )

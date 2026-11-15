@@ -8,7 +8,7 @@
 // ApplySettings, LAB_CAPACITY among them. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
 // LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES and LAB_SEAMS (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
 // LAB_FRAME_EVERY, LAB_START (every so many frames), and LAB_DUMP=frame,path (every particle after that frame). LAB_POOL_SHAPE
-// spawns the Deep Pool's liquid as the same box on the fine lattice (1), a circle (2) or a hexagon (3). LAB_HZ sets the step rate, 60 by default; frames count steps, and
+// spawns the Deep Pool's liquid as a circle (2) or a hexagon (3) instead of a box. LAB_HZ sets the step rate, 60 by default; frames count steps, and
 // the probes that print seconds assume 60 except LAB_START. LAB_WORLD_GRAVITY=x,y sets the world's gravity.
 #include "scene.h"
 
@@ -196,10 +196,6 @@ static void ApplySettings( LabDef* def )
 	{
 		def->liquid.tuning.stiffness = (float)atof( getenv( "LAB_STIFFNESS" ) );
 		def->liquid.tuning.nearStiffness = 2.5f * def->liquid.tuning.stiffness;
-	}
-	if ( getenv( "LAB_COARSEN" ) )
-	{
-		def->liquid.tuning.adaptiveCoarsenSpawns = atoi( getenv( "LAB_COARSEN" ) ) != 0;
 	}
 	if ( getenv( "LAB_DEPTH_LIMIT" ) )
 	{

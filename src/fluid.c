@@ -29,7 +29,6 @@ b2LiquidDef b2DefaultLiquidDef( void )
 	def.tuning.adaptiveTolerance = 0.3f;
 	def.tuning.adaptiveLimit = 3.0f;
 	def.tuning.adaptiveRate = 3.0f;
-	def.tuning.adaptiveCoarsenSpawns = false;
 	def.categoryBits = B2_DEFAULT_CATEGORY_BITS;
 	def.maskBits = B2_DEFAULT_MASK_BITS;
 	def.internalValue = B2_SECRET_COOKIE;
@@ -737,7 +736,7 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 	// Spawned particles waiting for their sizes get them first, at this step's substep, and settle into place, which
 	// gathers the shapes itself, where they are now
 	f->worldGravity = b2World_GetGravity( f->worldId );
-	if ( ( f->coarsenLiquids | f->guessedLiquids ) != 0 && timeStep > 0.0f )
+	if ( f->coarsenLiquids != 0 && timeStep > 0.0f )
 	{
 		b2fCoarsenSpawned( f, timeStep / (float)( subStepCount > 1 ? subStepCount : 1 ) );
 	}
