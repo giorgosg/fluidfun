@@ -517,10 +517,10 @@ static void FindPatches( b2fFluid* f )
 
 		// Shapes pressed into each other have no direction between them, so those come from Box2D's contacts, and so
 		// do moving bodies that touch, which bodies joined so as not to collide never do
-		// Box2D's touching contacts of the body, at most 32 of them
+		// Every touching contact in the body's list
 		b2World* world = f->world;
-		int contactKey = source->headContactKey, touching = 0;
-		while ( contactKey != B2_NULL_INDEX && touching < 32 )
+		int contactKey = source->headContactKey;
+		while ( contactKey != B2_NULL_INDEX )
 		{
 			b2Contact* contact = b2Array_Get( world->contacts, contactKey >> 1 );
 			contactKey = contact->edges[contactKey & 1].nextKey;
@@ -528,7 +528,6 @@ static void FindPatches( b2fFluid* f )
 			{
 				continue;
 			}
-			touching += 1;
 
 			// Liquid fills the space of a shape it passes through, so a touch there leaves no gap it misses
 			const b2Shape* shapeA = b2Array_Get( world->shapes, contact->shapeIdA );
