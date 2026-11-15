@@ -72,6 +72,11 @@ static int FindBody( b2fFluid* f, int bodyId )
 			capacity *= 2;
 		}
 		f->bodyOfIndex = b2fGrowArray( f->bodyOfIndex, f->bodyOfIndexCapacity, capacity, sizeof( int ) );
+		// New entries name no body, so a lookup never reads an unset one
+		for ( int i = f->bodyOfIndexCapacity; i < capacity; ++i )
+		{
+			f->bodyOfIndex[i] = -1;
+		}
 		f->bodyOfIndexCapacity = capacity;
 	}
 
