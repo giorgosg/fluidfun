@@ -581,8 +581,9 @@ void b2fGatherShapes( b2fFluid* f )
 			maxSpeed2 = maxSpeed2 > speed2 ? maxSpeed2 : speed2;
 		}
 
-		// A generous margin, since bodies and particles both move during the step: a metre in the caller's units
-		float grow = f->radius + 0.1f * sqrtf( maxSpeed2 ) + b2_lengthUnitsPerMeter;
+		// The reach of the coarsest particle, and a generous margin, since bodies and particles both move during the
+		// step: a metre in the caller's units
+		float grow = f->maxRadius + 0.1f * sqrtf( maxSpeed2 ) + b2_lengthUnitsPerMeter;
 		b2Pos origin = { minX, minY };
 		b2AABB aabb = { { -grow, -grow }, { (float)( maxX - minX ) + grow, (float)( maxY - minY ) + grow } };
 		// Every shape, in the order b2World_OverlapAABB would give them: the trees of static, kinematic and dynamic
