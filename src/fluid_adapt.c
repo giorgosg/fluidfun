@@ -585,6 +585,15 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 				continue;
 			}
 
+			// A particle merging away goes into neighbours at least as heavy, not into a lighter one merging away
+			// too: two such with no other neighbour to take mass, among liquid at its size, otherwise passed the same
+			// mass back and forth every step, each jumping a few centimetres and back, for as long as it lasted
+			if ( cls == b2f_tooSmall && f->adaptClass[j] == b2f_tooSmall &&
+				 ( f->adaptMass[j] < f->adaptMass[i] || ( f->adaptMass[j] == f->adaptMass[i] && f->id[j] < f->id[i] ) ) )
+			{
+				continue;
+			}
+
 			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y );
 			if ( dx * dx + dy * dy < reach2 && f->adaptMass[j] + give / (float)( count + 1 ) < baseMass )
 			{
