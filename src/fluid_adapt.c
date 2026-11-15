@@ -435,7 +435,11 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		f->adaptMass[i] = mass;
 		f->adaptTarget[i] = target;
 		f->adaptUsed[i] = 0;
-		f->adaptClass[i] = relative < 1.0f / limit ? b2f_tooSmall : relative <= 1.0f - tolerance ? b2f_small : relative < 1.0f + tolerance ? b2f_good : relative <= limit ? b2f_large : b2f_tooLarge;
+		// Settling, nothing moves, so a small particle would never be given mass and the liquid would stay finer than
+		// its depth asks, with half as many particles again as when it is graded as it spawns. So it merges away too,
+		// into neighbours that are small as well.
+		bool small = relative <= 1.0f - tolerance;
+		f->adaptClass[i] = relative < 1.0f / limit || ( settle && small ) ? b2f_tooSmall : small ? b2f_small : relative < 1.0f + tolerance ? b2f_good : relative <= limit ? b2f_large : b2f_tooLarge;
 	}
 
 	// Removing one particle at a time gives n+1 to n merges, which can always find partners
@@ -619,6 +623,107 @@ void b2fAdaptSizes( b2fFluid* f )
 	ChangeSizes( f, f->stepTime, false );
 }
 
+// A spawned particle that took mass from its neighbours while its size settled. The spawn's particles that did not,
+// and all other liquid, stay where they are while the merged ones settle.
+static bool IsMerged( const b2fFluid* f, int i )
+{
+	int l = f->liquid[i];
+	return ( f->coarsenLiquids >> l & 1u ) != 0 && f->id[i] >= f->coarsenFrom[l] && f->size[i] > 1.0001f * f->def.particleSpacing;
+}
+
+// Settling stops once no merged particle moves more than this share of its lattice size in an iteration, or after this
+// many iterations. Each costs about one substep of the solver, on one thread.
+#define B2F_SETTLE_MOVE 0.02f
+#define B2F_SETTLE_ITERATIONS 64
+
+// A merged particle sits at the mean of where its mass came from, so merged liquid is unevenly spaced, and in its first
+// step the pressure that evens it out threw the pool about, at 2 to 4 m/s rms. So before it moves, the solver's own
+// passes run on the merged particles alone, with gravity, each from rest: every iteration predicts, sorts, finds
+// contacts, relaxes density and pushes out of shapes, and then velocities go back to zero. The spawn's particles that
+// did not merge, which line its outline, and all other liquid, are put back after each iteration, and bodies stand
+// where they are and feel nothing. Velocities are then what they were before, so only positions change.
+static void SettleMerged( b2fFluid* f )
+{
+	int n = f->count;
+	bool any = false;
+	for ( int i = 0; i < n && any == false; ++i )
+	{
+		any = IsMerged( f, i );
+	}
+	if ( any == false )
+	{
+		return;
+	}
+
+	// Sorts move particles, so each keeps where it started, to take back its velocity from there
+	size_t floats = (size_t)n * sizeof( float ), ints = (size_t)n * sizeof( int );
+	float* startVx = b2Alloc( floats );
+	float* startVy = b2Alloc( floats );
+	int* from = b2Alloc( ints );
+	int* scratch = b2Alloc( ints );
+	memcpy( startVx, f->vx, floats );
+	memcpy( startVy, f->vy, floats );
+	for ( int i = 0; i < n; ++i )
+	{
+		from[i] = i;
+		f->vx[i] = 0.0f;
+		f->vy[i] = 0.0f;
+	}
+
+	// Springs would form between particles that are still moving into place
+	bool springy = f->springy;
+	f->springy = false;
+	b2fGatherShapes( f );
+
+	for ( int iteration = 0; iteration < B2F_SETTLE_ITERATIONS; ++iteration )
+	{
+		b2fPredict( f, NULL );
+		b2fSortParticles( f, NULL );
+		for ( int i = 0; i < n; ++i )
+		{
+			scratch[i] = from[f->permutation[i]];
+		}
+		int* swap = from;
+		from = scratch;
+		scratch = swap;
+		b2fHoldBodies( f );
+		b2fFindContacts( f, NULL );
+		b2fRelaxDensity( f, NULL );
+		b2fCollideHeld( f );
+
+		float largest = 0.0f;
+		for ( int i = 0; i < n; ++i )
+		{
+			f->vx[i] = 0.0f;
+			f->vy[i] = 0.0f;
+			if ( IsMerged( f, i ) == false )
+			{
+				f->pos[i] = f->prev[i];
+				continue;
+			}
+			float dx = (float)( f->pos[i].x - f->prev[i].x ), dy = (float)( f->pos[i].y - f->prev[i].y );
+			float move = sqrtf( dx * dx + dy * dy ) / b2fLatticeSize( f->size[i] );
+			largest = move > largest ? move : largest;
+		}
+		if ( largest < B2F_SETTLE_MOVE )
+		{
+			break;
+		}
+	}
+
+	for ( int i = 0; i < n; ++i )
+	{
+		f->vx[i] = startVx[from[i]];
+		f->vy[i] = startVy[from[i]];
+	}
+	b2Free( startVx, floats );
+	b2Free( startVy, floats );
+	b2Free( from, ints );
+	b2Free( scratch, ints );
+	f->springy = springy;
+	f->gridValid = false;
+}
+
 // A pass can only merge a particle into neighbours that are not merging themselves, so coarsening fine liquid by a
 // mass ratio r takes about log r / log( 7 / 6 ) passes; 100 takes 30
 #define B2F_COARSEN_PASSES 64
@@ -657,5 +762,7 @@ void b2fCoarsenSpawned( b2fFluid* f, float h )
 			break;
 		}
 	}
+
+	SettleMerged( f );
 	f->coarsenLiquids = 0;
 }

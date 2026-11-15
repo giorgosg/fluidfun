@@ -715,7 +715,40 @@ static b2FluidId CreatePool( b2WorldId worldId, LabScene* scene, const LabDef* d
 	AddBox( ground, 0.0f, -0.5f, width + 1.0f, 0.5f, 0.0f, 0.0f );
 	AddBox( ground, -width - 0.5f, wall, 0.5f, wall, 0.0f, 0.0f );
 	AddBox( ground, width + 0.5f, wall, 0.5f, wall, 0.0f, 0.0f );
-	return AddLiquid( worldId, scene, def, (b2Vec2){ -width + def->fluid.particleSpacing, def->fluid.particleSpacing }, (b2Vec2){ width - def->fluid.particleSpacing, depth } );
+	float s = def->fluid.particleSpacing;
+	if ( scene->poolShape == 0 )
+	{
+		return AddLiquid( worldId, scene, def, (b2Vec2){ -width + s, s }, (b2Vec2){ width - s, depth } );
+	}
+
+	b2FluidId fluid = CreateFluid( worldId, scene, def );
+	b2LiquidId liquid = scene->liquids[0];
+	if ( scene->poolShape == 1 )
+	{
+		b2Polygon box = b2MakeBox( width - s, 0.5f * ( depth - s ) );
+		b2Liquid_SpawnPolygon( liquid, (b2Pos){ 0.0f, 0.5f * ( depth + s ) }, b2Rot_identity, &box, b2Vec2_zero );
+		return fluid;
+	}
+
+	float radius = 0.5f * ( depth - s );
+	radius = radius < width - s ? radius : width - s;
+	b2Pos center = { 0.0f, s + radius };
+	if ( scene->poolShape == 2 )
+	{
+		b2Liquid_SpawnCircle( liquid, center, radius, b2Vec2_zero );
+		return fluid;
+	}
+
+	b2Vec2 corners[6];
+	for ( int k = 0; k < 6; ++k )
+	{
+		float angle = 1.0471976f * (float)k;
+		corners[k] = (b2Vec2){ radius * cosf( angle ), radius * sinf( angle ) };
+	}
+	b2Hull hull = b2ComputeHull( corners, 6 );
+	b2Polygon hexagon = b2MakePolygon( &hull, 0.0f );
+	b2Liquid_SpawnPolygon( liquid, center, b2Rot_identity, &hexagon, b2Vec2_zero );
+	return fluid;
 }
 
 // A square of thick liquid over a low tray. Tension rounds it as it falls. The Gravity slider scales the world's

@@ -533,6 +533,8 @@ void b2fGatherShapes( b2fFluid* f );
 void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context );
 void b2fFindContacts( b2fFluid* f, b2SubStepContext* context );
 void b2fCollide( b2fFluid* f, b2SubStepContext* context );
+void b2fHoldBodies( b2fFluid* f );
+void b2fCollideHeld( b2fFluid* f );
 bool b2fShapeDistance( const b2fShape* s, b2Vec2 p, float* distance, b2Vec2* normal );
 
 // spawn.c

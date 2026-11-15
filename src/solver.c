@@ -1050,6 +1050,13 @@ void b2SubStep_ParallelFor( b2SubStepContext* context, b2SubStepTaskFcn* task, i
 		return;
 	}
 
+	// The fluid runs its passes outside a step too, before the first one, on the calling thread
+	if ( context == NULL )
+	{
+		task( 0, itemCount, 0, taskContext );
+		return;
+	}
+
 	if ( context->stepContext == NULL )
 	{
 		b2ParallelFor( context->world, task, itemCount, b2MaxInt( minRange, 1 ), taskContext );

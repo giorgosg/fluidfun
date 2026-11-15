@@ -1231,6 +1231,8 @@ static void ShareTask( int start, int end, int worker, void* context )
 	}
 }
 
+static void SetShapeBounds( b2fFluid* f );
+
 void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
 {
 	for ( int i = 0; i < f->bodyCount; ++i )
@@ -1249,6 +1251,34 @@ void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
 		body->buoyancyArm = body->area > 0.0f ? b2Sub( b2RotateVector( body->motion.rotation, b2MulSV( 1.0f / body->area, body->areaCenter ) ), offset ) : b2Vec2_zero;
 	}
 
+	SetShapeBounds( f );
+}
+
+// Every body where Box2D has it and still, as a wall that feels nothing, for passes that run outside a step
+void b2fHoldBodies( b2fFluid* f )
+{
+	for ( int i = 0; i < f->bodyCount; ++i )
+	{
+		b2fBody* body = f->bodies + i;
+		b2WorldTransform transform = b2Body_GetTransform( body->id );
+		b2Vec2 localCenter = b2Body_GetLocalCenter( body->id );
+		body->motion = ( b2SubStepBody ){ .rotation = transform.q, .localCenter = localCenter };
+		body->origin = transform.p;
+		body->center = b2OffsetPos( transform.p, b2RotateVector( transform.q, localCenter ) );
+		body->motion.center = body->center;
+		body->awake = false;
+		body->sharing = false;
+		body->solverDelta = b2Vec2_zero;
+		body->solverAngularDelta = 0.0f;
+		body->low = FLT_MAX;
+		body->high = -FLT_MAX;
+		body->buoyancyArm = b2Vec2_zero;
+	}
+	SetShapeBounds( f );
+}
+
+static void SetShapeBounds( b2fFluid* f )
+{
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
 
@@ -1291,6 +1321,16 @@ void b2fFindContacts( b2fFluid* f, b2SubStepContext* context )
 		memset( f->contactCount, 0, (size_t)n * sizeof( int ) );
 		memset( f->wallDensity, 0, (size_t)n * sizeof( float ) );
 		memset( f->wallNearDensity, 0, (size_t)n * sizeof( float ) );
+	}
+}
+
+// The push out of shapes and the friction along them, with nothing for the bodies, for passes that run outside a step
+// with the bodies held
+void b2fCollideHeld( b2fFluid* f )
+{
+	if ( f->shapeCount > 0 )
+	{
+		CollideTask( 0, B2F_CHUNK_COUNT, 0, f );
 	}
 }
 
