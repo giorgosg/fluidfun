@@ -194,6 +194,9 @@ typedef struct b2fBody
 	b2Vec2 stepImpulse;
 	float stepAngular, stepSubmerged;
 	bool stepWet;
+	// Whether liquid was within reach of the body in some substep of this step, asleep or not. The next step wakes
+	// the bodies that had it, and lets the rest sleep.
+	bool reached;
 	// Where the body is at the start of the step, and where its shapes start in b2fFluid::bodyShapes, for finding
 	// patches
 	b2WorldTransform transform;

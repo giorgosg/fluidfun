@@ -522,6 +522,19 @@ static void FindPatches( b2fFluid* f )
 // Shapes near the liquid, gathered once a step
 void b2fGatherShapes( b2fFluid* f )
 {
+	// A sleeping body cannot feel the liquid, so it would never lift off. The particles still find it, as a wall, and
+	// a body that had liquid within reach last step wakes now. Waking one body wakes the bodies it rests on or
+	// against. One that had none may sleep, however near the liquid's bounds it is. A body the liquid reaches while
+	// it sleeps holds still for that one step. Still water keeps a floating body awake, as it did before.
+	for ( int i = 0; i < f->bodyCount; ++i )
+	{
+		b2BodyId id = f->bodies[i].id;
+		if ( f->bodies[i].reached && b2Body_IsValid( id ) && b2Body_GetType( id ) == b2_dynamicBody && b2Body_IsAwake( id ) == false )
+		{
+			b2Body_SetAwake( id, true );
+		}
+	}
+
 	f->shapeCount = 0;
 	f->bodyCount = 0;
 	f->shapesFiltered = false;
@@ -556,16 +569,6 @@ void b2fGatherShapes( b2fFluid* f )
 	{
 		f->reactions = b2fGrowArray( f->reactions, f->reactionCapacity, 2 * needed, sizeof( b2fReaction ) );
 		f->reactionCapacity = 2 * needed;
-	}
-
-	// A sleeping body cannot feel the liquid, so it would never lift off. For now nothing near the
-	// liquid sleeps, which is the blunt answer to the sleeping problem in DESIGN.md.
-	for ( int i = 0; i < f->bodyCount; ++i )
-	{
-		if ( b2Body_GetType( f->bodies[i].id ) == b2_dynamicBody && b2Body_IsAwake( f->bodies[i].id ) == false )
-		{
-			b2Body_SetAwake( f->bodies[i].id, true );
-		}
 	}
 
 	FindPatches( f );
@@ -805,6 +808,11 @@ static void CollideTask( int start, int end, int worker, void* context )
 						reaction->inertia += lump * ( rx * rx + ry * ry );
 					}
 				}
+				else if ( body->adheres == false )
+				{
+					// A sleeping body feels nothing, but the liquid within its reach wakes it next step
+					reactions[contacts[c].bodyIndex].wetMass += m;
+				}
 			}
 
 			// The shapes whose bounds could hold the particle, in order. A push can carry it into another square,
@@ -1010,14 +1018,14 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 			b2Vec2 normal = { patch->normalX, patch->normalY };
 			if ( other->adheres == false )
 			{
-				// Off another moving body never downwards, and only when that body is in the liquid too. The area of
-				// a hull's planks says little about the lift of a hull, so pushing it down from a wet wheel or cargo
-				// to make up the difference sank the boat. Sideways still counts: liquid pressing on the outer
+				// Off another moving body never downwards, and only when that body is awake in the liquid too. The
+				// area of a hull's planks says little about the lift of a hull, so pushing it down from a wet wheel or
+				// cargo to make up the difference sank the boat. Sideways still counts: liquid pressing on the outer
 				// sides of crates in a row otherwise clamps them together.
 				float down = b2Dot( normal, up );
 				normal = down < 0.0f ? b2MulSub( normal, down, up ) : normal;
 				float length = b2Length( normal );
-				if ( totals[patch->otherIndex].wetMass <= 0.0f || length < 0.1f )
+				if ( other->awake == false || totals[patch->otherIndex].wetMass <= 0.0f || length < 0.1f )
 				{
 					continue;
 				}
@@ -1044,7 +1052,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 
 // What b2Fluid_GetBodyState reports, summed over the step: the liquid's push once patches are applied, before added
 // mass shares the body's change of motion with the liquid, and the share of the body under liquid, the one patches
-// use, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies.
+// use, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies, except
+// that a body with liquid within reach, asleep or not, is woken at the next step.
 static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
@@ -1053,6 +1062,7 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 	{
 		b2fBody* body = f->bodies + i;
 		const b2fReaction* total = totals + i;
+		body->reached = body->reached || total->wetMass > 0.0f;
 		if ( body->awake == false )
 		{
 			continue;
