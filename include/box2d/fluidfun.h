@@ -188,6 +188,9 @@ B2_API b2LiquidDef b2MakeDoughDef( void );
 
 /// Give a world its fluid, which holds all of its liquids. A world has at most one, and b2World_Step steps it with
 /// the bodies. Returns b2_nullFluidId if the world already has one. Call between steps.
+///
+/// Box2D's recording (b2World_StartRecording) leaves the fluid out: none of the fluid's calls are recorded, so a
+/// recording of a world with a fluid replays without it, and bodies the liquid moved then go their own way.
 B2_API b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def );
 
 /// Remove a world's fluid and every particle in it. Destroying the world does this too. Call between steps.
@@ -405,6 +408,8 @@ typedef struct b2FluidParticles
 	int count;
 	/// World positions, in double when Box2D is built for large worlds
 	const b2Pos* positions;
+	/// Velocities as two arrays, x and y, rather than b2Vec2: that is how the solver keeps them, so reading them costs
+	/// no copy. The split is deliberate and stays.
 	const float* velocitiesX;
 	const float* velocitiesY;
 	/// The spacing of each particle, in the units of b2FluidDef::particleSpacing, so particleSpacing for a particle
