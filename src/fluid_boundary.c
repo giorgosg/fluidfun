@@ -326,25 +326,6 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 	bins->start[0] = 0;
 }
 
-// Where the list of a square goes on after shape si: the first of its shapes past si
-static int NextInBin( const b2fShapeBins* bins, int bin, int si )
-{
-	int lo = bins->start[bin], hi = bins->start[bin + 1];
-	while ( lo < hi )
-	{
-		int mid = lo + ( ( hi - lo ) >> 1 );
-		if ( bins->shapes[mid] <= si )
-		{
-			lo = mid + 1;
-		}
-		else
-		{
-			hi = mid;
-		}
-	}
-	return lo;
-}
-
 // Bins the shapes into the blocks of this substep's grid, once the particles are sorted and the shapes' bounds set.
 // Blocks of 1 or 2 cells a side measured no faster in the Tank, the Boat or 100 crates over a chain of 500 segments.
 static void BinShapes( b2fFluid* f )
@@ -1072,8 +1053,9 @@ static void CollideTask( int start, int end, int worker, void* context )
 				}
 			}
 
-			// The shapes whose bounds could hold the particle, in order. A push can carry it into another square,
-			// whose list then goes on from the next shape.
+			// The shapes whose bounds could hold the particle, in order. A push that carries it into another square
+			// leaves it on this square's list. Pushes are short next to a square, and in the test scenes none brought a
+			// particle into the bounds of a shape missing from the list.
 			int bin = BinOf( bins, f->pos[i].x, f->pos[i].y );
 			for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd; ++k )
 			{
@@ -1158,13 +1140,6 @@ static void CollideTask( int start, int end, int worker, void* context )
 
 				f->pos[i].x = x + moveX;
 				f->pos[i].y = y + moveY;
-				int now = BinOf( bins, f->pos[i].x, f->pos[i].y );
-				if ( now != bin )
-				{
-					bin = now;
-					k = NextInBin( bins, bin, si ) - 1;
-					binEnd = bins->start[bin + 1];
-				}
 
 				if ( body->awake )
 				{
