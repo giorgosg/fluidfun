@@ -4,7 +4,7 @@
 #include "fluid_internal.h"
 
 // Depth at which particles of a liquid reach its coarsest size
-float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h )
+static float AdaptiveReach( const b2fFluid* f, int liquid, float g, float h )
 {
 	const b2LiquidDef* def = &f->liquids[liquid].def;
 	float coarse = def->tuning.adaptiveRatio * f->spacing;
@@ -316,7 +316,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		// matters, not which way it points. Without gravity nothing has weight, so no size is unsafe: the reach is
 		// adaptiveDepth alone, and the depth limit does nothing.
 		float g = b2AbsFloat( def->gravityScale ) * b2Length( f->worldGravity );
-		float reach = b2fAdaptiveReach( f, l, g, f->h );
+		float reach = AdaptiveReach( f, l, g, f->h );
 		sizes[l] = ( b2fLiquidSizes ){
 			.baseMass = fineArea * ratio * ratio,
 			.ratio = ratio,
@@ -595,8 +595,6 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			if ( index != i )
 			{
 				b2fCopyParticle( f, index, i );
-				// The caller can read densities before a substep works them out again
-				f->rho[index] = f->rho[i];
 				f->id[index] = f->nextParticleId++;
 				// A new particle holds no springs. Its parent's partners hold theirs to the parent's id.
 				if ( f->springs != NULL )
@@ -734,19 +732,6 @@ static void SettleMerged( b2fFluid* f )
 // again, since merges and splits change the particles and their sizes.
 void b2fCoarsenSpawned( b2fFluid* f, float h )
 {
-	// A box graded for the guessed substep is as good as new if sizes reach as deep at the real one, which at the
-	// default settings they do for any substep up to 1/60 s, since adaptiveDepth is the shorter
-	for ( int l = 0; l < f->liquidCount; ++l )
-	{
-		const b2LiquidDef* def = &f->liquids[l].def;
-		float g = b2AbsFloat( def->gravityScale ) * b2Length( f->worldGravity );
-		if ( ( f->guessedLiquids >> l & 1u ) != 0 && b2fAdaptiveReach( f, l, g, h ) != b2fAdaptiveReach( f, l, g, B2F_FIRST_SUBSTEP ) )
-		{
-			f->coarsenLiquids |= 1u << l;
-		}
-	}
-	f->guessedLiquids = 0;
-
 	if ( f->coarsenLiquids == 0 || f->adaptive == false || f->count == 0 || h <= 0.0f )
 	{
 		f->coarsenLiquids = 0;
@@ -756,7 +741,7 @@ void b2fCoarsenSpawned( b2fFluid* f, float h )
 	f->h = h;
 	for ( int pass = 0; pass < B2F_COARSEN_PASSES; ++pass )
 	{
-		b2fSortParticlesNow( f );
+		b2fSortParticles( f, NULL );
 		ChangeSizes( f, 0.0f, true );
 		if ( f->sizeChanges == 0 )
 		{

@@ -92,16 +92,16 @@ static inline float b2fLatticeSize( float size )
 #define B2F_DEPTH_LIMIT_SCALE 4.34f
 
 // Fields every particle carries, kept in sort order. Sorting, compaction, splits and spawning all go through
-// this list, so a new field is one entry here.
+// this list, so a new field is one entry here. Densities are among them since the caller reads them between steps,
+// and the coarsening of spawns across the sorts between its passes.
 #define B2F_PARTICLE_FIELDS( X )                                                                                        \
 	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size )            \
-		X( float, speedMemory ) X( int, id ) X( unsigned char, liquid )
+		X( float, speedMemory ) X( float, rho ) X( int, id ) X( unsigned char, liquid )
 
-// Working values that compaction carries along with the particle fields, though sorting does not. Densities of the
-// last substep are read between steps, by the caller and by the coarsening of spawns, so removing particles keeps them
-// with each particle. The size pass's own compaction keeps the classes and targets for the splits that follow it.
+// Working values that compaction carries along with the particle fields, though sorting does not: the size pass's own
+// compaction keeps the classes and targets for the splits that follow it
 #define B2F_CARRIED_FIELDS( X )                                                                                         \
-	X( float, rho ) X( unsigned char, adaptClass ) X( float, adaptTarget )
+	X( unsigned char, adaptClass ) X( float, adaptTarget )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. marked is
 // scratch for the calls that remove particles, and adaptUsed is the size pass's own.
@@ -379,9 +379,8 @@ struct b2fFluid
 	float maxRadius;
 	int nextParticleId;
 	// Particles spawned since the last step that take their sizes at the start of the next one, before they move: those
-	// of each liquid with a bit in coarsenLiquids and an id from coarsenFrom of that liquid on. Liquids in
-	// guessedLiquids were graded for B2F_FIRST_SUBSTEP before the first step, and join them if the step's differs.
-	uint32_t coarsenLiquids, guessedLiquids;
+	// of each liquid with a bit in coarsenLiquids and an id from coarsenFrom of that liquid on
+	uint32_t coarsenLiquids;
 	int coarsenFrom[B2F_MAX_LIQUIDS];
 	float wallTable[B2F_WALL_TABLE_SIZE + 1][4];
 
@@ -515,9 +514,8 @@ b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index );
 uint32_t b2fLiquidsCollidingWith( const b2fFluid* f, b2Filter filter );
 
 // grid.c
+// With no context, on this thread, as outside a step
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
-// The same on one thread, outside a step
-void b2fSortParticlesNow( b2fFluid* f );
 
 // solver.c
 void b2fPredict( b2fFluid* f, b2SubStepContext* context );
@@ -566,7 +564,3 @@ void b2fFreeState( b2fFluid* f );
 bool b2fAdaptSizes( b2fFluid* f );
 // Gives particles waiting since their spawn the sizes their depth asks for, with no movement, for a step of h a substep
 void b2fCoarsenSpawned( b2fFluid* f, float h );
-// The substep a box spawned before the first step is graded for, that of 60 Hz with 4 substeps
-#define B2F_FIRST_SUBSTEP ( 1.0f / 240.0f )
-// The depth at which a liquid's particles reach its coarsest size, for gravity of strength g and substeps of h
-float b2fAdaptiveReach( const b2fFluid* f, int liquid, float g, float h );
