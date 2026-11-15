@@ -25,6 +25,7 @@ let package = Package(
                 "src/box2d.pc.in",
                 "src/CMakeLists.txt",
                 "src/contact_solver_wide.inl",
+                "src/recording_fluid_ops.inl",
                 "src/recording_ops.inl"
             ],
             sources: [
