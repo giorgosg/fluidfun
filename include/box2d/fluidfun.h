@@ -191,8 +191,9 @@ B2_API b2LiquidDef b2MakeDoughDef( void );
 /// Give a world its fluid, which holds all of its liquids. A world has at most one, and b2World_Step steps it with
 /// the bodies. Returns b2_nullFluidId if the world already has one. Call between steps.
 ///
-/// Box2D's recording (b2World_StartRecording) leaves the fluid out: none of the fluid's calls are recorded, so a
-/// recording of a world with a fluid replays without it, and bodies the liquid moved then go their own way.
+/// Box2D's recording and snapshots cover the fluid: every call below that changes it is recorded, a snapshot holds
+/// the liquid as it is, and a replay reproduces it frame by frame. Queries and events are not recorded, as Box2D
+/// records none of its own; a replay gives them again from the state.
 B2_API b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def );
 
 /// The world's fluid, or b2_nullFluidId if it has none: for a world loaded from a snapshot or stood up by a replay
