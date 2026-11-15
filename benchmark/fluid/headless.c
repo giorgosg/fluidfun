@@ -7,7 +7,8 @@
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings, LAB_CAPACITY among them. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
 // LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES and LAB_SEAMS (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
-// LAB_FRAME_EVERY, and LAB_START (every so many frames). LAB_HZ sets the step rate, 60 by default; frames count steps, and
+// LAB_FRAME_EVERY, LAB_START (every so many frames), and LAB_DUMP=frame,path (every particle after that frame). LAB_POOL_SHAPE
+// spawns the Deep Pool's liquid as the same box on the fine lattice (1), a circle (2) or a hexagon (3). LAB_HZ sets the step rate, 60 by default; frames count steps, and
 // the probes that print seconds assume 60 except LAB_START. LAB_WORLD_GRAVITY=x,y sets the world's gravity.
 #include "scene.h"
 
@@ -491,6 +492,10 @@ int main( int argc, char** argv )
 		{
 			scene.control = (float)atof( getenv( "LAB_CONTROL" ) );
 		}
+		if ( getenv( "LAB_POOL_SHAPE" ) )
+		{
+			scene.poolShape = atoi( getenv( "LAB_POOL_SHAPE" ) );
+		}
 		if ( getenv( "LAB_CRATES" ) )
 		{
 			scene.crateCount = atoi( getenv( "LAB_CRATES" ) );
@@ -666,6 +671,25 @@ int main( int argc, char** argv )
 					printf( "START t %.3f n %d peak %d changes %d rms %.4f noise %.4f speed %.4f fastest %.2f\n", (double)( i + 1 ) / (double)hz, n,
 							peakCount, p.sizeChanges, n > 0 ? sqrt( raw / n ) : 0.0, n > 0 ? sqrt( noise / n ) : 0.0, n > 0 ? sqrt( speed / n ) : 0.0,
 							sqrt( fastest ) );
+				}
+			}
+			// LAB_DUMP=frame,path: after that frame, every particle's position, size, velocity and density over rest
+			if ( getenv( "LAB_DUMP" ) )
+			{
+				int dumpFrame = 0;
+				char dumpPath[512] = { 0 };
+				sscanf( getenv( "LAB_DUMP" ), "%d,%511s", &dumpFrame, dumpPath );
+				FILE* dump = i + 1 == dumpFrame ? fopen( dumpPath, "w" ) : NULL;
+				if ( dump != NULL )
+				{
+					b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+					for ( int k = 0; k < particles.count; ++k )
+					{
+						fprintf( dump, "%.5f %.5f %.5f %.5f %.5f %.5f %d\n", (double)particles.positions[k].x, (double)particles.positions[k].y,
+								 (double)particles.sizes[k], (double)particles.velocitiesX[k], (double)particles.velocitiesY[k],
+								 (double)( particles.densities[k] / particles.restDensity ), particles.ids[k] );
+					}
+					fclose( dump );
 				}
 			}
 			measureSum += p.measure;

@@ -63,6 +63,10 @@ typedef struct LabScene
 	float tankHeight;
 	float liquidWidth;
 	float liquidHeight;
+
+	// How the Deep Pool spawns its liquid: 0 a box, 1 the same box as a polygon, which spawns on the fine lattice as
+	// shapes other than boxes do, 2 a circle and 3 a hexagon, each as wide as the pool or as deep as the control
+	int poolShape;
 	int crateCount;
 	float crateHalfSize;
 
