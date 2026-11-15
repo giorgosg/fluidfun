@@ -289,9 +289,10 @@ typedef struct b2fLiquidSizes
 	bool depthLimit;
 } b2fLiquidSizes;
 
-// Runs between steps on one thread, in particle order, so that the result does not depend on worker count. Sizes change
-// by as much as elapsed seconds allow. Settling, they change as far as one pass can, and only for the particles waiting
-// since their spawn; the rest stand still and take no part.
+// Runs at the end of a step, or before one when settling, on one thread, in particle order, so that the result does not
+// depend on worker count. It reads the grid of the sort just before it. Sizes change by as much as elapsed seconds
+// allow. Settling, they change as far as one pass can, and only for the particles waiting since their spawn; the rest
+// stand still and take no part.
 static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 {
 	f->sizeChanges = 0;
@@ -480,7 +481,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		int partners[B2F_MAX_PARTNERS], count = 0;
 		FOR_NEIGHBOURS_WITHIN( f, i, j, f->window[i] + 1 )
 		{
-			if ( j == i || j >= n || f->adaptUsed[j] || count == B2F_MAX_PARTNERS || f->adaptClass[j] > b2f_small || f->liquid[j] != f->liquid[i] )
+			if ( j == i || f->adaptUsed[j] || count == B2F_MAX_PARTNERS || f->adaptClass[j] > b2f_small || f->liquid[j] != f->liquid[i] )
 			{
 				continue;
 			}
@@ -544,7 +545,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		float mass = fineArea * s * s;
 		int children = (int)ceilf( mass / f->adaptTarget[i] );
 		children = children < B2F_MAX_CHILDREN ? children : B2F_MAX_CHILDREN;
-		// This runs between steps, so the fluid can grow here; it stays whole only at maxCapacity
+		// No substep is running, so the fluid can grow here; it stays whole only at maxCapacity
 		if ( children < 2 || b2fGrow( f, f->count + children - 1 ) == false )
 		{
 			continue;
@@ -594,6 +595,8 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			if ( index != i )
 			{
 				b2fCopyParticle( f, index, i );
+				// The caller can read densities before a substep works them out again
+				f->rho[index] = f->rho[i];
 				f->id[index] = f->nextParticleId++;
 				// A new particle holds no springs. Its parent's partners hold theirs to the parent's id.
 				if ( f->springs != NULL )
@@ -608,19 +611,18 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			f->size[index] = child;
 		}
 	}
-
-	f->gridValid = false;
 }
 
-void b2fAdaptSizes( b2fFluid* f )
+bool b2fAdaptSizes( b2fFluid* f )
 {
-	if ( f->adaptive == false || f->gridValid == false || f->h <= 0.0f || f->count == 0 )
+	// A step of no time ran no substeps, so there is no grid of this step's particles
+	if ( f->adaptive == false || f->stepSubSteps == 0 || f->stepTime <= 0.0f || f->h <= 0.0f || f->count == 0 )
 	{
-		return;
+		return false;
 	}
 
-	// The pass runs once a step, so the time since the last one is the last step's
 	ChangeSizes( f, f->stepTime, false );
+	return true;
 }
 
 // A spawned particle that took mass from its neighbours while its size settled. The spawn's particles that did not,
@@ -721,7 +723,6 @@ static void SettleMerged( b2fFluid* f )
 	b2Free( from, ints );
 	b2Free( scratch, ints );
 	f->springy = springy;
-	f->gridValid = false;
 }
 
 // A pass can only merge a particle into neighbours that are not merging themselves, so coarsening fine liquid by a

@@ -36,15 +36,15 @@ bool b2SubStep_GetBodyMotion( b2SubStepContext* context, b2BodyId bodyId, b2SubS
 // Changes an awake body's velocity. Call from the sub-step itself, not from a parallel task.
 void b2SubStep_ApplyImpulse( b2SubStepContext* context, b2BodyId bodyId, b2Vec2 impulse, float angularImpulse );
 
-// Before a step, while the world is unlocked: changes particle sizes, runs the emitters for a step of this time and
-// gathers the shapes near the liquid
+// Before a step, while the world is unlocked: gives spawned particles waiting for them their sizes, runs the emitters
+// for a step of this time and gathers the shapes near the liquid
 void b2PrepareFluid( struct b2fFluid* fluid, float timeStep, int subStepCount );
 
 // Once per sub-step, after the bodies have moved
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, struct b2fFluid* fluid );
 
 // After a step, while the world is unlocked: works out what the liquid tells the caller, body states, events and
-// the liquid in sensors
+// the liquid in sensors, then changes particle sizes
 void b2FinishFluid( struct b2fFluid* fluid );
 
 // Throws the liquid as b2World_Explode throws bodies, between steps. Returns how many particles it pushed.
