@@ -4,6 +4,7 @@
 
 #include "core.h"
 #include "physics_world.h"
+#include "recording.h"
 
 // Liquid spawns 1.09 of the solver's spacings apart, which is 0.97 of particleSpacing. A settled pool is that much
 // tighter than liquid at rest on average, from its own weight: spawned at particleSpacing, 10 and 25 m pools sank by
@@ -83,6 +84,18 @@ static bool InsideSpawnShape( const b2fSpawnShape* s, b2Vec2 p )
 	}
 }
 
+// A spawn is recorded with how many particles it added, unless the world was locked and it did nothing
+#define B2_REC_SPAWN( liquidId, Name, added, ... )                                                                             \
+	do                                                                                                                         \
+	{                                                                                                                          \
+		b2World* recWorld_ = b2GetWorld( ( liquidId ).world0 );                                                               \
+		if ( recWorld_->locked == false )                                                                                      \
+		{                                                                                                                      \
+			B2_REC_CREATE( recWorld_, Name, added, __VA_ARGS__ );                                                              \
+		}                                                                                                                      \
+	}                                                                                                                          \
+	while ( 0 )
+
 static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 velocity )
 {
 	b2fFluid* f;
@@ -128,14 +141,18 @@ int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lower, b2Pos upper, b2Vec2 vel
 		.halfWidth = halfWidth,
 		.halfHeight = halfHeight,
 	};
-	return SpawnLattice( liquidId, &s, velocity );
+	int added = SpawnLattice( liquidId, &s, velocity );
+	B2_REC_SPAWN( liquidId, LiquidSpawnBox, added, liquidId, lower, upper, velocity );
+	return added;
 }
 
 int b2Liquid_SpawnCircle( b2LiquidId liquidId, b2Pos center, float radius, b2Vec2 velocity )
 {
 	b2fSpawnShape s = { .type = b2_circleShape, .circle = { b2Vec2_zero, radius }, .center = center };
 	s.halfWidth = s.halfHeight = radius;
-	return SpawnLattice( liquidId, &s, velocity );
+	int added = SpawnLattice( liquidId, &s, velocity );
+	B2_REC_SPAWN( liquidId, LiquidSpawnCircle, added, liquidId, center, radius, velocity );
+	return added;
 }
 
 int b2Liquid_SpawnCapsule( b2LiquidId liquidId, b2Pos center1, b2Pos center2, float radius, b2Vec2 velocity )
@@ -144,7 +161,9 @@ int b2Liquid_SpawnCapsule( b2LiquidId liquidId, b2Pos center1, b2Pos center2, fl
 	b2fSpawnShape s = { .type = b2_capsuleShape, .capsule = { b2Neg( half ), half, radius }, .center = b2OffsetPos( center1, half ) };
 	s.halfWidth = b2AbsFloat( half.x ) + radius;
 	s.halfHeight = b2AbsFloat( half.y ) + radius;
-	return SpawnLattice( liquidId, &s, velocity );
+	int added = SpawnLattice( liquidId, &s, velocity );
+	B2_REC_SPAWN( liquidId, LiquidSpawnCapsule, added, liquidId, center1, center2, radius, velocity );
+	return added;
 }
 
 int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, const b2Polygon* polygon, b2Vec2 velocity )
@@ -156,7 +175,9 @@ int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, co
 		s.halfWidth = b2MaxFloat( s.halfWidth, b2AbsFloat( v.x ) + polygon->radius );
 		s.halfHeight = b2MaxFloat( s.halfHeight, b2AbsFloat( v.y ) + polygon->radius );
 	}
-	return SpawnLattice( liquidId, &s, velocity );
+	int added = SpawnLattice( liquidId, &s, velocity );
+	B2_REC_SPAWN( liquidId, LiquidSpawnPolygon, added, liquidId, origin, rotation, *polygon, velocity );
+	return added;
 }
 
 b2EmitterDef b2DefaultEmitterDef( void )
@@ -260,7 +281,9 @@ b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def )
 	b2fEmitter* emitter = f->emitters + index;
 	world->emitterSerial += 1;
 	*emitter = ( b2fEmitter ){ .def = *def, .liquid = liquid, .alive = true, .generation = world->emitterSerial };
-	return ( b2EmitterId ){ index + 1, liquidId.world0, emitter->generation };
+	b2EmitterId id = { index + 1, liquidId.world0, emitter->generation };
+	B2_REC_CREATE( world, CreateEmitter, id, liquidId, *def );
+	return id;
 }
 
 void b2DestroyEmitter( b2EmitterId emitterId )
@@ -271,6 +294,7 @@ void b2DestroyEmitter( b2EmitterId emitterId )
 	if ( emitter != NULL )
 	{
 		EndEmitter( f, emitter );
+		B2_REC( f->world, DestroyEmitter, emitterId );
 	}
 }
 
@@ -282,10 +306,13 @@ bool b2Emitter_IsValid( b2EmitterId emitterId )
 
 void b2Emitter_SetDef( b2EmitterId emitterId, const b2EmitterDef* def )
 {
-	b2fEmitter* emitter = GetEmitter( emitterId );
+	b2fFluid* f;
+	b2fEmitter* emitter = FindEmitter( emitterId, &f );
+	B2_ASSERT( emitter != NULL );
 	if ( emitter != NULL && IsValidEmitterDef( def, emitterId.world0 ) )
 	{
 		emitter->def = *def;
+		B2_REC( f->world, EmitterSetDef, emitterId, *def );
 	}
 }
 

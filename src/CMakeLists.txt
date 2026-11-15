@@ -49,6 +49,7 @@ set(BOX2D_SOURCE_FILES
 	pogo_joint.c
 	prismatic_joint.c
 	recording_ops.inl
+	recording_fluid_ops.inl
 	recording.c
 	recording.h
 	replay.c

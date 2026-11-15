@@ -5,6 +5,7 @@
 #include "core.h"
 #include "fluid.h"
 #include "physics_world.h"
+#include "recording.h"
 
 b2LiquidDef b2DefaultLiquidDef( void )
 {
@@ -313,6 +314,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	world->fluid = b2fMakeFluid( world, &clamped, clamped.capacity );
 	world->fluidSerial += 1;
 	b2FluidId id = { world->fluidSerial, world->worldId, world->generation };
+	B2_REC_CREATE( world, CreateFluid, id, worldId, *def );
 	return id;
 }
 
@@ -356,6 +358,7 @@ void b2DestroyFluid( b2FluidId fluidId )
 
 	b2FreeFluid( b2fGetFluid( fluidId ) );
 	world->fluid = NULL;
+	B2_REC( world, DestroyFluid, fluidId );
 }
 
 void b2FreeFluid( b2fFluid* f )
@@ -423,6 +426,7 @@ void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth )
 	B2_CHECK_INPUT( b2IsValidFloat( adaptiveDepth ) && adaptiveDepth >= 0.0f );
 	b2fFluid* f = b2fGetFluid( fluidId );
 	f->def.adaptiveDepth = adaptiveDepth;
+	B2_REC( f->world, FluidSetAdaptiveDepth, fluidId, adaptiveDepth );
 }
 
 float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId )
@@ -435,6 +439,7 @@ void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox )
 	B2_CHECK_INPUT( b2IsValidFloat( adaptiveFullBox ) && adaptiveFullBox > 0.0f );
 	b2fFluid* f = b2fGetFluid( fluidId );
 	f->def.adaptiveFullBox = adaptiveFullBox;
+	B2_REC( f->world, FluidSetAdaptiveFullBox, fluidId, adaptiveFullBox );
 }
 
 float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId )
@@ -447,6 +452,7 @@ void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity )
 	B2_CHECK_INPUT( maxCapacity >= 0 );
 	b2fFluid* f = b2fGetFluid( fluidId );
 	f->def.maxCapacity = maxCapacity > f->capacity ? maxCapacity : f->capacity;
+	B2_REC( f->world, FluidSetMaxCapacity, fluidId, maxCapacity );
 }
 
 int b2Fluid_GetMaxCapacity( b2FluidId fluidId )
@@ -611,6 +617,7 @@ int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region
 
 	MarkInside( f, liquid, &outline, maxCount );
 	int removed = b2fRemoveMarked( f );
+	B2_REC_CREATE( f->world, FluidRemove, removed, fluidId, liquidId, region, maxCount );
 	return removed;
 }
 
@@ -683,6 +690,7 @@ b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 	}
 	b2fUpdateLiquids( f );
 	b2LiquidId id = { index + 1, fluidId.world0, f->liquids[index].generation };
+	B2_REC_CREATE( world, CreateLiquid, id, fluidId, *def );
 	return id;
 }
 
@@ -712,6 +720,7 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 		f->liquidCount -= 1;
 	}
 	b2fUpdateLiquids( f );
+	B2_REC( world, DestroyLiquid, liquidId );
 }
 
 void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
@@ -735,6 +744,7 @@ void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
 		f->coarsenLiquids &= ~( 1u << index );
 	}
 	b2fUpdateLiquids( f );
+	B2_REC( world, LiquidSetDef, liquidId, *def );
 }
 
 b2LiquidDef b2Liquid_GetDef( b2LiquidId liquidId )
@@ -772,6 +782,7 @@ void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB, float 
 		f->cohesionBetween[a][b] = cohesion;
 		f->cohesionBetween[b][a] = cohesion;
 		b2fUpdateLiquids( f );
+		B2_REC( f->world, LiquidSetCohesionBetween, liquidA, liquidB, cohesion );
 	}
 }
 

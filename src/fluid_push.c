@@ -11,6 +11,8 @@
 
 #include "core.h"
 #include "fluid.h"
+#include "physics_world.h"
+#include "recording.h"
 
 typedef struct Push
 {
@@ -39,8 +41,9 @@ static int PushInside( b2fFluid* f, int liquid, const b2fOutline* outline, Push 
 	return pushed;
 }
 
-static int PushInRegion( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, Push push )
+static int PushInRegion( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, Push push, b2fFluid** fluid )
 {
+	*fluid = NULL;
 	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( b2fWorldLocked( fluidId ) )
 	{
@@ -53,20 +56,33 @@ static int PushInRegion( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion r
 	{
 		return 0;
 	}
+	*fluid = f;
 	return PushInside( f, liquid, &outline, push );
 }
 
 int b2Fluid_Accelerate( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocityChange )
 {
 	B2_CHECK_INPUT_RETURN( b2IsValidVec2( velocityChange ), 0 );
-	return PushInRegion( fluidId, liquidId, region, ( Push ){ velocityChange, b2Vec2_zero, 0.0f } );
+	b2fFluid* f;
+	int pushed = PushInRegion( fluidId, liquidId, region, ( Push ){ velocityChange, b2Vec2_zero, 0.0f }, &f );
+	if ( f != NULL )
+	{
+		B2_REC_CREATE( f->world, FluidAccelerate, pushed, fluidId, liquidId, region, velocityChange );
+	}
+	return pushed;
 }
 
 int b2Fluid_BlendVelocity( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocity, float share )
 {
 	B2_CHECK_INPUT_RETURN( b2IsValidVec2( velocity ) && b2IsValidFloat( share ), 0 );
-	share = b2ClampFloat( share, 0.0f, 1.0f );
-	return PushInRegion( fluidId, liquidId, region, ( Push ){ b2Vec2_zero, velocity, share } );
+	float clamped = b2ClampFloat( share, 0.0f, 1.0f );
+	b2fFluid* f;
+	int pushed = PushInRegion( fluidId, liquidId, region, ( Push ){ b2Vec2_zero, velocity, clamped }, &f );
+	if ( f != NULL )
+	{
+		B2_REC_CREATE( f->world, FluidBlendVelocity, pushed, fluidId, liquidId, region, velocity, share );
+	}
+	return pushed;
 }
 
 // An explosion as Box2D gives one to a shape (ExplosionCallback in physics_world.c), for the liquid. Box2D finds the
@@ -170,5 +186,7 @@ int b2Fluid_Explode( b2FluidId fluidId, const b2ExplosionDef* def )
 	{
 		return 0;
 	}
-	return b2fExplode( f, def );
+	int pushed = b2fExplode( f, def );
+	B2_REC_CREATE( f->world, FluidExplode, pushed, fluidId, *def );
+	return pushed;
 }
