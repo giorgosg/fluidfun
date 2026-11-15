@@ -67,6 +67,7 @@ static int FindBody( b2fFluid* f, b2BodyId id )
 		.lastVelocity = b2Body_GetLinearVelocity( id ),
 		.lastAngularVelocity = b2Body_GetAngularVelocity( id ),
 		.adheres = b2Body_GetType( id ) != b2_dynamicBody,
+		.isStatic = b2Body_GetType( id ) == b2_staticBody,
 	};
 	return f->bodyCount++;
 }
@@ -648,6 +649,32 @@ bool b2fShapeDistance( const b2fShape* s, b2Vec2 p, float* distance, b2Vec2* nor
 	}
 }
 
+// Whether a point lies on or in a shape, to within a tolerance. A chain segment has no inside, so a point just behind
+// one is on it too.
+static bool Buries( const b2fFluid* f, const b2fShape* s, b2Pos point, float tolerance )
+{
+	const b2fBody* body = f->bodies + s->bodyIndex;
+	b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( point, body->origin ) );
+	float distance;
+	b2Vec2 normal;
+	if ( s->type == b2_chainSegmentShape )
+	{
+		SegmentDistance( local, s->p1, s->p2, &distance, &normal );
+		return distance < tolerance;
+	}
+	return b2fShapeDistance( s, local, &distance, &normal ) && distance < tolerance;
+}
+
+// Each shape in reach counts as a solid half plane through its nearest point. Where shapes held fixed against each
+// other meet, as the tiles of a floor or the segments of a chain do, the nearest point of one can be a corner that
+// lies on the other: its half plane then counts again solid the other already covers, and pushes along the corner's
+// normal, sideways across the seam. Such a contact is left out. Shapes of different moving bodies always count, since
+// they part again.
+static inline bool FixedTogether( const b2fFluid* f, const b2fShape* a, const b2fShape* b )
+{
+	return a->bodyIndex == b->bodyIndex || ( f->bodies[a->bodyIndex].isStatic && f->bodies[b->bodyIndex].isStatic );
+}
+
 static void ContactTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
@@ -656,13 +683,20 @@ static void ContactTask( int start, int end, int worker, void* context )
 	const b2fShapeBins* bins = &f->shapeBins;
 	for ( int i = start; i < end; ++i )
 	{
-		float h = 2.0f * b2fLatticeSize( f->size[i] ), tableScale = (float)B2F_WALL_TABLE_SIZE / h;
+		float lattice = b2fLatticeSize( f->size[i] ), h = 2.0f * lattice, tableScale = (float)B2F_WALL_TABLE_SIZE / h;
+		float tolerance = B2F_SEAM_TOLERANCE * lattice;
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-		float density = 0.0f, nearDensity = 0.0f;
-		int count = 0;
-		b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
+		// Every shape in reach, each with its nearest point
+		struct
+		{
+			const b2fShape* shape;
+			float distance;
+			b2Vec2 normal;
+			b2Pos point;
+		} found[2 * B2F_CONTACTS_PER_PARTICLE];
+		int foundCount = 0;
 		int bin = BinOf( bins, x, y );
-		for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd && count < B2F_CONTACTS_PER_PARTICLE; ++k )
+		for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd && foundCount < 2 * B2F_CONTACTS_PER_PARTICLE; ++k )
 		{
 			const b2fShape* s = f->shapes + bins->shapes[k];
 			if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
@@ -686,17 +720,53 @@ static void ContactTask( int start, int end, int worker, void* context )
 				continue;
 			}
 
-			float t = ( distance > 0.0f ? distance : 0.0f ) * tableScale;
+			b2Vec2 n = b2RotateVector( body->motion.rotation, normal );
+			found[foundCount].shape = s;
+			found[foundCount].distance = distance;
+			found[foundCount].normal = n;
+			found[foundCount].point = ( b2Pos ){ x - distance * n.x, y - distance * n.y };
+			foundCount += 1;
+		}
+
+		// A shape whose nearest point is buried in another shape in reach that is at least as close is left out. That
+		// other shape counts whether or not it is left out itself: along a curved chain the nearest point of a segment
+		// two away is the end of the one between. Where two nearest points each lie on the other shape, as near the
+		// vertex between two segments of a curve, the closer stays: a face rather than the corner beside it, whose
+		// normal leans along the surface. Of two equally close, as over the middle of a seam, the first found stays.
+		// Choosing by the order shapes were found leaned the push and the adhesion one way along a chain at every
+		// vertex, which kept the liquid in a bowl circling.
+		int kept[B2F_CONTACTS_PER_PARTICLE];
+		int count = 0;
+		for ( int c = 0; c < foundCount && count < B2F_CONTACTS_PER_PARTICLE; ++c )
+		{
+			bool buried = false;
+			for ( int e = 0; e < foundCount && buried == false; ++e )
+			{
+				bool closer = found[e].distance < found[c].distance || ( found[e].distance == found[c].distance && e < c );
+				buried = e != c && closer && FixedTogether( f, found[c].shape, found[e].shape ) && Buries( f, found[e].shape, found[c].point, tolerance );
+			}
+			if ( buried == false )
+			{
+				kept[count++] = c;
+			}
+		}
+
+		float density = 0.0f, nearDensity = 0.0f;
+		b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
+		for ( int c = 0; c < count; ++c )
+		{
+			int e = kept[c];
+			float distance = found[e].distance > 0.0f ? found[e].distance : 0.0f;
+			float t = distance * tableScale;
 			int index = (int)t;
 			index = index < B2F_WALL_TABLE_SIZE ? index : B2F_WALL_TABLE_SIZE - 1;
 			float blend = t - (float)index;
 			const float* a = f->wallTable[index];
 			const float* b = f->wallTable[index + 1];
-			b2Vec2 n = b2RotateVector( body->motion.rotation, normal );
 			density += a[0] + blend * ( b[0] - a[0] );
 			nearDensity += a[1] + blend * ( b[1] - a[1] );
-			float share = 1.0f - ( distance > 0.0f ? distance : 0.0f ) / h;
-			contacts[count++] = (b2fContact){ s->bodyIndex, n.x, n.y, a[2] + blend * ( b[2] - a[2] ), a[3] + blend * ( b[3] - a[3] ), 0.0f, share };
+			float share = 1.0f - distance / h;
+			contacts[c] = (b2fContact){ found[e].shape->bodyIndex, found[e].normal.x, found[e].normal.y, a[2] + blend * ( b[2] - a[2] ), a[3] + blend * ( b[3] - a[3] ), 0.0f, share };
 		}
 		f->contactCount[i] = count;
 		f->wallDensity[i] = density;
