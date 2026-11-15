@@ -1851,6 +1851,40 @@ static int FluidLateAdaptive( void )
 	return 0;
 }
 
+// Liquid thrown at the solver's speed limit at a box thinner than a particle spacing, with two substeps, stays in front
+// of it. Without the path test against the box's faces, some particles landed past its middle and were pushed out
+// behind it.
+static int FluidThinWall( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId wallId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon box = b2MakeOffsetBox( 0.01f, 30.0f, b2Vec2_zero, b2Rot_identity );
+	b2CreatePolygonShape( wallId, &shapeDef, &box );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	int count = b2Liquid_SpawnCircle( waterId, ( b2Pos ){ -1.0f, 0.0f }, 0.5f, ( b2Vec2 ){ 15.0f, 0.0f } );
+	ENSURE( count > 100 );
+	for ( int i = 0; i < 120; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 2 );
+	}
+
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		ENSURE( particles.positions[i].x < 0.0f );
+	}
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 // A drop far from the rest of the liquid neither makes the grid's cells larger nor misses the floor under it. The
 // grid covers the pool, and the drop is filed into a cell on its edge. Shapes are gathered around the pool and around
 // the drop, so a wall reaching both is taken once and the boxes in between not at all.
@@ -2416,6 +2450,7 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidCoarsenSpawns );
 	RUN_SUBTEST( FluidMemory );
 	RUN_SUBTEST( FluidLateAdaptive );
+	RUN_SUBTEST( FluidThinWall );
 	RUN_SUBTEST( FluidFarStray );
 	RUN_SUBTEST( FluidInvalidDefs );
 	RUN_SUBTEST( FluidRegions );

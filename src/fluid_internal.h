@@ -157,6 +157,8 @@ typedef struct b2fShape
 	b2Vec2 p1, p2;
 	float radius;
 	b2Polygon polygon;
+	// A polygon thinner than a particle spacing, which a fast particle can cross within one substep
+	bool thin;
 	// World bounds this substep, grown by the particle radius
 	b2fCoord minX, minY, maxX, maxY;
 	// The shape's filter, and a bit for each liquid it collides with, by index. A shape no liquid collides with is not

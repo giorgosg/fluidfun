@@ -191,6 +191,19 @@ static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 		{
 			shape.polygon = source->polygon;
 			shape.radius = shape.polygon.radius;
+			// Its thickness, the least depth behind any face, radius included
+			float thickness = FLT_MAX;
+			for ( int e = 0; e < shape.polygon.count; ++e )
+			{
+				float depth = 0.0f;
+				for ( int v = 0; v < shape.polygon.count; ++v )
+				{
+					float d = b2Dot( shape.polygon.normals[e], b2Sub( shape.polygon.vertices[e], shape.polygon.vertices[v] ) );
+					depth = depth > d ? depth : d;
+				}
+				thickness = thickness < depth ? thickness : depth;
+			}
+			shape.thin = thickness + 2.0f * shape.radius < f->def.particleSpacing;
 			b2MassData mass = b2ComputePolygonMass( &shape.polygon, 1.0f );
 			area = mass.mass;
 			center = mass.center;
@@ -1103,6 +1116,46 @@ static void CollideTask( int start, int end, int worker, void* context )
 							float sign = sideBefore >= 0.0f ? 1.0f : -1.0f, length = sqrtf( length2 );
 							distance = sign * sideNow / length - s->radius;
 							normal = b2MulSV( sign / length, b2RightPerp( edge ) );
+							crossed = true;
+						}
+					}
+				}
+
+				// A polygon thinner than a particle spacing: a fast particle can land past its middle, where the
+				// nearest face is the far one, or pass it whole. If its path this substep entered through a face other
+				// than the one the distance finds, or the distance finds none, it goes back out of the face it came in
+				// by.
+				if ( s->type == b2_polygonShape && s->thin )
+				{
+					b2Vec2 before = b2InvRotateVector( body->motion.rotation, b2SubPos( f->prev[i], body->origin ) );
+					const b2Polygon* polygon = &s->polygon;
+					float earliest = 2.0f, entryDistance = 0.0f;
+					b2Vec2 entryNormal = b2Vec2_zero;
+					for ( int e = 0; e < polygon->count; ++e )
+					{
+						b2Vec2 v = polygon->vertices[e], n = polygon->normals[e];
+						float sideBefore = b2Dot( n, b2Sub( before, v ) ), sideNow = b2Dot( n, b2Sub( local, v ) );
+						if ( sideBefore < 0.0f || sideNow >= 0.0f )
+						{
+							continue;
+						}
+						float t = sideBefore / ( sideBefore - sideNow );
+						b2Vec2 edge = b2Sub( polygon->vertices[e + 1 < polygon->count ? e + 1 : 0], v );
+						float along = b2Dot( b2Sub( b2Lerp( before, local, t ), v ), edge ) / b2Dot( edge, edge );
+						if ( along >= 0.0f && along <= 1.0f && t < earliest )
+						{
+							earliest = t;
+							entryDistance = sideNow - s->radius;
+							entryNormal = n;
+						}
+					}
+					if ( earliest <= 1.0f )
+					{
+						bool found = b2fShapeDistance( s, local, &distance, &normal );
+						if ( found == false || distance >= margin || b2Dot( normal, entryNormal ) < 0.999f )
+						{
+							distance = entryDistance;
+							normal = entryNormal;
 							crossed = true;
 						}
 					}
