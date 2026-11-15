@@ -1062,16 +1062,16 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 		// which is what slows it. A body at the surface or with a dry side, such as a hull, is left to the particles.
 		// A crate afloat with its top dry has a third of its outline open, and a hull more. A small body has few
 		// particles against it, so up to a tenth open still counts as all the way round. The side facing a shape the
-		// body is close to is shut, not open: liquid would be there if it fitted. A share fading out to a quarter open,
-		// used before, held crates heavier than the liquid up off the floor more often and lifted none it should.
-		bool round = b2Length( OpenSide( f, body, total, up ) ) < 0.1f;
+		// body is close to is shut, not open: liquid would be there if it fitted.
+		float open = b2Length( OpenSide( f, body, total, up ) );
+		float round = open < 0.1f ? 1.0f : ( 0.25f - open ) / 0.15f;
 		float still = 1.0f - b2Length( body->motion.linearVelocity ) / B2F_STILL_SPEED;
-		if ( round && still > 0.0f )
+		if ( round > 0.0f && still > 0.0f )
 		{
 			// With liquid over nine tenths of its height all of it counts as under, since the estimate above is only
 			// good to a few percent. A crate standing in shallow liquid has its sides wet and counts for what is under.
 			float full = total->wetDensity / total->wetMass * body->area * g * f->h * ( share > 0.9f ? 1.0f : share );
-			float impulse = still * ( full - total->x * up.x - total->y * up.y );
+			float impulse = round * still * ( full - total->x * up.x - total->y * up.y );
 			total->x += impulse * up.x;
 			total->y += impulse * up.y;
 			needX -= impulse * up.x;
@@ -1079,7 +1079,7 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 
 			// Buoyancy acts at the centre of the body's area, and still liquid turns the body no other way. A wedge
 			// of locked particles under a heavy crate otherwise propped it up on one edge.
-			float turn = still * ( full * ( body->buoyancyArm.x * up.y - body->buoyancyArm.y * up.x ) - total->angular );
+			float turn = round * still * ( full * ( body->buoyancyArm.x * up.y - body->buoyancyArm.y * up.x ) - total->angular );
 			total->angular += turn;
 			needAngular -= turn;
 		}
