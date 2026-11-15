@@ -23,14 +23,15 @@ jobs:
           - name: ubuntu-gcc
             os: ubuntu-latest
             test: ./bin/test
+          # ubuntu-latest became 26.04 in November 2026, which has no clang-18
           - name: ubuntu-clang
-            os: ubuntu-latest
+            os: ubuntu-24.04
             args: '-DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"'
             test: ./bin/test
           # Runner speed varies about 3x by region and MSan at -O0 can exceed the timeout on the slow ones.
           # -O1 is the level MSan recommends and Debug keeps asserts. Line buffering shows per test timing.
           - name: ubuntu-clang-msan
-            os: ubuntu-latest
+            os: ubuntu-24.04
             timeout: 10
             args: '-DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DCMAKE_C_FLAGS="-O1 -fsanitize=memory -fsanitize-memory-track-origins=1 -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-O1 -fsanitize=memory -fsanitize-memory-track-origins=1 -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=memory"'
             test: lscpu | grep 'Model name'; nproc; stdbuf -oL ./bin/test
@@ -183,7 +184,8 @@ jobs:
   # RelWithDebInfo keeps asserts and the golden hash while staying fast enough emulated.
   linux-armhf:
     name: linux-armhf
-    runs-on: ubuntu-latest
+    # 26.04 has no qemu-user-static package
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
