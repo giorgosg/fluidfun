@@ -595,8 +595,6 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			if ( index != i )
 			{
 				b2fCopyParticle( f, index, i );
-				// The caller can read densities before a substep works them out again
-				f->rho[index] = f->rho[i];
 				f->id[index] = f->nextParticleId++;
 				// A new particle holds no springs. Its parent's partners hold theirs to the parent's id.
 				if ( f->springs != NULL )
@@ -743,7 +741,7 @@ void b2fCoarsenSpawned( b2fFluid* f, float h )
 	f->h = h;
 	for ( int pass = 0; pass < B2F_COARSEN_PASSES; ++pass )
 	{
-		b2fSortParticlesNow( f );
+		b2fSortParticles( f, NULL );
 		ChangeSizes( f, 0.0f, true );
 		if ( f->sizeChanges == 0 )
 		{

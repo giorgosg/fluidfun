@@ -92,16 +92,16 @@ static inline float b2fLatticeSize( float size )
 #define B2F_DEPTH_LIMIT_SCALE 4.34f
 
 // Fields every particle carries, kept in sort order. Sorting, compaction, splits and spawning all go through
-// this list, so a new field is one entry here.
+// this list, so a new field is one entry here. Densities are among them since the caller reads them between steps,
+// and the coarsening of spawns across the sorts between its passes.
 #define B2F_PARTICLE_FIELDS( X )                                                                                        \
 	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size )            \
-		X( float, speedMemory ) X( int, id ) X( unsigned char, liquid )
+		X( float, speedMemory ) X( float, rho ) X( int, id ) X( unsigned char, liquid )
 
-// Working values that compaction carries along with the particle fields, though sorting does not. Densities of the
-// last substep are read between steps, by the caller and by the coarsening of spawns, so removing particles keeps them
-// with each particle. The size pass's own compaction keeps the classes and targets for the splits that follow it.
+// Working values that compaction carries along with the particle fields, though sorting does not: the size pass's own
+// compaction keeps the classes and targets for the splits that follow it
 #define B2F_CARRIED_FIELDS( X )                                                                                         \
-	X( float, rho ) X( unsigned char, adaptClass ) X( float, adaptTarget )
+	X( unsigned char, adaptClass ) X( float, adaptTarget )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. marked is
 // scratch for the calls that remove particles, and adaptUsed is the size pass's own.
@@ -514,9 +514,8 @@ b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index );
 uint32_t b2fLiquidsCollidingWith( const b2fFluid* f, b2Filter filter );
 
 // grid.c
+// With no context, on this thread, as outside a step
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
-// The same on one thread, outside a step
-void b2fSortParticlesNow( b2fFluid* f );
 
 // solver.c
 void b2fPredict( b2fFluid* f, b2SubStepContext* context );

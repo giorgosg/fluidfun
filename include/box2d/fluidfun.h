@@ -137,9 +137,9 @@ typedef struct b2FluidDef
 	/// particle splitting needs more, the fluid doubles its room, up to maxCapacity. Growing happens only between steps
 	/// and does not change how the liquid moves.
 	int capacity;
-	/// The most particles the fluid will grow to hold. Each particle of room takes 533 bytes, and 810 to 830 once some
-	/// liquid has springs (565 and 840 to 860 when Box2D is built for large worlds), so the default of 1,000,000 is up to
-	/// 0.53 GB, or 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above
+	/// The most particles the fluid will grow to hold. Each particle of room takes 537 bytes, and 814 to 834 once some
+	/// liquid has springs (569 and 844 to 864 when Box2D is built for large worlds), so the default of 1,000,000 is up to
+	/// 0.54 GB, or 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above
 	/// this is kept as the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it.
 	int maxCapacity;
 
