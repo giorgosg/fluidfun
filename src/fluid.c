@@ -346,6 +346,7 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f->blockSize, (size_t)f->blockCapacity * sizeof( float ) );
 	b2Free( f->blockReach, (size_t)f->blockCapacity * sizeof( float ) );
 	b2Free( f->shapes, (size_t)f->shapeCapacity * sizeof( b2fShape ) );
+	b2Free( f->gatherMark, (size_t)f->gatherMarkCapacity * sizeof( int ) );
 	b2Free( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
 	b2Free( f->bodyOfIndex, (size_t)f->bodyOfIndexCapacity * sizeof( int ) );
 	b2Free( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );

@@ -1776,6 +1776,67 @@ static int FluidMemory( void )
 	return 0;
 }
 
+// A drop far from the rest of the liquid neither makes the grid's cells larger nor misses the floor under it. The
+// grid covers the pool, and the drop is filed into a cell on its edge. Shapes are gathered around the pool and around
+// the drop, so a wall reaching both is taken once and the boxes in between not at all.
+static int FluidFarStray( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon box = b2MakeOffsetBox( 1.5f, 0.25f, ( b2Vec2 ){ 0.0f, -0.25f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+	box = b2MakeOffsetBox( 0.25f, 1.5f, ( b2Vec2 ){ -1.25f, 1.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+	box = b2MakeOffsetBox( 0.25f, 1.5f, ( b2Vec2 ){ 1.25f, 1.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+	float floorTop = -3000.0f;
+	box = b2MakeOffsetBox( 0.5f, 0.25f, ( b2Vec2 ){ 0.9f, floorTop - 0.25f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+	box = b2MakeOffsetBox( 0.05f, 1501.0f, ( b2Vec2 ){ 2.0f, -1500.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+	for ( int i = 0; i < 10; ++i )
+	{
+		box = b2MakeOffsetBox( 0.5f, 0.5f, ( b2Vec2 ){ 0.0f, -1000.0f - 100.0f * (float)i }, b2Rot_identity );
+		b2CreatePolygonShape( groundId, &shapeDef, &box );
+	}
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 2000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	ENSURE( b2Liquid_SpawnBox( waterId, ( b2Pos ){ -0.95f, 0.05f }, ( b2Pos ){ 0.95f, 1.0f }, b2Vec2_zero ) > 0 );
+	ENSURE( b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.9f, floorTop + 0.1f }, 0.02f, b2Vec2_zero ) == 1 );
+
+	for ( int i = 0; i < 120; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+
+	const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
+	ENSURE( f->gridBulkOnly );
+	ENSURE( f->gridCell == f->cellSize );
+	ENSURE( f->gridBulk.minY > -1.0f );
+	ENSURE( f->shapeCount == 5 );
+
+	int far = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		if ( f->pos[i].y < -1000.0f )
+		{
+			far += 1;
+			ENSURE( f->pos[i].y > floorTop - 0.01f && f->pos[i].y < floorTop + 0.1f );
+		}
+	}
+	ENSURE( far == 1 );
+
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 // Defs are checked as Box2D checks its own: a value a field does not allow is logged, asserted and turned away, and a
 // def that did not come from its b2Default or b2Make function fails an assert. The asserts are silenced and counted
 // here, since only the log is there in every build.
@@ -2279,6 +2340,7 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidAdaptiveStepRate );
 	RUN_SUBTEST( FluidCoarsenSpawns );
 	RUN_SUBTEST( FluidMemory );
+	RUN_SUBTEST( FluidFarStray );
 	RUN_SUBTEST( FluidInvalidDefs );
 	RUN_SUBTEST( FluidRegions );
 	RUN_SUBTEST( FluidEmitterOnBody );

@@ -130,6 +130,15 @@ typedef struct b2fIdSlot
 	int id, index;
 } b2fIdSlot;
 
+// Bounds of particle centres
+typedef struct b2fBox
+{
+	b2fCoord minX, minY, maxX, maxY;
+} b2fBox;
+
+// The grid covers the bulk of the liquid only while at most one particle in this many is outside it (b2fFindBulk)
+#define B2F_BULK_OUTSIDE 8
+
 typedef struct b2fShape
 {
 	b2ShapeType type;
@@ -406,6 +415,10 @@ struct b2fFluid
 	int uniformWindow;	 // cells each side every particle searches when sizes are uniform, otherwise 0
 	int gridBorder;	 // empty cells on each side, as many as the widest search reaches past its own cell
 	int* cellStart;
+	// The particles the grid is laid over, inside its border: all of them, or with gridBulkOnly the bulk of the liquid,
+	// and the rest are in the cells along its edge
+	b2fBox gridBulk;
+	bool gridBulkOnly;
 
 	// Largest particle in each block of grid cells, and the largest whose reach touches each block
 	float *blockSize, *blockReach;
@@ -413,6 +426,11 @@ struct b2fFluid
 
 	b2fShape* shapes;
 	int shapeCount, shapeCapacity;
+	// When liquid lies outside its bulk, shapes are gathered with several queries, and this marks each shape of the
+	// world, by its index there, with the gather that took it, so it is taken once
+	int* gatherMark;
+	int gatherMarkCapacity, gatherSerial;
+	bool gatherMarking;
 	b2fBody* bodies;
 	int bodyCount, bodyCapacity;
 	// Where each body of the world is in bodies, by its index in the world; good only where that entry is below
@@ -536,6 +554,11 @@ uint32_t b2fLiquidsCollidingWith( const b2fFluid* f, b2Filter filter );
 // grid.c
 // With no context, on this thread, as outside a step
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context );
+// The bounds of every particle, and the part of the liquid a grid of this cell and border covers: every particle, and
+// false, when their bounds fit the grid's limits, or when the box found below leaves out more than one particle in
+// B2F_BULK_OUTSIDE. Otherwise true, and the bulk is a box that fits and holds as many particles as it can, found along
+// each axis in turn. One thread, in particle order, so it does not depend on worker count.
+bool b2fFindBulk( const b2fFluid* f, float cell, int border, b2fBox* all, b2fBox* bulk );
 
 // solver.c
 void b2fPredict( b2fFluid* f, b2SubStepContext* context );

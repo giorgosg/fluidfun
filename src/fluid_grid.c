@@ -37,17 +37,169 @@ static void SpreadBlockSizes( b2fFluid* f, int bw, int bh )
 	}
 }
 
+// The grid has at most this many cells a side, and this many in all for n particles
+#define B2F_GRID_SIDE 8192
+static int64_t CellLimit( int n )
+{
+	return 16 * (int64_t)n > ( 1 << 16 ) ? 16 * (int64_t)n : ( 1 << 16 );
+}
+
+// Cells along one side of a grid over a box, border included, or more than B2F_GRID_SIDE for any side too long, without
+// overflowing the conversion for a particle however far away. The same arithmetic as the grid's own.
+static int CellsAcross( b2fCoord lo, b2fCoord hi, float cell, int border )
+{
+	float t = (float)( hi - lo ) / cell;
+	return t < (float)B2F_GRID_SIDE ? (int)t + 1 + 2 * border : B2F_GRID_SIDE + 1;
+}
+
+static bool GridFits( const b2fBox* box, float cell, int border, int64_t limit )
+{
+	int width = CellsAcross( box->minX, box->maxX, cell, border ), height = CellsAcross( box->minY, box->maxY, cell, border );
+	return width <= B2F_GRID_SIDE && height <= B2F_GRID_SIDE && (int64_t)width * height <= limit;
+}
+
+static inline b2fCoord Along( const b2fFluid* f, int i, int axis )
+{
+	return axis == 0 ? f->pos[i].x : f->pos[i].y;
+}
+
+// Bins of the histogram that finds the bulk along an axis
+#define B2F_BULK_BINS 4096
+// A window this many bins long or longer is placed by the histogram; a shorter one is first zoomed into
+#define B2F_BULK_ZOOM 64
+
+// Along one axis, the stretch no longer than length that holds the most particles, from a histogram over [lo, hi],
+// which every particle is in at first: bounds of the particles in the run of bins that fits in length and holds the
+// most, the first such run. Where the bins are too coarse to place it well, the histogram is taken again over the run
+// that holds the most, two bins longer than what fits, which narrows the range by at least B2F_BULK_BINS / 66 a time.
+static void DensestRun( const b2fFluid* f, int axis, double length, b2fCoord* lo, b2fCoord* hi )
+{
+	int counts[B2F_BULK_BINS];
+	b2fCoord a = *lo, b = *hi;
+	for ( int zoom = 0; zoom < 8 && (double)( b - a ) > length; ++zoom )
+	{
+		double bin = (double)( b - a ) / B2F_BULK_BINS;
+		memset( counts, 0, sizeof( counts ) );
+		for ( int i = 0; i < f->count; ++i )
+		{
+			b2fCoord v = Along( f, i, axis );
+			if ( a <= v && v <= b )
+			{
+				int k = (int)( (double)( v - a ) / bin );
+				counts[k < B2F_BULK_BINS ? k : B2F_BULK_BINS - 1] += 1;
+			}
+		}
+
+		int fit = (int)( length / bin );
+		bool placed = fit >= B2F_BULK_ZOOM;
+		int run = placed ? fit : ( fit > 1 ? fit : 1 ) + 2;
+		run = run < B2F_BULK_BINS ? run : B2F_BULK_BINS;
+		int sum = 0, best = -1, start = 0;
+		for ( int k = 0; k < B2F_BULK_BINS; ++k )
+		{
+			sum += counts[k] - ( k >= run ? counts[k - run] : 0 );
+			if ( k >= run - 1 && sum > best )
+			{
+				best = sum;
+				start = k - run + 1;
+			}
+		}
+		b2fCoord na = a + (b2fCoord)( start * bin ), nb = start + run < B2F_BULK_BINS ? a + (b2fCoord)( ( start + run ) * bin ) : b;
+		a = na;
+		b = nb;
+		if ( placed )
+		{
+			break;
+		}
+	}
+
+	// The particles in the stretch, from their own bounds
+	b2fCoord low = b, high = a;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		b2fCoord v = Along( f, i, axis );
+		if ( a <= v && v <= b )
+		{
+			low = v < low ? v : low;
+			high = v > high ? v : high;
+		}
+	}
+	*lo = low;
+	*hi = high;
+}
+
+// Sets the bulk along one axis to the stretch of all that holds the most particles within cells cells of the grid's
+// side, border included. Returns false if that leaves no room.
+static bool Widen( const b2fFluid* f, int axis, int64_t cells, float cell, int border, const b2fBox* all, b2fBox* bulk )
+{
+	int64_t room = ( cells < B2F_GRID_SIDE ? cells : B2F_GRID_SIDE ) - 2 - 2 * border;
+	if ( room < 1 )
+	{
+		return false;
+	}
+	b2fCoord* lo = axis == 0 ? &bulk->minX : &bulk->minY;
+	b2fCoord* hi = axis == 0 ? &bulk->maxX : &bulk->maxY;
+	*lo = axis == 0 ? all->minX : all->minY;
+	*hi = axis == 0 ? all->maxX : all->maxY;
+	DensestRun( f, axis, (double)cell * (double)room, lo, hi );
+	return true;
+}
+
+bool b2fFindBulk( const b2fFluid* f, float cell, int border, b2fBox* all, b2fBox* bulk )
+{
+	b2fBox box = { f->pos[0].x, f->pos[0].y, f->pos[0].x, f->pos[0].y };
+	for ( int i = 1; i < f->count; ++i )
+	{
+		box.minX = box.minX < f->pos[i].x ? box.minX : f->pos[i].x;
+		box.maxX = box.maxX > f->pos[i].x ? box.maxX : f->pos[i].x;
+		box.minY = box.minY < f->pos[i].y ? box.minY : f->pos[i].y;
+		box.maxY = box.maxY > f->pos[i].y ? box.maxY : f->pos[i].y;
+	}
+	*all = box;
+	*bulk = box;
+	int64_t limit = CellLimit( f->count );
+	if ( GridFits( &box, cell, border, limit ) )
+	{
+		return false;
+	}
+
+	// First the most particles each axis holds within the side of a square grid, which finds the densest part of the
+	// liquid along each. Then along x the most within the width that part's height leaves, and along y the most
+	// within the height that width leaves, so a long pool is not cut short. Each run's bounds are its particles', which
+	// leaves the other axis all the room it can have. Two cells short of each limit, for rounding.
+	int64_t square = (int64_t)sqrt( (double)limit );
+	if ( Widen( f, 0, square, cell, border, &box, bulk ) == false || Widen( f, 1, square, cell, border, &box, bulk ) == false ||
+		 Widen( f, 0, limit / CellsAcross( bulk->minY, bulk->maxY, cell, border ), cell, border, &box, bulk ) == false ||
+		 Widen( f, 1, limit / CellsAcross( bulk->minX, bulk->maxX, cell, border ), cell, border, &box, bulk ) == false )
+	{
+		*bulk = box;
+		return false;
+	}
+	if ( GridFits( bulk, cell, border, limit ) == false )
+	{
+		*bulk = box;
+		return false;
+	}
+
+	// Liquid split into parts of similar size has no bulk: filed into edge cells, the rest would cost more than larger
+	// cells do
+	int outside = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		b2Pos p = f->pos[i];
+		outside += p.x < bulk->minX || p.x > bulk->maxX || p.y < bulk->minY || p.y > bulk->maxY ? 1 : 0;
+	}
+	if ( outside > f->count / B2F_BULK_OUTSIDE )
+	{
+		*bulk = box;
+		return false;
+	}
+	return true;
+}
+
 static void BuildGrid( b2fFluid* f )
 {
 	bool adaptive = f->adaptive;
-	b2fCoord minX = f->pos[0].x, maxX = f->pos[0].x, minY = f->pos[0].y, maxY = f->pos[0].y;
-	for ( int i = 1; i < f->count; ++i )
-	{
-		minX = minX < f->pos[i].x ? minX : f->pos[i].x;
-		maxX = maxX > f->pos[i].x ? maxX : f->pos[i].x;
-		minY = minY < f->pos[i].y ? minY : f->pos[i].y;
-		maxY = maxY > f->pos[i].y ? maxY : f->pos[i].y;
-	}
 	float largest = 0.5f * f->radius;
 	if ( adaptive )
 	{
@@ -59,28 +211,37 @@ static void BuildGrid( b2fFluid* f )
 		f->maxRadius = 2.0f * largest;
 	}
 
-	// Liquid spread thinly over a wide area gets larger cells, so the grid stays in proportion to the particle count.
-	// The border holds the widest search: a reach of at most twice the largest size, and one more cell for the
-	// merge search, which runs after particles have moved. Uniform sizes keep one border cell.
+	// The border holds the widest search: a reach of at most twice the largest size, and one more cell for the merge
+	// search, which runs after particles have moved. Uniform sizes keep one border cell.
+	// The grid covers every particle when that fits at the smallest cell. Otherwise it covers the bulk of the
+	// liquid when that fits (b2fFindBulk), and the particles outside go in the cells along its edge, the nearest to
+	// them. Cells only gather candidates, which every pass accepts by their distance, so a particle in the wrong cell
+	// is still right: it finds no neighbours. Clamping keeps the order of coordinates, and moves two points no further
+	// apart in cells, so particles out there still find each other. Liquid spread thinly over a wide area, with no
+	// bulk that fits, gets larger cells, so the grid stays in proportion to the particle count.
 	float cs = f->cellSize;
-	int width, height, border;
-	int64_t cellLimit = 16 * (int64_t)f->count > ( 1 << 16 ) ? 16 * (int64_t)f->count : ( 1 << 16 );
+	int border = adaptive ? (int)ceilf( 2.0f * largest / cs ) + 1 : 1;
+	b2fBox all, box;
+	f->gridBulkOnly = b2fFindBulk( f, cs, border, &all, &box );
+	int64_t cellLimit = CellLimit( f->count );
+	int width, height;
 	while ( true )
 	{
 		border = adaptive ? (int)ceilf( 2.0f * largest / cs ) + 1 : 1;
-		width = (int)( (float)( maxX - minX ) / cs ) + 1 + 2 * border;
-		height = (int)( (float)( maxY - minY ) / cs ) + 1 + 2 * border;
-		if ( width <= 8192 && height <= 8192 && (int64_t)width * height <= cellLimit )
+		width = CellsAcross( box.minX, box.maxX, cs, border );
+		height = CellsAcross( box.minY, box.maxY, cs, border );
+		if ( width <= B2F_GRID_SIDE && height <= B2F_GRID_SIDE && (int64_t)width * height <= cellLimit )
 		{
 			break;
 		}
 		cs *= 2.0f;
 	}
+	f->gridBulk = box;
 	f->gridCell = cs;
 	f->gridBorder = border;
 	f->uniformWindow = adaptive ? 0 : (int)ceilf( f->radius / cs );
-	f->gridX = minX - border * cs;
-	f->gridY = minY - border * cs;
+	f->gridX = box.minX - border * cs;
+	f->gridY = box.minY - border * cs;
 	f->gridWidth = width;
 	f->gridHeight = height;
 
@@ -104,13 +265,14 @@ static void BuildGrid( b2fFluid* f )
 		memset( f->blockSize, 0, (size_t)( bw * bh ) * sizeof( float ) );
 	}
 
+	// Clamped in float before the conversion, so a particle however far out is in range
 	float inv = 1.0f / cs;
+	float firstCell = (float)border, lastX = (float)( width - 1 - border ), lastY = (float)( height - 1 - border );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		int cx = (int)( (float)( f->pos[i].x - f->gridX ) * inv );
-		int cy = (int)( (float)( f->pos[i].y - f->gridY ) * inv );
-		cx = cx < border ? border : ( cx > width - 1 - border ? width - 1 - border : cx );
-		cy = cy < border ? border : ( cy > height - 1 - border ? height - 1 - border : cy );
+		float tx = (float)( f->pos[i].x - f->gridX ) * inv, ty = (float)( f->pos[i].y - f->gridY ) * inv;
+		int cx = (int)( tx > firstCell ? ( tx < lastX ? tx : lastX ) : firstCell );
+		int cy = (int)( ty > firstCell ? ( ty < lastY ? ty : lastY ) : firstCell );
 		int c = cy * width + cx;
 		f->sortCell[i] = c;
 		f->cellStart[c + 1] += 1;
