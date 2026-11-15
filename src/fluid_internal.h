@@ -167,11 +167,27 @@ typedef struct b2fPatch
 // shape than this share of the particle's lattice size, as where two tiles of a floor meet
 #define B2F_SEAM_TOLERANCE 0.1f
 
+// A body's motion as of this substep, read from Box2D's solver set
+typedef struct b2fMotion
+{
+	b2Pos center;
+	b2Rot rotation;
+	b2Vec2 localCenter;
+	b2Vec2 linearVelocity;
+	float angularVelocity;
+	// Zero unless the body is awake
+	float invMass;
+	float invInertia;
+} b2fMotion;
+
 typedef struct b2fBody
 {
 	b2BodyId id;
 	int firstPatch, patchCount;
-	b2SubStepBody motion;
+	b2fMotion motion;
+	// Box2D's velocity of the body while it is awake in a step, which the liquid's push changes, set each substep;
+	// null while it sleeps and outside a step
+	struct b2BodyState* state;
 	// World centre of mass and body origin, in double when Box2D is built for large worlds
 	b2Pos center, origin;
 	bool awake;
@@ -199,8 +215,8 @@ typedef struct b2fBody
 	b2Vec2 stepImpulse;
 	float stepAngular, stepSubmerged;
 	bool stepWet;
-	// Whether liquid was within reach of the body in some substep of this step, asleep or not. The next step wakes
-	// the bodies that had it, and lets the rest sleep.
+	// Whether liquid was within reach of the body in some substep of this step, asleep or not. Those asleep wake once
+	// the step is done (b2fWakeReached).
 	bool reached;
 	// Where the body is at the start of the step, and where its shapes start in b2fFluid::bodyShapes, for finding
 	// patches
@@ -324,7 +340,7 @@ typedef struct b2fLiquidPair
 
 struct b2fFluid
 {
-	b2WorldId worldId;
+	b2World* world;
 	b2FluidDef def;
 	// Spacing of the lattice rest density is counted from, particleSpacing over B2F_REST_PITCH. The interaction
 	// radius and the solver's lengths go by it; particle sizes are in particleSpacing (b2fLatticeSize).
@@ -399,6 +415,10 @@ struct b2fFluid
 	int shapeCount, shapeCapacity;
 	b2fBody* bodies;
 	int bodyCount, bodyCapacity;
+	// Where each body of the world is in bodies, by its index in the world; good only where that entry is below
+	// bodyCount and its body has this index, so it needs no clearing between steps
+	int* bodyOfIndex;
+	int bodyOfIndexCapacity;
 	b2fReaction* reactions;
 	int reactionCapacity;
 	b2fPatch* patches;
@@ -413,7 +433,7 @@ struct b2fFluid
 	int* candidates;
 	int markCapacity;
 
-	// Set per substep. Gravity is the world's; each liquid scales it by its gravityScale.
+	// Set per step and substep. Gravity is the world's; each liquid scales it by its gravityScale.
 	float h;
 	b2Vec2 worldGravity;
 
@@ -526,7 +546,8 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context );
 // boundary.c
 void b2fBuildWallTable( b2fFluid* f );
 void b2fGatherShapes( b2fFluid* f );
-void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context );
+void b2fWakeReached( b2fFluid* f );
+void b2fUpdateBodies( b2fFluid* f );
 void b2fFindContacts( b2fFluid* f, b2SubStepContext* context );
 void b2fCollide( b2fFluid* f, b2SubStepContext* context );
 void b2fHoldBodies( b2fFluid* f );

@@ -3,6 +3,13 @@
 // in contact patches.
 #include "fluid_internal.h"
 
+#include "aabb.h"
+#include "body.h"
+#include "contact.h"
+#include "physics_world.h"
+#include "shape.h"
+#include "solver_set.h"
+
 // The kernels integrated over a solid half plane at distance d from a particle, at the number density of the
 // liquid at rest. Particles settle about half a spacing from a surface, which is where a lattice
 // of particles would end, so the table carries on the lattice without a seam. At the denser lattice rest density
@@ -46,14 +53,31 @@ void b2fBuildWallTable( b2fFluid* f )
 	}
 }
 
-static int FindBody( b2fFluid* f, b2BodyId id )
+// The fluid's body for a body of the world, by its index in the world, added when the first of its shapes is gathered
+static int FindBody( b2fFluid* f, int bodyId )
 {
-	for ( int i = 0; i < f->bodyCount; ++i )
+	if ( bodyId < f->bodyOfIndexCapacity )
 	{
-		if ( B2_ID_EQUALS( f->bodies[i].id, id ) )
+		int i = f->bodyOfIndex[bodyId];
+		if ( 0 <= i && i < f->bodyCount && f->bodies[i].id.index1 - 1 == bodyId )
 		{
 			return i;
 		}
+	}
+	else
+	{
+		int capacity = f->bodyOfIndexCapacity == 0 ? 64 : f->bodyOfIndexCapacity;
+		while ( capacity <= bodyId )
+		{
+			capacity *= 2;
+		}
+		f->bodyOfIndex = b2fGrowArray( f->bodyOfIndex, f->bodyOfIndexCapacity, capacity, sizeof( int ) );
+		// New entries name no body, so a lookup never reads an unset one
+		for ( int i = f->bodyOfIndexCapacity; i < capacity; ++i )
+		{
+			f->bodyOfIndex[i] = -1;
+		}
+		f->bodyOfIndexCapacity = capacity;
 	}
 
 	if ( f->bodyCount == f->bodyCapacity )
@@ -62,25 +86,33 @@ static int FindBody( b2fFluid* f, b2BodyId id )
 		f->bodies = b2fGrowArray( f->bodies, f->bodyCapacity, capacity, sizeof( b2fBody ) );
 		f->bodyCapacity = capacity;
 	}
+
+	b2World* world = f->world;
+	b2Body* body = b2Array_Get( world->bodies, bodyId );
+	b2BodyState* state = b2GetBodyState( world, body );
 	f->bodies[f->bodyCount] = (b2fBody){
-		.id = id,
-		.lastVelocity = b2Body_GetLinearVelocity( id ),
-		.lastAngularVelocity = b2Body_GetAngularVelocity( id ),
-		.adheres = b2Body_GetType( id ) != b2_dynamicBody,
-		.isStatic = b2Body_GetType( id ) == b2_staticBody,
+		.id = { bodyId + 1, world->worldId, body->generation },
+		.lastVelocity = state != NULL ? state->linearVelocity : b2Vec2_zero,
+		.lastAngularVelocity = state != NULL ? state->angularVelocity : 0.0f,
+		.adheres = body->type != b2_dynamicBody,
+		.isStatic = body->type == b2_staticBody,
 	};
+	f->bodyOfIndex[bodyId] = f->bodyCount;
 	return f->bodyCount++;
 }
 
-static bool OverlapShape( b2ShapeId shapeId, void* context )
+static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 {
+	(void)proxyId;
 	b2fFluid* f = context;
+	b2World* world = f->world;
+	const b2Shape* source = b2Array_Get( world->shapes, (int)userData );
+
 	// The liquid passes through sensors, which only count the liquid in them once a step
-	b2Filter filter = b2Shape_GetFilter( shapeId );
-	uint32_t liquids = b2fLiquidsCollidingWith( f, filter );
-	if ( b2Shape_IsSensor( shapeId ) )
+	uint32_t liquids = b2fLiquidsCollidingWith( f, source->filter );
+	if ( source->sensorIndex != B2_NULL_INDEX )
 	{
-		b2fGatherSensor( f, shapeId, liquids );
+		b2fGatherSensor( f, ( b2ShapeId ){ source->id + 1, world->worldId, source->generation }, liquids );
 		return true;
 	}
 
@@ -92,29 +124,21 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 		return true;
 	}
 
-	if ( f->shapeCount == f->shapeCapacity )
-	{
-		int capacity = f->shapeCapacity == 0 ? 32 : 2 * f->shapeCapacity;
-		f->shapes = b2fGrowArray( f->shapes, f->shapeCapacity, capacity, sizeof( b2fShape ) );
-		f->shapeCapacity = capacity;
-	}
-
-	b2fShape* shape = f->shapes + f->shapeCount;
-	memset( shape, 0, sizeof( b2fShape ) );
-	shape->type = b2Shape_GetType( shapeId );
-	shape->categoryBits = filter.categoryBits;
-	shape->maskBits = filter.maskBits;
-	shape->liquids = liquids;
-	shape->bodyIndex = FindBody( f, b2Shape_GetBody( shapeId ) );
 	float area = 0.0f;
 	b2Vec2 center = b2Vec2_zero;
-	switch ( shape->type )
+	b2fShape shape = {
+		.type = source->type,
+		.categoryBits = source->filter.categoryBits,
+		.maskBits = source->filter.maskBits,
+		.liquids = liquids,
+	};
+	switch ( source->type )
 	{
 		case b2_circleShape:
 		{
-			b2Circle c = b2Shape_GetCircle( shapeId );
-			shape->p1 = shape->p2 = c.center;
-			shape->radius = c.radius;
+			b2Circle c = source->circle;
+			shape.p1 = shape.p2 = c.center;
+			shape.radius = c.radius;
 			area = B2_PI * c.radius * c.radius;
 			center = c.center;
 		}
@@ -122,48 +146,52 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 
 		case b2_capsuleShape:
 		{
-			b2Capsule c = b2Shape_GetCapsule( shapeId );
-			shape->p1 = c.center1;
-			shape->p2 = c.center2;
-			shape->radius = c.radius;
+			b2Capsule c = source->capsule;
+			shape.p1 = c.center1;
+			shape.p2 = c.center2;
+			shape.radius = c.radius;
 			area = B2_PI * c.radius * c.radius + 2.0f * c.radius * b2Distance( c.center1, c.center2 );
 			center = b2Lerp( c.center1, c.center2, 0.5f );
 		}
 		break;
 
 		case b2_segmentShape:
-		{
-			b2Segment s = b2Shape_GetSegment( shapeId );
-			shape->p1 = s.point1;
-			shape->p2 = s.point2;
-		}
-		break;
+			shape.p1 = source->segment.point1;
+			shape.p2 = source->segment.point2;
+			break;
 
 		case b2_chainSegmentShape:
-		{
-			b2ChainSegment s = b2Shape_GetChainSegment( shapeId );
-			shape->p1 = s.segment.point1;
-			shape->p2 = s.segment.point2;
-		}
-		break;
+			shape.p1 = source->chainSegment.segment.point1;
+			shape.p2 = source->chainSegment.segment.point2;
+			break;
 
 		case b2_polygonShape:
-			shape->polygon = b2Shape_GetPolygon( shapeId );
-			shape->radius = shape->polygon.radius;
 		{
-			b2MassData mass = b2ComputePolygonMass( &shape->polygon, 1.0f );
+			shape.polygon = source->polygon;
+			shape.radius = shape.polygon.radius;
+			b2MassData mass = b2ComputePolygonMass( &shape.polygon, 1.0f );
 			area = mass.mass;
 			center = mass.center;
 		}
-			break;
+		break;
 
 		default:
+			// A shape of a type the liquid does not handle is not there for it, and does not bring in its body
 			return true;
 	}
 
-	f->bodies[shape->bodyIndex].area += area;
-	f->bodies[shape->bodyIndex].areaCenter = b2MulAdd( f->bodies[shape->bodyIndex].areaCenter, area, center );
-	f->shapeCount += 1;
+	if ( f->shapeCount == f->shapeCapacity )
+	{
+		int capacity = f->shapeCapacity == 0 ? 32 : 2 * f->shapeCapacity;
+		f->shapes = b2fGrowArray( f->shapes, f->shapeCapacity, capacity, sizeof( b2fShape ) );
+		f->shapeCapacity = capacity;
+	}
+
+	shape.bodyIndex = FindBody( f, source->bodyId );
+	f->shapes[f->shapeCount++] = shape;
+	b2fBody* body = f->bodies + shape.bodyIndex;
+	body->area += area;
+	body->areaCenter = b2MulAdd( body->areaCenter, area, center );
 	f->shapesFiltered = f->shapesFiltered || liquids != f->liveLiquids;
 	return true;
 }
@@ -354,7 +382,8 @@ static int BinFixedShapes( b2fFluid* f, float range )
 
 	for ( int b = 0; b < f->bodyCount; ++b )
 	{
-		f->bodies[b].transform = b2Body_GetTransform( f->bodies[b].id );
+		b2Body* body = b2Array_Get( f->world->bodies, f->bodies[b].id.index1 - 1 );
+		f->bodies[b].transform = b2GetBodyTransformQuick( f->world, body );
 		f->bodies[b].shapeCount = 0;
 	}
 
@@ -430,7 +459,8 @@ static void FindPatches( b2fFluid* f )
 		b2fBody* body = f->bodies + bodyIndex;
 		body->firstPatch = f->patchCount;
 		body->patchCount = 0;
-		if ( body->adheres || b2Body_IsAwake( body->id ) == false )
+		const b2Body* source = b2Array_Get( f->world->bodies, body->id.index1 - 1 );
+		if ( body->adheres || source->setIndex != b2_awakeSet )
 		{
 			continue;
 		}
@@ -492,27 +522,38 @@ static void FindPatches( b2fFluid* f )
 
 		// Shapes pressed into each other have no direction between them, so those come from Box2D's contacts, and so
 		// do moving bodies that touch, which bodies joined so as not to collide never do
-		enum { contactCapacity = 32 };
-		b2ContactData contacts[contactCapacity];
-		int count = b2Body_GetContactData( body->id, contacts, contactCapacity );
-		for ( int i = 0; i < count; ++i )
+		// Every touching contact in the body's list
+		b2World* world = f->world;
+		int contactKey = source->headContactKey;
+		while ( contactKey != B2_NULL_INDEX )
 		{
-			const b2Manifold* manifold = &contacts[i].manifold;
-			// Liquid fills the space of a shape it passes through, so a touch there leaves no gap it misses
-			if ( f->shapesDropped && ( b2fLiquidsCollidingWith( f, b2Shape_GetFilter( contacts[i].shapeIdA ) ) == 0 ||
-									   b2fLiquidsCollidingWith( f, b2Shape_GetFilter( contacts[i].shapeIdB ) ) == 0 ) )
+			b2Contact* contact = b2Array_Get( world->contacts, contactKey >> 1 );
+			contactKey = contact->edges[contactKey & 1].nextKey;
+			if ( ( contact->flags & b2_contactTouchingFlag ) == 0 )
 			{
 				continue;
 			}
-			b2BodyId bodyA = b2Shape_GetBody( contacts[i].shapeIdA ), bodyB = b2Shape_GetBody( contacts[i].shapeIdB );
-			bool first = B2_ID_EQUALS( bodyA, body->id );
-			b2BodyId otherId = first ? bodyB : bodyA;
-			int otherIndex = 0;
-			while ( otherIndex < f->bodyCount && B2_ID_EQUALS( f->bodies[otherIndex].id, otherId ) == false )
+
+			// Liquid fills the space of a shape it passes through, so a touch there leaves no gap it misses
+			const b2Shape* shapeA = b2Array_Get( world->shapes, contact->shapeIdA );
+			const b2Shape* shapeB = b2Array_Get( world->shapes, contact->shapeIdB );
+			if ( f->shapesDropped &&
+				 ( b2fLiquidsCollidingWith( f, shapeA->filter ) == 0 || b2fLiquidsCollidingWith( f, shapeB->filter ) == 0 ) )
 			{
-				otherIndex += 1;
+				continue;
 			}
-			if ( otherIndex < f->bodyCount && manifold->pointCount > 0 && ( f->bodies[otherIndex].adheres == false || manifold->points[0].separation <= 0.0f ) )
+
+			// The other body counts only if some shape of it was gathered this step
+			bool first = shapeA->bodyId == body->id.index1 - 1;
+			int otherId = first ? shapeB->bodyId : shapeA->bodyId;
+			int otherIndex = otherId < f->bodyOfIndexCapacity ? f->bodyOfIndex[otherId] : -1;
+			if ( otherIndex < 0 || otherIndex >= f->bodyCount || f->bodies[otherIndex].id.index1 - 1 != otherId )
+			{
+				continue;
+			}
+
+			const b2Manifold* manifold = &b2GetContactSim( world, contact )->manifold;
+			if ( manifold->pointCount > 0 && ( f->bodies[otherIndex].adheres == false || manifold->points[0].separation <= 0.0f ) )
 			{
 				AddPatch( f, bodyIndex, otherIndex, first ? b2Neg( manifold->normal ) : manifold->normal );
 			}
@@ -523,19 +564,6 @@ static void FindPatches( b2fFluid* f )
 // Shapes near the liquid, gathered once a step
 void b2fGatherShapes( b2fFluid* f )
 {
-	// A sleeping body cannot feel the liquid, so it would never lift off. The particles still find it, as a wall, and
-	// a body that had liquid within reach last step wakes now. Waking one body wakes the bodies it rests on or
-	// against. One that had none may sleep, however near the liquid's bounds it is. A body the liquid reaches while
-	// it sleeps holds still for that one step. Still water keeps a floating body awake, as it did before.
-	for ( int i = 0; i < f->bodyCount; ++i )
-	{
-		b2BodyId id = f->bodies[i].id;
-		if ( f->bodies[i].reached && b2Body_IsValid( id ) && b2Body_GetType( id ) == b2_dynamicBody && b2Body_IsAwake( id ) == false )
-		{
-			b2Body_SetAwake( id, true );
-		}
-	}
-
 	f->shapeCount = 0;
 	f->bodyCount = 0;
 	f->shapesFiltered = false;
@@ -558,11 +586,18 @@ void b2fGatherShapes( b2fFluid* f )
 			maxSpeed2 = maxSpeed2 > speed2 ? maxSpeed2 : speed2;
 		}
 
-		// A generous margin, since bodies and particles both move during the step: a metre in the caller's units
-		float grow = f->radius + 0.1f * sqrtf( maxSpeed2 ) + b2_lengthUnitsPerMeter;
+		// The reach of the coarsest particle, and a generous margin, since bodies and particles both move during the
+		// step: a metre in the caller's units
+		float grow = f->maxRadius + 0.1f * sqrtf( maxSpeed2 ) + b2_lengthUnitsPerMeter;
 		b2Pos origin = { minX, minY };
 		b2AABB aabb = { { -grow, -grow }, { (float)( maxX - minX ) + grow, (float)( maxY - minY ) + grow } };
-		b2World_OverlapAABB( f->worldId, origin, aabb, b2DefaultQueryFilter(), OverlapShape, f );
+		// Every shape, in the order b2World_OverlapAABB would give them: the trees of static, kinematic and dynamic
+		// bodies in turn. Shapes are left out by the liquids' filters alone, in OverlapShape.
+		b2AABB box = b2OffsetAABB( aabb, origin );
+		for ( int i = 0; i < b2_bodyTypeCount; ++i )
+		{
+			b2DynamicTree_OverlapAABB( f->world->broadPhase.trees + i, box, B2_DEFAULT_MASK_BITS, OverlapShape, f );
+		}
 	}
 
 	int needed = f->bodyCount * B2F_CHUNK_COUNT;
@@ -573,6 +608,22 @@ void b2fGatherShapes( b2fFluid* f )
 	}
 
 	FindPatches( f );
+}
+
+// A sleeping body cannot feel the liquid, so it would never lift off. The particles still find it, as a wall, and a
+// body the liquid reached during the step wakes now, after it, with the bodies it rests on or against. It held still
+// for that one step. Awake bodies with liquid in reach did not fall asleep (RecordReactions), so these are bodies
+// that slept before the liquid came; one the liquid never reaches may sleep, however near the liquid it is.
+void b2fWakeReached( b2fFluid* f )
+{
+	for ( int i = 0; i < f->bodyCount; ++i )
+	{
+		const b2fBody* body = f->bodies + i;
+		if ( body->reached && body->adheres == false )
+		{
+			b2WakeBody( f->world, b2Array_Get( f->world->bodies, body->id.index1 - 1 ) );
+		}
+	}
 }
 
 static inline void SegmentDistance( b2Vec2 p, b2Vec2 a, b2Vec2 b, float* distance, b2Vec2* normal )
@@ -1126,7 +1177,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 // What b2Fluid_GetBodyState reports, summed over the step: the liquid's push once patches are applied, before added
 // mass shares the body's change of motion with the liquid, and the share of the body under liquid, the one patches
 // use, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies, except
-// that a body with liquid within reach, asleep or not, is woken at the next step.
+// sleep: an awake body with liquid within reach does not fall asleep this step, and a sleeping one wakes after it
+// (b2fWakeReached).
 static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
@@ -1149,6 +1201,16 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 			continue;
 		}
 
+		// Liquid in reach keeps a body moved by forces from sleeping. Box2D adds the step's time to sleepTime after
+		// the substeps, and puts an island to sleep only once each of its bodies has been slow for B2_TIME_TO_SLEEP,
+		// so the body and its island stay awake until that long after the liquid last reached it. A body floating
+		// in still liquid moves slower than the sleep threshold, but the liquid holds it up only while it is awake;
+		// asleep it is a wall that feels nothing. Without this it slept for a step and was woken about once a second.
+		if ( body->adheres == false )
+		{
+			b2Array_Get( f->world->bodies, body->id.index1 - 1 )->sleepTime = 0.0f;
+		}
+
 		// Without gravity there is no under, and only liquid all round counts
 		body->stepWet = true;
 		float share = g > 0.0f ? SubmergedShare( body, total ) : 0.0f;
@@ -1156,20 +1218,27 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 	}
 }
 
+// Changes an awake body's velocity in Box2D's state, as b2Body_ApplyLinearImpulseToCenter does
+static void ApplyImpulse( b2fBody* body, b2Vec2 impulse, float angularImpulse )
+{
+	body->state->linearVelocity = b2MulAdd( body->state->linearVelocity, body->motion.invMass, impulse );
+	body->state->angularVelocity += body->motion.invInertia * angularImpulse;
+}
+
 // The body and the liquid within its reach take the change of the body's motion this substep as one lump: the
 // liquid's push, and what Box2D added since the last substep. A light body then speeds up about as a body in
 // liquid does, rather than as one in air pushed by the liquid, and the liquid near it is carried along. A body
 // floating or resting at a steady speed has no change of motion to share, so nothing changes for it. The lump's
 // mass, first moment and inertia about the centre of mass give a 3x3 solve, which keeps momentum.
-static void Respond( b2SubStepContext* context, b2fBody* body, const b2fReaction* total )
+static void Respond( b2fBody* body, const b2fReaction* total )
 {
-	const b2SubStepBody* motion = &body->motion;
+	const b2fMotion* motion = &body->motion;
 	body->sharing = false;
 	if ( motion->invMass == 0.0f || total->mass <= 0.0f )
 	{
 		if ( total->x != 0.0f || total->y != 0.0f || total->angular != 0.0f )
 		{
-			b2SubStep_ApplyImpulse( context, body->id, ( b2Vec2 ){ total->x, total->y }, total->angular );
+			ApplyImpulse( body, ( b2Vec2 ){ total->x, total->y }, total->angular );
 			body->lastVelocity = b2MulAdd( body->lastVelocity, motion->invMass, ( b2Vec2 ){ total->x, total->y } );
 			body->lastAngularVelocity += motion->invInertia * total->angular;
 		}
@@ -1194,7 +1263,7 @@ static void Respond( b2SubStepContext* context, b2fBody* body, const b2fReaction
 
 	b2Vec2 bodyDelta = b2Sub( dv, body->solverDelta );
 	float bodyAngularDelta = motion->invInertia > 0.0f ? dw - body->solverAngularDelta : 0.0f;
-	b2SubStep_ApplyImpulse( context, body->id, b2MulSV( bodyMass, bodyDelta ), bodyInertia * bodyAngularDelta );
+	ApplyImpulse( body, b2MulSV( bodyMass, bodyDelta ), bodyInertia * bodyAngularDelta );
 	body->lastVelocity = b2Add( body->lastVelocity, bodyDelta );
 	body->lastAngularVelocity += bodyAngularDelta;
 
@@ -1233,12 +1302,44 @@ static void ShareTask( int start, int end, int worker, void* context )
 
 static void SetShapeBounds( b2fFluid* f );
 
-void b2fUpdateBodies( b2fFluid* f, b2SubStepContext* context )
+// A body's motion part way through a step, from its sim, which holds where it was at the start of the step, and its
+// state, which holds its velocity and how far it has moved since then. A sleeping body has no state and is still.
+static void ReadMotion( b2World* world, b2fBody* body )
+{
+	const b2Body* source = b2Array_Get( world->bodies, body->id.index1 - 1 );
+	b2SolverSet* set = b2Array_Get( world->solverSets, source->setIndex );
+	const b2BodySim* sim = b2Array_Get( set->bodySims, source->localIndex );
+	b2fMotion* motion = &body->motion;
+	motion->localCenter = sim->localCenter;
+	body->awake = source->setIndex == b2_awakeSet;
+	if ( body->awake )
+	{
+		b2BodyState* state = b2Array_Get( set->bodyStates, source->localIndex );
+		body->state = state;
+		motion->center = b2OffsetPos( sim->center, state->deltaPosition );
+		motion->rotation = b2NormalizeRot( b2MulRot( state->deltaRotation, sim->transform.q ) );
+		motion->linearVelocity = state->linearVelocity;
+		motion->angularVelocity = state->angularVelocity;
+		motion->invMass = sim->invMass;
+		motion->invInertia = sim->invInertia;
+		return;
+	}
+
+	body->state = NULL;
+	motion->center = sim->center;
+	motion->rotation = sim->transform.q;
+	motion->linearVelocity = b2Vec2_zero;
+	motion->angularVelocity = 0.0f;
+	motion->invMass = 0.0f;
+	motion->invInertia = 0.0f;
+}
+
+void b2fUpdateBodies( b2fFluid* f )
 {
 	for ( int i = 0; i < f->bodyCount; ++i )
 	{
 		b2fBody* body = f->bodies + i;
-		body->awake = b2SubStep_GetBodyMotion( context, body->id, &body->motion );
+		ReadMotion( f->world, body );
 		body->solverDelta = body->awake ? b2Sub( body->motion.linearVelocity, body->lastVelocity ) : b2Vec2_zero;
 		body->solverAngularDelta = body->awake ? body->motion.angularVelocity - body->lastAngularVelocity : 0.0f;
 		body->lastVelocity = body->motion.linearVelocity;
@@ -1260,9 +1361,12 @@ void b2fHoldBodies( b2fFluid* f )
 	for ( int i = 0; i < f->bodyCount; ++i )
 	{
 		b2fBody* body = f->bodies + i;
-		b2WorldTransform transform = b2Body_GetTransform( body->id );
-		b2Vec2 localCenter = b2Body_GetLocalCenter( body->id );
-		body->motion = ( b2SubStepBody ){ .rotation = transform.q, .localCenter = localCenter };
+		b2Body* source = b2Array_Get( f->world->bodies, body->id.index1 - 1 );
+		const b2BodySim* sim = b2GetBodySim( f->world, source );
+		b2WorldTransform transform = sim->transform;
+		b2Vec2 localCenter = sim->localCenter;
+		body->motion = ( b2fMotion ){ .rotation = transform.q, .localCenter = localCenter };
+		body->state = NULL;
 		body->origin = transform.p;
 		body->center = b2OffsetPos( transform.p, b2RotateVector( transform.q, localCenter ) );
 		body->motion.center = body->center;
@@ -1385,7 +1489,7 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 		b2fBody* body = f->bodies + i;
 		if ( body->awake )
 		{
-			Respond( context, body, totals + i );
+			Respond( body, totals + i );
 			sharing = sharing || body->sharing;
 		}
 		else

@@ -6,7 +6,7 @@
 // LAB_FLOOR (tiles of the tank's floor, below 0 a chain) with LAB_FLOOR_MIXED and LAB_FLOOR_SEGMENTS, LAB_LIQUID=width,height,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings, LAB_CAPACITY among them. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES and LAB_SEAMS (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
+// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_SLEEPS, LAB_STATE, LAB_HOLES and LAB_SEAMS (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
 // LAB_FRAME_EVERY, LAB_START (every so many frames), and LAB_DUMP=frame,path (every particle after that frame). LAB_POOL_SHAPE
 // spawns the Deep Pool's liquid as a circle (2) or a hexagon (3) instead of a box. LAB_HZ sets the step rate, 60 by default; frames count steps, and
 // the probes that print seconds assume 60 except LAB_START. LAB_WORLD_GRAVITY=x,y sets the world's gravity.
@@ -621,6 +621,37 @@ int main( int argc, char** argv )
 			float stepTime = b2GetMilliseconds( stepTicks );
 			b2FluidProfile p = b2Fluid_GetProfile( fluid );
 
+			// LAB_SLEEPS: a SLEEP line for each body that fell asleep this step, with the step and the body's index, and a
+			// WAKE line when a body of the scene is awake again after a step, with how many steps it slept
+			if ( getenv( "LAB_SLEEPS" ) )
+			{
+				static int asleepSince[LAB_MAX_BODIES];
+				b2BodyEvents bodyEvents = b2World_GetBodyEvents( worldId );
+				for ( int e = 0; e < bodyEvents.moveCount; ++e )
+				{
+					if ( bodyEvents.moveEvents[e].fellAsleep )
+					{
+						printf( "SLEEP %d body %d\n", i, bodyEvents.moveEvents[e].bodyId.index1 - 1 );
+					}
+				}
+				for ( int k = 0; k < scene.bodyCount; ++k )
+				{
+					bool awake = b2Body_GetType( scene.bodies[k] ) == b2_staticBody || b2Body_IsAwake( scene.bodies[k] );
+					if ( i == 0 || awake )
+					{
+						if ( i > 0 && asleepSince[k] >= 0 )
+						{
+							printf( "WAKE %d body %d after %d steps\n", i, scene.bodies[k].index1 - 1, i - asleepSince[k] );
+						}
+						asleepSince[k] = awake ? -1 : i;
+					}
+					else if ( asleepSince[k] < 0 )
+					{
+						asleepSince[k] = i;
+					}
+				}
+			}
+
 			// LAB_START: how liquid settles after it spawns. Every so many frames: the particle count and its peak so far,
 			// size changes, the rms of density over rest less one, the same less the mean of a band 0.25 m high, which takes
 			// out the weight's squeeze and leaves the noise, and the rms and the largest speed. The first step's time comes first.
@@ -769,6 +800,7 @@ int main( int argc, char** argv )
 				printf( "LV %d %.4f n=%d fine %d at y %.2f, coarse %d at y %.2f\n", i, my / m, n, fine, fine > 0 ? fineY / fine : 0.0,
 						coarse, coarse > 0 ? coarseY / coarse : 0.0 );
 			}
+			sum.prepare += p.prepare;
 			sum.sort += p.sort;
 			sum.density += p.density;
 			sum.collide += p.collide;
@@ -1018,8 +1050,8 @@ int main( int argc, char** argv )
 		}
 
 		float f = (float)frames;
-		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f) top=%.2f hash=%016llx\n",
-				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, top,
+		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f) prepare %.2f top=%.2f hash=%016llx\n",
+				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, sum.prepare / f, top,
 				(unsigned long long)hash );
 		printf( "  leaked %d, measure %.3f ms/frame, capacity %d\n", scene.leaked, measureSum / f, b2Fluid_GetCapacity( fluid ) );
 		if ( w == ( oneRun ? 2u : 0u ) )
