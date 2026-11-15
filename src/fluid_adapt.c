@@ -49,6 +49,36 @@ enum
 // layers of the Three Liquids scene were still settling after 40 seconds at ratio 10; at 2 they were flat by 20.
 #define B2F_INTERFACE_FILL 2.0
 
+// How full liquid at rest packs a lattice at particleSpacing, so that a box counts as full against what the liquid
+// holds when still rather than against the spawn lattice. Liquid rests where near pressure's push balances two pulls,
+// cohesion's and pressure's below rest density, and its packing follows their sum over the push. In weightless drops
+// of cohesion 0.025 to 0.3, tensilePressure 0 to 1, and nearStiffness and stiffness halved and doubled, the 43 that
+// held together lie on this line to within 0.05, and 0.085 at worst: 0.94 for the default liquid, 1.04 for oil and
+// mercury, 1.21 for honey and 1.29 for slime. It stops rising near 1.3. Drops with a sum below about 0.9 fly apart,
+// and pools of such liquid rest at about 0.9, which the floor follows. Weight packs liquid tighter still, so still
+// liquid at any depth reads at least this. A fit to the solver's pair rule: a change to the kernel or the terms means
+// measuring it again, as the fill within 0.6 of the radius of a weightless drop 3 m across, of uniform particles at
+// the default spacing, after 15 s.
+#define B2F_PACKING_BASE 0.782f
+#define B2F_PACKING_SLOPE 0.17f
+#define B2F_PACKING_MIN 0.87f
+#define B2F_PACKING_MAX 1.3f
+// Pressure's pull, for stiffness times tensilePressure, as cohesion
+#define B2F_PACKING_TENSILE 2.5f
+// How full the spawn lattice packs, at B2F_SPAWN_SPACING of the solver's spacings: ( B2F_REST_PITCH / 1.09 )^2
+#define B2F_SPAWN_PACKING 1.0652f
+
+static float RestPacking( const b2LiquidTuning* t, float cohesion )
+{
+	if ( t->nearStiffness <= 0.0f )
+	{
+		return B2F_PACKING_MAX;
+	}
+	float pull = ( cohesion + B2F_PACKING_TENSILE * t->stiffness * t->tensilePressure ) / t->nearStiffness;
+	float packing = B2F_PACKING_BASE + B2F_PACKING_SLOPE * pull;
+	return packing < B2F_PACKING_MIN ? B2F_PACKING_MIN : ( packing > B2F_PACKING_MAX ? B2F_PACKING_MAX : packing );
+}
+
 // Mass found in a box, compared with a full one. A box that is all liquid says the particle is at least that deep.
 // Going from large to small, the first full box gives the depth. Anything that is not liquid leaves a box short,
 // whether air, a wall or a body, so liquid stays fine around all of them. Summed tables make every box four
@@ -78,9 +108,11 @@ static inline bool Takes( const b2fFluid* f, int i, int part, const b2fBox* near
 }
 
 // Boxes count the particles of the liquids in counted, a bit per liquid, and give depths to those in measured, of the
-// particles in part. Returns false, measuring nothing, when part has no particles.
+// particles in part. Returns false, measuring nothing, when part has no particles. While a spawn's sizes settle, before
+// it moves, its particles stand on the spawn lattice and count as liquid at rest, so it takes the sizes it keeps once
+// it has loosened or tightened to rest: counted by area, water would read over-full there and honey short.
 static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach, const float* perMetre, bool wantFlow,
-						uint32_t counted, uint32_t measured, int part, const b2fBox* near )
+						uint32_t counted, uint32_t measured, int part, const b2fBox* near, bool settle )
 {
 	b2fCoord minX = 0.0f, maxX = 0.0f, minY = 0.0f, maxY = 0.0f;
 	float largest = 0.0f;
@@ -143,9 +175,15 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	memset( f->boxPy, 0, (size_t)nodes * sizeof( double ) );
 	memset( f->boxWeight, 0, (size_t)nodes * sizeof( double ) );
 
-	// Mass here is the area a particle fills at rest, whatever its liquid, so liquids of other densities fill a box
-	// the same
-	float fineSize = f->def.particleSpacing, inverse = 1.0f / ( fineSize * fineSize );
+	// Mass here is the area a particle fills at rest, whatever its liquid's density, over how full that liquid packs
+	// when still, so each liquid fills a box to 1 at rest
+	float fineSize = f->def.particleSpacing, inverse[B2F_MAX_LIQUIDS];
+	float spawnInverse = 1.0f / ( fineSize * fineSize * B2F_SPAWN_PACKING );
+	for ( int l = 0; l < f->liquidCount; ++l )
+	{
+		const b2LiquidDef* def = &f->liquids[l].def;
+		inverse[l] = 1.0f / ( fineSize * fineSize * RestPacking( &def->tuning, def->cohesion ) );
+	}
 	for ( int i = 0; i < f->count; ++i )
 	{
 		if ( ( counted >> f->liquid[i] & 1u ) == 0 || Takes( f, i, part, near ) == false )
@@ -154,12 +192,14 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		}
 		int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
 		int c = ( cy + 1 ) * stride + cx + 1;
-		double m = f->fineArea * f->size[i] * f->size[i] * inverse;
+		int l = f->liquid[i];
+		bool spawned = settle && ( f->coarsenLiquids >> l & 1u ) != 0 && f->id[i] >= f->coarsenFrom[l];
+		double m = f->fineArea * f->size[i] * f->size[i] * ( spawned ? spawnInverse : inverse[l] );
 		f->boxMass[c] += m;
 		f->boxPx[c] += m * f->vx[i];
 		f->boxPy[c] += m * f->vy[i];
 		// Weightless liquid is squeezed by nothing, so squeeze says nothing about its depth
-		float slope = perMetre[f->liquid[i]];
+		float slope = perMetre[l];
 		float squeezeDepth = slope > 0.0f ? ( f->rho[i] / f->restDensity - 1.0f - B2F_SQUEEZE_SURFACE ) * ( f->size[i] / fineSize ) / slope : 0.0f;
 		f->boxWeight[c] += m * ( squeezeDepth > 0.0f ? squeezeDepth : 0.0f );
 	}
@@ -212,8 +252,8 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	int flowSize = (int)( B2F_FLOW_BOX * b2fLatticeSize( largest ) / cell + 0.5f );
 	flowSize = flowSize < 1 ? 1 : flowSize;
 
-	// Liquid at rest stands at the spacing it spawns at. Boxes count mass as area.
-	double fullMass = f->fineArea / ( 0.8660254 * spacing * spacing ) * cell * cell / ( B2F_SPAWN_SPACING * B2F_SPAWN_SPACING );
+	// A cell's mass when full: a lattice at particleSpacing, which mass over packing makes liquid at rest
+	double fullMass = f->fineArea / ( 0.8660254 * fineSize * fineSize ) * cell * cell;
 	double full = f->def.adaptiveFullBox;
 	for ( int y = 0; y < height; ++y )
 	{
@@ -327,18 +367,18 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 // grid's border of it, are measured apart from the rest, each in cells over their own bounds. Particles away from the
 // bulk count only each other, so a stray drop reads as a drop, and a pool far away as a pool, with cells as coarse as
 // the spread of everything outside the bulk takes.
-static void MeasureDepth( b2fFluid* f, float reach, const float* perMetre, bool wantFlow, uint32_t counted, uint32_t measured )
+static void MeasureDepth( b2fFluid* f, float reach, const float* perMetre, bool wantFlow, uint32_t counted, uint32_t measured, bool settle )
 {
 	if ( f->gridBulkOnly == false )
 	{
-		BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_allParticles, NULL );
+		BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_allParticles, NULL, settle );
 		return;
 	}
 
 	float margin = (float)f->gridBorder * f->gridCell;
 	b2fBox near = { f->gridBulk.minX - margin, f->gridBulk.minY - margin, f->gridBulk.maxX + margin, f->gridBulk.maxY + margin };
-	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_nearBulk, &near );
-	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_awayFromBulk, &near );
+	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_nearBulk, &near, settle );
+	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_awayFromBulk, &near, settle );
 }
 
 // What the size pass reads per liquid
@@ -402,7 +442,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	uint64_t ticks = b2GetTicks();
 	if ( f->liquidsFiltered == false )
 	{
-		MeasureDepth( f, deepest, perMetre, wantFlow, UINT32_MAX, UINT32_MAX );
+		MeasureDepth( f, deepest, perMetre, wantFlow, UINT32_MAX, UINT32_MAX, settle );
 	}
 	else
 	{
@@ -418,7 +458,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			{
 				measured |= f->liquids[k].alive && f->liquidSees[k] == f->liquidSees[l] ? 1u << k : 0u;
 			}
-			MeasureDepth( f, deepest, perMetre, wantFlow, f->liquidSees[l], measured );
+			MeasureDepth( f, deepest, perMetre, wantFlow, f->liquidSees[l], measured, settle );
 			done |= measured;
 		}
 	}
