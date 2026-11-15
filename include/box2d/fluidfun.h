@@ -147,8 +147,8 @@ typedef struct b2FluidDef
 	int internalValue;
 } b2FluidDef;
 
-/// Timing of the last step in milliseconds. Total is the sum of sort, density and collide over the substeps; prepare
-/// and sizes come before and after them, and are not in it.
+/// Timing of the last step in milliseconds. Total is the fluid's whole step: prepare, the substeps, of which sort,
+/// density and collide are the parts, and the end of the step, of which sizes is the larger part.
 typedef struct b2FluidProfile
 {
 	/// Before the substeps: coarsening spawns, emitters and gathering the shapes near the liquid
@@ -157,13 +157,13 @@ typedef struct b2FluidProfile
 	/// Density relaxation and viscosity, which share a pass
 	float density;
 	float collide;
-	float total;
-	/// Splits, merges and mass shares at the end of the last step
-	int sizeChanges;
 	/// After the substeps, changing sizes
 	float sizes;
 	/// Part of sizes spent measuring depth, flow and distance to bodies
 	float measure;
+	float total;
+	/// Splits, merges and mass shares at the end of the last step
+	int sizeChanges;
 } b2FluidProfile;
 
 /// Use these to initialize the defs, as for every Box2D def: create and set calls check that they came from here.

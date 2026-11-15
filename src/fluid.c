@@ -756,6 +756,7 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 	f->stepSubSteps = 0;
 	memset( &f->profile, 0, sizeof( f->profile ) );
 	f->profile.prepare = b2GetMilliseconds( ticks );
+	f->profile.total = f->profile.prepare;
 }
 
 // Sizes change once the step is done, reading the grid, densities, shapes and bodies of its last substep, so nothing
@@ -763,6 +764,7 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 // moves. The step's reports come first, from the particles as the last substep left them.
 void b2FinishFluid( b2fFluid* f )
 {
+	uint64_t start = b2GetTicks();
 	b2fWakeReached( f );
 	b2fFinishStep( f );
 
@@ -773,6 +775,7 @@ void b2FinishFluid( b2fFluid* f )
 		f->profile.sizeChanges = f->sizeChanges;
 		f->profile.measure = f->measureTime;
 	}
+	f->profile.total += b2GetMilliseconds( start );
 }
 
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFluid* f )
