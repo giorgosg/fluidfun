@@ -95,20 +95,31 @@ static inline float b2fLatticeSize( float size )
 // this list, so a new field is one entry here. Densities are among them since the caller reads them between steps,
 // and the coarsening of spawns across the sorts between its passes.
 #define B2F_PARTICLE_FIELDS( X )                                                                                        \
-	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size )            \
-		X( float, speedMemory ) X( float, rho ) X( int, id ) X( unsigned char, liquid )
+	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size ) X( float, rho ) X( int, id )        \
+		X( unsigned char, liquid )
+
+// A particle field only adaptiveSpeed reads, made once some adaptive liquid has it (UpdateLiquids), and then
+// sorted, copied and cleared with the particle fields
+#define B2F_SPEED_FIELDS( X ) X( float, speedMemory )
 
 // Working values that compaction carries along with the particle fields, though sorting does not: the size pass's own
-// compaction keeps the classes and targets for the splits that follow it
+// compaction keeps the classes and targets for the splits that follow it. Only adaptive sizes use them.
 #define B2F_CARRIED_FIELDS( X )                                                                                         \
 	X( unsigned char, adaptClass ) X( float, adaptTarget )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. marked is
-// scratch for the calls that remove particles, and adaptUsed is the size pass's own.
+// scratch for the calls that remove particles.
 #define B2F_WORK_FIELDS( X )                                                                                            \
-	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rhoNear ) X( float, pressure ) X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) \
-		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, window ) X( int, sortCell ) X( int, sortBlock ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
-			X( float, adaptMass ) X( float, adaptPressure ) X( unsigned char, adaptUsed ) X( unsigned char, marked )
+	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rhoNear ) X( float, pressure )          \
+		X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) X( int, contactCount )             \
+			X( int, pairCount ) X( int, cell ) X( int, sortCell ) X( int, permutation ) X( unsigned char, marked )
+
+// Working values only adaptive sizes use: each particle's search window and grid block, which the sort fills when
+// sizes vary, and the size pass's measurements and scratch. Made with the carried fields once some liquid is
+// adaptive.
+#define B2F_ADAPT_FIELDS( X )                                                                                           \
+	X( int, window ) X( int, sortBlock ) X( float, adaptDepth ) X( float, adaptFlow ) X( float, adaptMass )            \
+		X( float, adaptPressure ) X( unsigned char, adaptUsed )
 
 #define B2F_DECLARE_FIELD( type, name ) type* name;
 
@@ -146,6 +157,8 @@ typedef struct b2fShape
 	b2Vec2 p1, p2;
 	float radius;
 	b2Polygon polygon;
+	// A polygon thinner than a particle spacing, which a fast particle can cross within one substep
+	bool thin;
 	// World bounds this substep, grown by the particle radius
 	b2fCoord minX, minY, maxX, maxY;
 	// The shape's filter, and a bit for each liquid it collides with, by index. A shape no liquid collides with is not
@@ -358,8 +371,8 @@ struct b2fFluid
 	float cellSize;	 // smallest grid cell, h plus a skin, since moves after the sort outdate the grid
 	float fineArea;	 // the area a finest particle fills at rest, which adaptive sizes count mass in, whatever the liquid
 	float restDensity;
-	// Room for this many particles in every per-particle array, which b2fGrow doubles up to maxCapacity
-	int capacity, maxCapacity;
+	// Room for this many particles in every per-particle array, which b2fGrow doubles up to def.maxCapacity
+	int capacity;
 	int count;
 
 	b2fEmitter emitters[B2F_MAX_EMITTERS];
@@ -382,13 +395,17 @@ struct b2fFluid
 	bool shapesDropped;
 
 	B2F_PARTICLE_FIELDS( B2F_DECLARE_FIELD )
+	B2F_SPEED_FIELDS( B2F_DECLARE_FIELD )
 	// The same fields in the order the next sort writes, swapped in afterwards
 	struct
 	{
 		B2F_PARTICLE_FIELDS( B2F_DECLARE_FIELD )
+		B2F_SPEED_FIELDS( B2F_DECLARE_FIELD )
 	} sorted;
-	B2F_CARRIED_FIELDS( B2F_DECLARE_FIELD )
 	B2F_WORK_FIELDS( B2F_DECLARE_FIELD )
+	// Only made once some liquid is adaptive, and then kept, grown and freed with the rest; NULL until then
+	B2F_CARRIED_FIELDS( B2F_DECLARE_FIELD )
+	B2F_ADAPT_FIELDS( B2F_DECLARE_FIELD )
 	b2fContact* contacts;
 	b2fPair* pairs;
 
@@ -490,6 +507,10 @@ static inline void b2fCopyParticle( b2fFluid* f, int to, int from )
 {
 #define B2F_COPY_FIELD( type, name ) f->name[to] = f->name[from];
 	B2F_PARTICLE_FIELDS( B2F_COPY_FIELD )
+	if ( f->speedMemory != NULL )
+	{
+		B2F_SPEED_FIELDS( B2F_COPY_FIELD )
+	}
 #undef B2F_COPY_FIELD
 	if ( f->springs != NULL )
 	{
@@ -501,6 +522,10 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 {
 #define B2F_CLEAR_FIELD( type, name ) f->name[i] = ( type ){ 0 };
 	B2F_PARTICLE_FIELDS( B2F_CLEAR_FIELD )
+	if ( f->speedMemory != NULL )
+	{
+		B2F_SPEED_FIELDS( B2F_CLEAR_FIELD )
+	}
 #undef B2F_CLEAR_FIELD
 	if ( f->springs != NULL )
 	{

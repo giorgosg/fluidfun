@@ -135,20 +135,22 @@ typedef struct b2FluidDef
 	float adaptiveFullBox;
 	/// How many particles the fluid makes room for at the start, over all its liquids. When a spawn, an emitter or a
 	/// particle splitting needs more, the fluid doubles its room, up to maxCapacity. Growing happens only between steps
-	/// and does not change how the liquid moves.
+	/// and does not change how the liquid moves. The default of 4096 is about 2 MB, and a scene with more grows into
+	/// it once.
 	int capacity;
-	/// The most particles the fluid will grow to hold. Each particle of room takes 537 bytes, and 814 to 834 once some
-	/// liquid has springs (569 and 844 to 864 when Box2D is built for large worlds), so the default of 1,000,000 is up to
-	/// 0.54 GB, or 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above
-	/// this is kept as the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it.
+	/// The most particles the fluid will grow to hold. Each particle of room takes 499 bytes with uniform sizes, 529
+	/// once some liquid has adaptive sizes, as the default liquid does, and 537 once one also has adaptiveSpeed;
+	/// springs add 280 to 296, and a build for large worlds 32 more. So the default of 1,000,000 is up to 0.54 GB, or
+	/// 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above this is kept as
+	/// the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it.
 	int maxCapacity;
 
 	/// Used internally to detect a valid definition. DO NOT SET.
 	int internalValue;
 } b2FluidDef;
 
-/// Timing of the last step in milliseconds. Total is the sum of sort, density and collide over the substeps; prepare
-/// and sizes come before and after them, and are not in it.
+/// Timing of the last step in milliseconds. Total is the fluid's whole step: prepare, the substeps, of which sort,
+/// density and collide are the parts, and the end of the step, of which sizes is the larger part.
 typedef struct b2FluidProfile
 {
 	/// Before the substeps: coarsening spawns, emitters and gathering the shapes near the liquid
@@ -157,13 +159,13 @@ typedef struct b2FluidProfile
 	/// Density relaxation and viscosity, which share a pass
 	float density;
 	float collide;
-	float total;
-	/// Splits, merges and mass shares at the end of the last step
-	int sizeChanges;
 	/// After the substeps, changing sizes
 	float sizes;
 	/// Part of sizes spent measuring depth, flow and distance to bodies
 	float measure;
+	float total;
+	/// Splits, merges and mass shares at the end of the last step
+	int sizeChanges;
 } b2FluidProfile;
 
 /// Use these to initialize the defs, as for every Box2D def: create and set calls check that they came from here.
@@ -188,6 +190,9 @@ B2_API b2LiquidDef b2MakeDoughDef( void );
 
 /// Give a world its fluid, which holds all of its liquids. A world has at most one, and b2World_Step steps it with
 /// the bodies. Returns b2_nullFluidId if the world already has one. Call between steps.
+///
+/// Box2D's recording (b2World_StartRecording) leaves the fluid out: none of the fluid's calls are recorded, so a
+/// recording of a world with a fluid replays without it, and bodies the liquid moved then go their own way.
 B2_API b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def );
 
 /// Remove a world's fluid and every particle in it. Destroying the world does this too. Call between steps.
@@ -405,6 +410,8 @@ typedef struct b2FluidParticles
 	int count;
 	/// World positions, in double when Box2D is built for large worlds
 	const b2Pos* positions;
+	/// Velocities as two arrays, x and y, rather than b2Vec2: that is how the solver keeps them, so reading them costs
+	/// no copy. The split is deliberate and stays.
 	const float* velocitiesX;
 	const float* velocitiesY;
 	/// The spacing of each particle, in the units of b2FluidDef::particleSpacing, so particleSpacing for a particle

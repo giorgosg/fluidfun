@@ -95,7 +95,7 @@ b2FluidDef b2DefaultFluidDef( void )
 	def.particleSpacing = 0.08f * b2_lengthUnitsPerMeter;
 	def.adaptiveDepth = 12.0f * b2_lengthUnitsPerMeter;
 	def.adaptiveFullBox = 0.9f;
-	def.capacity = 100000;
+	def.capacity = 4096;
 	def.maxCapacity = 1000000;
 	def.internalValue = B2_SECRET_COOKIE;
 	return def;
@@ -159,6 +159,7 @@ static void UpdateLiquids( b2fFluid* f )
 	float spacing = f->spacing;
 	f->adaptive = false;
 	f->springy = false;
+	bool fastSpeed = false;
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
 		b2fLiquid* liquid = f->liquids + a;
@@ -166,14 +167,35 @@ static void UpdateLiquids( b2fFluid* f )
 		f->cohesionBetween[a][a] = liquid->def.cohesion;
 		if ( liquid->alive )
 		{
-			f->adaptive = f->adaptive || liquid->def.tuning.adaptiveRatio > 1.0f;
+			bool adaptive = liquid->def.tuning.adaptiveRatio > 1.0f;
+			f->adaptive = f->adaptive || adaptive;
+			fastSpeed = fastSpeed || ( adaptive && liquid->def.tuning.adaptiveSpeed > 0.0f );
 			f->springy = f->springy || liquid->def.springStiffness > 0.0f;
 		}
 	}
 
+	// Fields only adaptive sizes use are made the first time some liquid needs them, zeroed, as they would have been
+	// at the start, and kept from then on
+	size_t n = (size_t)f->capacity + 1;
+	if ( f->adaptive && f->adaptMass == NULL )
+	{
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+		B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
+		B2F_ADAPT_FIELDS( B2F_ALLOC_FIELD )
+#undef B2F_ALLOC_FIELD
+	}
+	if ( fastSpeed && f->speedMemory == NULL )
+	{
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+#define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
+		B2F_SPEED_FIELDS( B2F_ALLOC_FIELD )
+		B2F_SPEED_FIELDS( B2F_ALLOC_SORTED )
+#undef B2F_ALLOC_FIELD
+#undef B2F_ALLOC_SORTED
+	}
+
 	if ( f->springy && f->springs == NULL )
 	{
-		size_t n = (size_t)f->capacity + 1;
 		f->springs = b2AllocZero( n * sizeof( b2fSprings ) );
 		f->sortedSprings = b2AllocZero( n * sizeof( b2fSprings ) );
 		f->idMap = b2Alloc( IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
@@ -283,7 +305,8 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->world = world;
 	f->def = *def;
 	f->capacity = def->capacity > 0 ? def->capacity : 0;
-	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
+	// Never below the room the fluid starts with, so the def holds the limit growing goes by
+	f->def.maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
 	f->spacing = b2fLatticeSize( def->particleSpacing );
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
@@ -297,7 +320,6 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 #define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_ALLOC_SORTED )
-	B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
 	B2F_WORK_FIELDS( B2F_ALLOC_FIELD )
 #undef B2F_ALLOC_FIELD
 #undef B2F_ALLOC_SORTED
@@ -330,8 +352,17 @@ void b2FreeFluid( b2fFluid* f )
 #define B2F_FREE_SORTED( type, name ) b2Free( f->sorted.name, n * sizeof( type ) );
 	B2F_PARTICLE_FIELDS( B2F_FREE_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_FREE_SORTED )
-	B2F_CARRIED_FIELDS( B2F_FREE_FIELD )
 	B2F_WORK_FIELDS( B2F_FREE_FIELD )
+	if ( f->adaptMass != NULL )
+	{
+		B2F_CARRIED_FIELDS( B2F_FREE_FIELD )
+		B2F_ADAPT_FIELDS( B2F_FREE_FIELD )
+	}
+	if ( f->speedMemory != NULL )
+	{
+		B2F_SPEED_FIELDS( B2F_FREE_FIELD )
+		B2F_SPEED_FIELDS( B2F_FREE_SORTED )
+	}
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
 	b2Free( f->contacts, n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
@@ -400,13 +431,12 @@ void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity )
 {
 	B2_CHECK_INPUT( maxCapacity >= 0 );
 	b2fFluid* f = b2fGetFluid( fluidId );
-	f->def.maxCapacity = maxCapacity;
-	f->maxCapacity = maxCapacity > f->capacity ? maxCapacity : f->capacity;
+	f->def.maxCapacity = maxCapacity > f->capacity ? maxCapacity : f->capacity;
 }
 
 int b2Fluid_GetMaxCapacity( b2FluidId fluidId )
 {
-	return b2fGetFluid( fluidId )->maxCapacity;
+	return b2fGetFluid( fluidId )->def.maxCapacity;
 }
 
 float b2Fluid_GetParticleSpacing( b2FluidId fluidId )
@@ -440,7 +470,7 @@ bool b2fGrow( b2fFluid* f, int needed )
 	{
 		return true;
 	}
-	if ( needed > f->maxCapacity )
+	if ( needed > f->def.maxCapacity )
 	{
 		return false;
 	}
@@ -450,14 +480,23 @@ bool b2fGrow( b2fFluid* f, int needed )
 	{
 		grown *= 2;
 	}
-	int old = f->capacity, capacity = grown < f->maxCapacity ? (int)grown : f->maxCapacity;
+	int old = f->capacity, capacity = grown < f->def.maxCapacity ? (int)grown : f->def.maxCapacity;
 
 #define B2F_GROW_FIELD( type, name ) f->name = Resize( f->name, old, capacity, sizeof( type ), true );
 #define B2F_GROW_SORTED( type, name ) f->sorted.name = Resize( f->sorted.name, old, capacity, sizeof( type ), true );
 	B2F_PARTICLE_FIELDS( B2F_GROW_FIELD )
 	B2F_PARTICLE_FIELDS( B2F_GROW_SORTED )
-	B2F_CARRIED_FIELDS( B2F_GROW_FIELD )
 	B2F_WORK_FIELDS( B2F_GROW_FIELD )
+	if ( f->adaptMass != NULL )
+	{
+		B2F_CARRIED_FIELDS( B2F_GROW_FIELD )
+		B2F_ADAPT_FIELDS( B2F_GROW_FIELD )
+	}
+	if ( f->speedMemory != NULL )
+	{
+		B2F_SPEED_FIELDS( B2F_GROW_FIELD )
+		B2F_SPEED_FIELDS( B2F_GROW_SORTED )
+	}
 #undef B2F_GROW_FIELD
 #undef B2F_GROW_SORTED
 	f->contacts = Resize( f->contacts, old, capacity, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ), true );
@@ -490,9 +529,12 @@ int b2fRemoveMarked( b2fFluid* f )
 		if ( kept != i )
 		{
 			b2fCopyParticle( f, kept, i );
+			if ( f->adaptMass != NULL )
+			{
 #define B2F_CARRY_FIELD( type, name ) f->name[kept] = f->name[i];
-			B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
+				B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
 #undef B2F_CARRY_FIELD
+			}
 		}
 		kept += 1;
 	}
@@ -601,7 +643,8 @@ b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 		return b2_nullLiquidId;
 	}
 
-	// The lowest free slot, so that the first liquid of a fluid is the one the uniform density pass reads
+	// The lowest free slot, so that a fluid can go on making and destroying liquids within B2_MAX_LIQUIDS. The lowest
+	// also keeps the first liquid of a fluid the one the uniform density pass reads.
 	int index = 0;
 	while ( index < f->liquidCount && f->liquids[index].alive )
 	{
@@ -659,6 +702,12 @@ void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
 	b2fFluid* f;
 	int index = b2fGetLiquid( liquidId, &f );
 	if ( IsValidLiquidDef( def ) == false )
+	{
+		return;
+	}
+	b2World* world = b2GetWorld( liquidId.world0 );
+	B2_ASSERT( world->locked == false );
+	if ( world->locked )
 	{
 		return;
 	}
@@ -756,6 +805,7 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 	f->stepSubSteps = 0;
 	memset( &f->profile, 0, sizeof( f->profile ) );
 	f->profile.prepare = b2GetMilliseconds( ticks );
+	f->profile.total = f->profile.prepare;
 }
 
 // Sizes change once the step is done, reading the grid, densities, shapes and bodies of its last substep, so nothing
@@ -763,6 +813,7 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 // moves. The step's reports come first, from the particles as the last substep left them.
 void b2FinishFluid( b2fFluid* f )
 {
+	uint64_t start = b2GetTicks();
 	b2fWakeReached( f );
 	b2fFinishStep( f );
 
@@ -773,6 +824,7 @@ void b2FinishFluid( b2fFluid* f )
 		f->profile.sizeChanges = f->sizeChanges;
 		f->profile.measure = f->measureTime;
 	}
+	f->profile.total += b2GetMilliseconds( start );
 }
 
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFluid* f )

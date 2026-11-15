@@ -86,8 +86,8 @@ public:
 		ImGui::Text( "Particles %d", b2Fluid_GetParticleCount( m_fluid ) );
 		b2FluidProfile p = b2Fluid_GetProfile( m_fluid );
 		ImGui::Text( "Fluid %.2f ms", p.total );
-		ImGui::Text( "sort %.2f", p.sort );
-		ImGui::Text( "density %.2f collide %.2f", p.density, p.collide );
+		ImGui::Text( "prepare %.2f sort %.2f", p.prepare, p.sort );
+		ImGui::Text( "density %.2f collide %.2f sizes %.2f", p.density, p.collide, p.sizes );
 
 		bool changed = false;
 		changed |= ImGui::SliderFloat( "Stiffness", &m_def->liquid.tuning.stiffness, 0.0f, 0.2f, "%.3f" );

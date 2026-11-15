@@ -191,6 +191,19 @@ static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 		{
 			shape.polygon = source->polygon;
 			shape.radius = shape.polygon.radius;
+			// Its thickness, the least depth behind any face, radius included
+			float thickness = FLT_MAX;
+			for ( int e = 0; e < shape.polygon.count; ++e )
+			{
+				float depth = 0.0f;
+				for ( int v = 0; v < shape.polygon.count; ++v )
+				{
+					float d = b2Dot( shape.polygon.normals[e], b2Sub( shape.polygon.vertices[e], shape.polygon.vertices[v] ) );
+					depth = depth > d ? depth : d;
+				}
+				thickness = thickness < depth ? thickness : depth;
+			}
+			shape.thin = thickness + 2.0f * shape.radius < f->def.particleSpacing;
 			b2MassData mass = b2ComputePolygonMass( &shape.polygon, 1.0f );
 			area = mass.mass;
 			center = mass.center;
@@ -326,25 +339,6 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 	bins->start[0] = 0;
 }
 
-// Where the list of a square goes on after shape si: the first of its shapes past si
-static int NextInBin( const b2fShapeBins* bins, int bin, int si )
-{
-	int lo = bins->start[bin], hi = bins->start[bin + 1];
-	while ( lo < hi )
-	{
-		int mid = lo + ( ( hi - lo ) >> 1 );
-		if ( bins->shapes[mid] <= si )
-		{
-			lo = mid + 1;
-		}
-		else
-		{
-			hi = mid;
-		}
-	}
-	return lo;
-}
-
 // Bins the shapes into the blocks of this substep's grid, once the particles are sorted and the shapes' bounds set.
 // Blocks of 1 or 2 cells a side measured no faster in the Tank, the Boat or 100 crates over a chain of 500 segments.
 static void BinShapes( b2fFluid* f )
@@ -364,24 +358,31 @@ static int CompareInts( const void* a, const void* b )
 	return ( x > y ) - ( x < y );
 }
 
-// A shape's bounds in the world, radius included, with its body where it is now
-static void SetBounds( b2fShape* s, b2WorldTransform transform )
+// A shape's bounds in the world with its body at origin turned by rotation, grown by grow. With a body, its lowest and
+// highest points along up, radius included, are widened to take the shape's.
+static void SetBounds( b2fShape* s, b2Pos origin, b2Rot rotation, float grow, b2fBody* body, b2Vec2 up )
 {
 	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
 	int count = s->type == b2_polygonShape ? s->polygon.count : 2;
 	for ( int j = 0; j < count; ++j )
 	{
 		b2Vec2 local = s->type == b2_polygonShape ? s->polygon.vertices[j] : ( j == 0 ? s->p1 : s->p2 );
-		b2Pos p = b2TransformWorldPoint( transform, local );
+		b2Pos p = b2OffsetPos( origin, b2RotateVector( rotation, local ) );
 		minX = minX < p.x ? minX : p.x;
 		minY = minY < p.y ? minY : p.y;
 		maxX = maxX > p.x ? maxX : p.x;
 		maxY = maxY > p.y ? maxY : p.y;
+		if ( body != NULL )
+		{
+			float height = b2Dot( b2SubPos( p, body->center ), up );
+			body->low = body->low < height - s->radius ? body->low : height - s->radius;
+			body->high = body->high > height + s->radius ? body->high : height + s->radius;
+		}
 	}
-	s->minX = minX - s->radius;
-	s->minY = minY - s->radius;
-	s->maxX = maxX + s->radius;
-	s->maxY = maxY + s->radius;
+	s->minX = minX - grow;
+	s->minY = minY - grow;
+	s->maxX = maxX + grow;
+	s->maxY = maxY + grow;
 }
 
 // Bins the shapes of bodies forces do not move, by their bounds with the bodies where they are at the start of the
@@ -415,7 +416,7 @@ static int BinFixedShapes( b2fFluid* f, float range )
 	{
 		b2fShape* s = f->shapes + si;
 		b2fBody* body = f->bodies + s->bodyIndex;
-		SetBounds( s, body->transform );
+		SetBounds( s, body->transform.p, body->transform.q, s->radius, NULL, b2Vec2_zero );
 		body->shapeCount += 1;
 		if ( body->adheres )
 		{
@@ -1065,8 +1066,9 @@ static void CollideTask( int start, int end, int worker, void* context )
 				}
 			}
 
-			// The shapes whose bounds could hold the particle, in order. A push can carry it into another square,
-			// whose list then goes on from the next shape.
+			// The shapes whose bounds could hold the particle, in order. A push that carries it into another square
+			// leaves it on this square's list. Pushes are short next to a square, and in the test scenes none brought a
+			// particle into the bounds of a shape missing from the list.
 			int bin = BinOf( bins, f->pos[i].x, f->pos[i].y );
 			for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd; ++k )
 			{
@@ -1119,6 +1121,46 @@ static void CollideTask( int start, int end, int worker, void* context )
 					}
 				}
 
+				// A polygon thinner than a particle spacing: a fast particle can land past its middle, where the
+				// nearest face is the far one, or pass it whole. If its path this substep entered through a face other
+				// than the one the distance finds, or the distance finds none, it goes back out of the face it came in
+				// by.
+				if ( s->type == b2_polygonShape && s->thin )
+				{
+					b2Vec2 before = b2InvRotateVector( body->motion.rotation, b2SubPos( f->prev[i], body->origin ) );
+					const b2Polygon* polygon = &s->polygon;
+					float earliest = 2.0f, entryDistance = 0.0f;
+					b2Vec2 entryNormal = b2Vec2_zero;
+					for ( int e = 0; e < polygon->count; ++e )
+					{
+						b2Vec2 v = polygon->vertices[e], n = polygon->normals[e];
+						float sideBefore = b2Dot( n, b2Sub( before, v ) ), sideNow = b2Dot( n, b2Sub( local, v ) );
+						if ( sideBefore < 0.0f || sideNow >= 0.0f )
+						{
+							continue;
+						}
+						float t = sideBefore / ( sideBefore - sideNow );
+						b2Vec2 edge = b2Sub( polygon->vertices[e + 1 < polygon->count ? e + 1 : 0], v );
+						float along = b2Dot( b2Sub( b2Lerp( before, local, t ), v ), edge ) / b2Dot( edge, edge );
+						if ( along >= 0.0f && along <= 1.0f && t < earliest )
+						{
+							earliest = t;
+							entryDistance = sideNow - s->radius;
+							entryNormal = n;
+						}
+					}
+					if ( earliest <= 1.0f )
+					{
+						bool found = b2fShapeDistance( s, local, &distance, &normal );
+						if ( found == false || distance >= margin || b2Dot( normal, entryNormal ) < 0.999f )
+						{
+							distance = entryDistance;
+							normal = entryNormal;
+							crossed = true;
+						}
+					}
+				}
+
 				// Behind a chain segment, which has no inside to push a particle out of
 				if ( crossed == false && ( b2fShapeDistance( s, local, &distance, &normal ) == false || distance >= margin ) )
 				{
@@ -1151,13 +1193,6 @@ static void CollideTask( int start, int end, int worker, void* context )
 
 				f->pos[i].x = x + moveX;
 				f->pos[i].y = y + moveY;
-				int now = BinOf( bins, f->pos[i].x, f->pos[i].y );
-				if ( now != bin )
-				{
-					bin = now;
-					k = NextInBin( bins, bin, si ) - 1;
-					binEnd = bins->start[bin + 1];
-				}
 
 				if ( body->awake )
 				{
@@ -1510,6 +1545,8 @@ void b2fHoldBodies( b2fFluid* f )
 	SetShapeBounds( f );
 }
 
+// Every shape's bounds with its body where the substep has it, grown by the farthest a particle reaches, and every
+// body's lowest and highest points
 static void SetShapeBounds( b2fFluid* f )
 {
 	float g = b2Length( f->worldGravity );
@@ -1519,25 +1556,7 @@ static void SetShapeBounds( b2fFluid* f )
 	{
 		b2fShape* s = f->shapes + i;
 		b2fBody* body = f->bodies + s->bodyIndex;
-		b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
-		int count = s->type == b2_polygonShape ? s->polygon.count : 2;
-		for ( int j = 0; j < count; ++j )
-		{
-			b2Vec2 local = s->type == b2_polygonShape ? s->polygon.vertices[j] : ( j == 0 ? s->p1 : s->p2 );
-			b2Pos p = b2OffsetPos( body->origin, b2RotateVector( body->motion.rotation, local ) );
-			minX = minX < p.x ? minX : p.x;
-			minY = minY < p.y ? minY : p.y;
-			maxX = maxX > p.x ? maxX : p.x;
-			maxY = maxY > p.y ? maxY : p.y;
-			float height = b2Dot( b2SubPos( p, body->center ), up );
-			body->low = body->low < height - s->radius ? body->low : height - s->radius;
-			body->high = body->high > height + s->radius ? body->high : height + s->radius;
-		}
-		float grow = s->radius + f->maxRadius;
-		s->minX = minX - grow;
-		s->minY = minY - grow;
-		s->maxX = maxX + grow;
-		s->maxY = maxY + grow;
+		SetBounds( s, body->origin, body->motion.rotation, s->radius + f->maxRadius, body, up );
 	}
 }
 

@@ -1776,6 +1776,115 @@ static int FluidMemory( void )
 	return 0;
 }
 
+// A liquid made adaptive after it has moved, in a fluid that starts with room for 64 and grows, moves the same as in a
+// fluid with room for everything from the start. The fields only adaptive sizes use are made at that point.
+static void RunLateAdaptive( int capacity, b2FluidParticles* out, int* count, size_t* adaptiveBytes )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon floor = b2MakeOffsetBox( 3.0f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &floor );
+	b2Polygon wall = b2MakeOffsetBox( 0.5f, 3.0f, ( b2Vec2 ){ -3.5f, 2.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &wall );
+	wall = b2MakeOffsetBox( 0.5f, 3.0f, ( b2Vec2 ){ 3.5f, 2.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &wall );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = capacity;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -2.9f, 0.0f }, ( b2Pos ){ 0.0f, 1.5f }, b2Vec2_zero );
+	for ( int i = 0; i < 20; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+
+	size_t before = b2GetByteCount();
+	water.tuning.adaptiveRatio = 4.0f;
+	water.tuning.adaptiveSpeed = 3.0f;
+	b2Liquid_SetDef( waterId, &water );
+	*adaptiveBytes = ( b2GetByteCount() - before ) / ( (size_t)b2Fluid_GetCapacity( fluidId ) + 1 );
+	for ( int i = 0; i < 20; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ 0.5f, 2.0f }, ( b2Pos ){ 2.5f, 3.0f }, b2Vec2_zero );
+	for ( int i = 0; i < 40; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	*count = particles.count;
+	size_t posBytes = (size_t)particles.count * sizeof( b2Pos ), floatBytes = (size_t)particles.count * sizeof( float );
+	b2Pos* positions = malloc( posBytes );
+	float* sizes = malloc( floatBytes );
+	memcpy( positions, particles.positions, posBytes );
+	memcpy( sizes, particles.sizes, floatBytes );
+	out->positions = positions;
+	out->sizes = sizes;
+	b2DestroyWorld( worldId );
+}
+
+static int FluidLateAdaptive( void )
+{
+	b2FluidParticles small = { 0 }, large = { 0 };
+	int smallCount, largeCount;
+	size_t smallBytes, largeBytes;
+	RunLateAdaptive( 64, &small, &smallCount, &smallBytes );
+	RunLateAdaptive( 4000, &large, &largeCount, &largeBytes );
+	ENSURE( smallCount == largeCount );
+	ENSURE( memcmp( small.positions, large.positions, (size_t)smallCount * sizeof( b2Pos ) ) == 0 );
+	ENSURE( memcmp( small.sizes, large.sizes, (size_t)smallCount * sizeof( float ) ) == 0 );
+
+	// Nine adaptive fields of 30 bytes a particle, and speed memory, sorted, of 8
+	ENSURE( smallBytes == 38 && largeBytes == 38 );
+	free( (void*)small.positions );
+	free( (void*)small.sizes );
+	free( (void*)large.positions );
+	free( (void*)large.sizes );
+	return 0;
+}
+
+// Liquid thrown at the solver's speed limit at a box thinner than a particle spacing, with two substeps, stays in front
+// of it. Without the path test against the box's faces, some particles landed past its middle and were pushed out
+// behind it.
+static int FluidThinWall( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.gravity = b2Vec2_zero;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId wallId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon box = b2MakeOffsetBox( 0.01f, 30.0f, b2Vec2_zero, b2Rot_identity );
+	b2CreatePolygonShape( wallId, &shapeDef, &box );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	int count = b2Liquid_SpawnCircle( waterId, ( b2Pos ){ -1.0f, 0.0f }, 0.5f, ( b2Vec2 ){ 15.0f, 0.0f } );
+	ENSURE( count > 100 );
+	for ( int i = 0; i < 120; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 2 );
+	}
+
+	b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < particles.count; ++i )
+	{
+		ENSURE( particles.positions[i].x < 0.0f );
+	}
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 // A drop far from the rest of the liquid neither makes the grid's cells larger nor misses the floor under it. The
 // grid covers the pool, and the drop is filed into a cell on its edge. Shapes are gathered around the pool and around
 // the drop, so a wall reaching both is taken once and the boxes in between not at all.
@@ -2340,6 +2449,8 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidAdaptiveStepRate );
 	RUN_SUBTEST( FluidCoarsenSpawns );
 	RUN_SUBTEST( FluidMemory );
+	RUN_SUBTEST( FluidLateAdaptive );
+	RUN_SUBTEST( FluidThinWall );
 	RUN_SUBTEST( FluidFarStray );
 	RUN_SUBTEST( FluidInvalidDefs );
 	RUN_SUBTEST( FluidRegions );
