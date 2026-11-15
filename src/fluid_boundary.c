@@ -294,8 +294,8 @@ void b2fGatherShapes( b2fFluid* f )
 			maxSpeed2 = maxSpeed2 > speed2 ? maxSpeed2 : speed2;
 		}
 
-		// A generous margin, since bodies and particles both move during the step
-		float grow = f->radius + 0.1f * sqrtf( maxSpeed2 ) + 1.0f;
+		// A generous margin, since bodies and particles both move during the step: a metre in the caller's units
+		float grow = f->radius + 0.1f * sqrtf( maxSpeed2 ) + b2_lengthUnitsPerMeter;
 		b2Pos origin = { minX, minY };
 		b2AABB aabb = { { -grow, -grow }, { (float)( maxX - minX ) + grow, (float)( maxY - minY ) + grow } };
 		b2World_OverlapAABB( f->worldId, origin, aabb, b2DefaultQueryFilter(), OverlapShape, f );

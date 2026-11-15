@@ -25,7 +25,8 @@ typedef struct b2LiquidTuning
 	/// merge over and over. The default of a half closes them without tearing holes.
 	float tensilePressure;
 	/// Viscosity that grows with the square of the closing speed, which damps only fast impacts. Between two liquids
-	/// it is the mean of theirs.
+	/// it is the mean of theirs. It is per length unit, so a value tuned in metres is divided by
+	/// b2GetLengthUnitsPerMeter for other units; the default of zero needs nothing.
 	float quadraticViscosity;
 	/// Share of its buoyancy a body is made up to where the particles' push falls short of it. Still liquid pushes on
 	/// a body with the weight of the liquid it displaces. Particles cannot fill a gap narrower than a few of them, so a
@@ -129,7 +130,9 @@ typedef struct b2LiquidDef
 typedef struct b2FluidDef
 {
 	/// How far apart particles of water-like liquid rest, away from the weight of deep liquid. The interaction radius
-	/// is 1.78 times this. A liquid with much more cohesion than the default rests closer.
+	/// is 1.78 times this. A liquid with much more cohesion than the default rests closer. Like every length and speed
+	/// here, it is in Box2D's length units: the defaults (0.08 m here, 12 m for adaptiveDepth) are scaled by
+	/// b2GetLengthUnitsPerMeter when b2DefaultFluidDef is called, as Box2D's own defaults are.
 	float particleSpacing;
 	/// How far from anything that is not liquid particles reach the coarsest size, in length units. Air, walls
 	/// and bodies all count, so liquid is fine around each of them. Other liquids do not count. Zero or anything
@@ -196,9 +199,21 @@ B2_API void b2DestroyFluid( b2FluidId fluidId );
 /// Whether the id names a fluid that still exists
 B2_API bool b2Fluid_IsValid( b2FluidId fluidId );
 
-/// Change the fluid's settings between steps. The spacing and starting capacity cannot change, and maxCapacity cannot
-/// go below the room the fluid already has.
-B2_API void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def );
+/// The fluid's settings that can change after it is made, each as b2FluidDef describes it. The spacing and the starting
+/// capacity cannot change, since every particle and the solver's lengths are made from them. Changes take effect at the
+/// next step.
+B2_API void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth );
+B2_API float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId );
+B2_API void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox );
+B2_API float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId );
+
+/// The most particles the fluid will grow to hold. It cannot go below the room the fluid already has, and a value
+/// below that keeps that room as the most.
+B2_API void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity );
+B2_API int b2Fluid_GetMaxCapacity( b2FluidId fluidId );
+
+/// The spacing the fluid was made with, b2FluidDef::particleSpacing
+B2_API float b2Fluid_GetParticleSpacing( b2FluidId fluidId );
 
 /// How many particles the fluid has room for now. It starts at b2FluidDef::capacity and doubles as needed, up to
 /// b2FluidDef::maxCapacity.
@@ -252,40 +267,66 @@ B2_API int b2Liquid_SpawnCapsule( b2LiquidId liquidId, b2Pos center1, b2Pos cent
 /// A convex polygon, as Box2D makes them, placed at origin with this rotation. Its radius rounds it.
 B2_API int b2Liquid_SpawnPolygon( b2LiquidId liquidId, b2Pos origin, b2Rot rotation, const b2Polygon* polygon, b2Vec2 velocity );
 
-/// Remove the particles whose centres are inside a box, of one liquid, or of every liquid if liquidId is null, but no
-/// more than maxCount of them, INT_MAX for all. When there are more, the first in the fluid's own order go: row by row
-/// up the world's y axis, then any added since the last step. A capped drain feeding an emitter is a pump with a
-/// steady flow. Returns how many went. The others keep their ids, and springs to a particle that went are dropped.
-/// Call between steps.
-B2_API int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, int maxCount );
+/// What a region is
+typedef enum b2FluidRegionType
+{
+	/// An axis-aligned box between two corners
+	b2_boxRegion,
+	/// The outline of a Box2D shape where it is now
+	b2_shapeRegion,
+	/// A shape proxy placed at an origin, as b2World_OverlapShape takes one
+	b2_proxyRegion,
+} b2FluidRegionType;
 
-/// The same for the outline of a Box2D shape where it is now, which may be a sensor: a drain is a sensor shape the
-/// caller empties each step. A circle, capsule or polygon; segments and chains have no inside and remove nothing. The
-/// shape is only a region here, so its filter and the liquids' filters play no part.
-B2_API int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, int maxCount );
+/// A part of the world that the calls below act on: the particles whose centres are inside it, edges included. Make
+/// one with b2MakeBoxRegion, b2MakeShapeRegion or b2MakeProxyRegion. A region is only a place: its shape's filter, or
+/// the liquids' filters, play no part.
+typedef struct b2FluidRegion
+{
+	b2FluidRegionType type;
+	/// b2_boxRegion: the corners
+	b2Pos lowerBound, upperBound;
+	/// b2_shapeRegion: a circle, capsule or polygon, which may be a sensor. Segments and chains have no inside, so a
+	/// region of one holds nothing.
+	b2ShapeId shapeId;
+	/// b2_proxyRegion: the proxy's points are relative to the origin. One point with a radius is a circle, two a
+	/// capsule, and more the rounded convex hull of the points, so a rotated box or any convex polygon. Points that
+	/// all lie on a line are taken as the capsule between the two furthest apart.
+	b2Pos origin;
+	b2ShapeProxy proxy;
+} b2FluidRegion;
 
-/// Pushing the liquid. These change the velocity of the particles whose centres are inside a region, of one liquid,
-/// or of every liquid if liquidId is null, and return how many they changed. They act once, between steps, and the
-/// next step moves the particles from their new velocities; there is no lasting force, so a fan or a current is a
-/// call the caller makes before every step. They push particles only, not bodies: a fan blowing liquid at a crate
+/// The box between two corners
+B2_API b2FluidRegion b2MakeBoxRegion( b2Pos lowerBound, b2Pos upperBound );
+
+/// A shape's outline, wherever it is when the region is used: a drain or a fan can be a sensor shape on a body
+B2_API b2FluidRegion b2MakeShapeRegion( b2ShapeId shapeId );
+
+/// A shape proxy placed at an origin, such as b2MakeProxy or b2MakeOffsetProxy give. Near the origin of the world, pass
+/// b2Pos_zero and world points.
+B2_API b2FluidRegion b2MakeProxyRegion( b2Pos origin, const b2ShapeProxy* proxy );
+
+/// Remove the particles inside a region, of one liquid, or of every liquid if liquidId is null, but no more than
+/// maxCount of them, INT_MAX for all. When there are more, the first in the fluid's own order go: row by row up the
+/// world's y axis, then any added since the last step. A capped drain feeding an emitter is a pump with a steady flow.
+/// A drain is a sensor shape the caller empties each step. Returns how many went. The others keep their ids, and
+/// springs to a particle that went are dropped. Call between steps.
+B2_API int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, int maxCount );
+
+/// Pushing the liquid. These change the velocity of the particles inside a region, of one liquid, or of every liquid if
+/// liquidId is null, and return how many they changed. They act once, between steps, and the next step moves the
+/// particles from their new velocities; there is no lasting force, so a fan or a current is a call the caller makes
+/// before every step, often on a sensor shape. They push particles only, not bodies: a fan blowing liquid at a crate
 /// moves the crate only through the liquid that reaches it. Call between steps.
 ///
-/// Add a velocity to every particle in a box, edges included. Called once it is an impulse; called every step with
-/// an acceleration times the step's time it is a steady force, such as wind.
-B2_API int b2Fluid_AccelerateInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocityChange );
+/// Add a velocity to every particle in a region. Called once it is an impulse; called every step with an acceleration
+/// times the step's time it is a steady force, such as wind.
+B2_API int b2Fluid_Accelerate( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocityChange );
 
-/// The same inside the outline of a Box2D shape where it is now, which may be a sensor: a fan or a current is a sensor
-/// shape the caller pushes the liquid in each step. A circle, capsule or polygon; segments and chains have no inside
-/// and change nothing. As with b2Fluid_RemoveInShape, the shape is only a region and filters play no part.
-B2_API int b2Fluid_AccelerateInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocityChange );
-
-/// Move the velocity of every particle in a box toward a velocity, by a share from 0, no change, to 1, which sets it.
+/// Move the velocity of every particle in a region toward a velocity, by a share from 0, no change, to 1, which sets it.
 /// A share below 1 called every step is a drag toward that velocity: a current, or still air. The share is per call,
 /// so the same share at a different step time drags at a different rate.
-B2_API int b2Fluid_BlendVelocityInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lowerBound, b2Pos upperBound, b2Vec2 velocity, float share );
-
-/// The same inside the outline of a shape
-B2_API int b2Fluid_BlendVelocityInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, b2Vec2 velocity, float share );
+B2_API int b2Fluid_BlendVelocity( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, b2Vec2 velocity, float share );
 
 /// Throw the liquid away from a point, as an explosion throws bodies. b2World_Explode calls this for the world's fluid,
 /// so an explosion throws liquid and bodies with one call; call this to throw only the liquid. Every particle within
@@ -309,16 +350,22 @@ B2_API int b2Fluid_Explode( b2FluidId fluidId, const b2ExplosionDef* def );
 /// The most emitters one fluid can hold
 #define B2_MAX_EMITTERS 32
 
-/// A mouth that liquid comes out of, fixed in the world
+/// A mouth that liquid comes out of, fixed in the world or riding a body
 typedef struct b2EmitterDef
 {
-	/// The ends of the mouth: liquid comes out across this segment
+	/// The body the mouth rides, or null for a mouth fixed in the world. With a body, point1, point2 and velocity are in
+	/// the body's frame, so the mouth moves and turns with it, and the liquid leaves with the body's own velocity at
+	/// each particle's point added: a hose on a moving cart, or a spinning sprinkler. The emitter ends when its body is
+	/// destroyed.
+	b2BodyId bodyId;
+	/// The ends of the mouth: liquid comes out across this segment. In the world, or in the body's frame with a body.
 	b2Pos point1, point2;
-	/// Velocity of the liquid as it leaves. Only the part across the mouth carries liquid out, so the flow, as area of
-	/// liquid at rest per second, is that speed times the mouth's length, and a velocity along the mouth emits nothing.
-	/// The stream is packed as a spawn is, a little tighter than at rest, and each row holds a whole number of
-	/// particles: a mouth 0.5 long at 2 m/s, with particles 0.08 apart, gives 174 particles a second, where that area
-	/// at rest holds 180.
+	/// Velocity of the liquid as it leaves, relative to the mouth. Only the part across the mouth carries liquid out, so
+	/// the flow, as area of liquid at rest per second, is that speed times the mouth's length, and a velocity along the
+	/// mouth emits nothing. The stream is packed as a spawn is, a little tighter than at rest, and each row holds a whole
+	/// number of particles: a mouth 0.5 long at 2 m/s, with particles 0.08 apart, gives 174 particles a second, where
+	/// that area at rest holds 180. A mouth on a body moving along its own velocity emits the same rows, since the rows
+	/// follow the liquid's speed across the mouth, not over the ground.
 	b2Vec2 velocity;
 	/// An emitter that is not enabled adds nothing and keeps its place in the stream
 	bool enabled;
@@ -327,22 +374,22 @@ typedef struct b2EmitterDef
 	int internalValue;
 } b2EmitterDef;
 
-/// A mouth from the origin to one metre along x, emitting nothing until given a velocity
+/// A mouth fixed in the world from the origin to one metre along x, emitting nothing until given a velocity
 B2_API b2EmitterDef b2DefaultEmitterDef( void );
 
 /// Add an emitter to a liquid. Before each step the world adds as many rows of particles across its mouth as the
 /// liquid has travelled since the last row, each where it would have got to by then, so the stream is as dense as a
 /// spawn whatever the step time and speed. A mouth narrower than the spacing gets one particle a row. Particles start
 /// at the finest size with the emitter's velocity. It stops quietly while the fluid is full at
-/// b2FluidDef::maxCapacity, and ends when its liquid is destroyed. Returns b2_nullEmitterId if the fluid already
-/// has B2_MAX_EMITTERS. Emitters do not move with bodies. Call between steps.
+/// b2FluidDef::maxCapacity, and ends when its liquid or its body is destroyed. Returns b2_nullEmitterId if the fluid
+/// already has B2_MAX_EMITTERS. Call between steps.
 B2_API b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def );
 B2_API void b2DestroyEmitter( b2EmitterId emitterId );
 
-/// Whether the id names an emitter that still exists. Destroying its liquid or its fluid ends it.
+/// Whether the id names an emitter that still exists. Destroying its liquid, its fluid or its body ends it.
 B2_API bool b2Emitter_IsValid( b2EmitterId emitterId );
 
-/// Change an emitter between steps. It keeps how far the liquid has gone since its last row.
+/// Change an emitter between steps, its body included. It keeps how far the liquid has gone since its last row.
 B2_API void b2Emitter_SetDef( b2EmitterId emitterId, const b2EmitterDef* def );
 B2_API b2EmitterDef b2Emitter_GetDef( b2EmitterId emitterId );
 
@@ -490,9 +537,9 @@ typedef struct b2FluidAmount
 	float mass;
 } b2FluidAmount;
 
-/// The liquid whose particle centres are inside a box, counted now with a loop over every particle. Call it between
-/// steps.
-B2_API b2FluidAmount b2Fluid_MeasureBox( b2FluidId fluidId, b2Pos lowerBound, b2Pos upperBound );
+/// The liquid inside a region, of one liquid, or of every liquid if liquidId is null, counted now with a loop over every
+/// particle. Call it between steps.
+B2_API b2FluidAmount b2Fluid_Measure( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region );
 
 /// Where the liquid's surface is over a point, counted now with a loop over every particle. Among particles within two
 /// particle spacings of the line through the point along gravity, it takes the highest, leaving out spray, whose

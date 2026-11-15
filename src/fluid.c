@@ -92,8 +92,9 @@ b2LiquidDef b2MakeDoughDef( void )
 b2FluidDef b2DefaultFluidDef( void )
 {
 	b2FluidDef def = { 0 };
-	def.particleSpacing = 0.08f;
-	def.adaptiveDepth = 12.0f;
+	// Lengths are in the caller's units, as b2SetLengthUnitsPerMeter sets them, as Box2D's own defaults are
+	def.particleSpacing = 0.08f * b2_lengthUnitsPerMeter;
+	def.adaptiveDepth = 12.0f * b2_lengthUnitsPerMeter;
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 100000;
 	def.maxCapacity = 1000000;
@@ -363,20 +364,44 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f, sizeof( b2fFluid ) );
 }
 
-void b2Fluid_SetDef( b2FluidId fluidId, const b2FluidDef* def )
+void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth )
 {
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( IsValidFluidDef( def ) == false )
-	{
-		return;
-	}
+	B2_CHECK_INPUT( b2IsValidFloat( adaptiveDepth ) && adaptiveDepth >= 0.0f );
+	b2fGetFluid( fluidId )->def.adaptiveDepth = adaptiveDepth;
+}
 
-	float spacing = f->def.particleSpacing;
-	int capacity = f->def.capacity;
-	f->def = *def;
-	f->def.particleSpacing = spacing;
-	f->def.capacity = capacity;
-	f->maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
+float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->def.adaptiveDepth;
+}
+
+void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox )
+{
+	B2_CHECK_INPUT( b2IsValidFloat( adaptiveFullBox ) && adaptiveFullBox > 0.0f );
+	b2fGetFluid( fluidId )->def.adaptiveFullBox = adaptiveFullBox;
+}
+
+float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->def.adaptiveFullBox;
+}
+
+void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity )
+{
+	B2_CHECK_INPUT( maxCapacity >= 0 );
+	b2fFluid* f = b2fGetFluid( fluidId );
+	f->def.maxCapacity = maxCapacity;
+	f->maxCapacity = maxCapacity > f->capacity ? maxCapacity : f->capacity;
+}
+
+int b2Fluid_GetMaxCapacity( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->maxCapacity;
+}
+
+float b2Fluid_GetParticleSpacing( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->def.particleSpacing;
 }
 
 int b2Fluid_GetCapacity( b2FluidId fluidId )
@@ -531,20 +556,7 @@ static void MarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int 
 	}
 }
 
-int b2Fluid_RemoveInBox( b2FluidId fluidId, b2LiquidId liquidId, b2Pos lower, b2Pos upper, int maxCount )
-{
-	b2fFluid* f = b2fGetFluid( fluidId );
-	if ( b2fWorldLocked( fluidId ) )
-	{
-		return 0;
-	}
-
-	b2fOutline box = b2fMakeBoxOutline( lower, upper );
-	MarkInside( f, b2fPickLiquid( f, liquidId ), &box, maxCount );
-	return b2fRemoveMarked( f );
-}
-
-int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId shapeId, int maxCount )
+int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, int maxCount )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
 	if ( b2fWorldLocked( fluidId ) )
@@ -554,7 +566,7 @@ int b2Fluid_RemoveInShape( b2FluidId fluidId, b2LiquidId liquidId, b2ShapeId sha
 
 	int liquid = b2fPickLiquid( f, liquidId );
 	b2fOutline outline;
-	if ( b2fMakeOutline( shapeId, &outline ) == false )
+	if ( b2fMakeRegionOutline( &region, &outline ) == false )
 	{
 		return 0;
 	}

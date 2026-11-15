@@ -80,8 +80,10 @@ static inline float b2fLatticeSize( float size )
 // particle from three neighbours at its peak distance, so the two settings compare. Not calibrated further.
 #define B2F_ADHESION_SCALE 0.19f
 
-// Pressure alone can hold up a column of about this many metres, found by experiment at stiffness 0.04, spacing
-// 0.1 and 4 substeps. It is the usual explicit limit, so it scales with stiffness, spacing squared and substeps squared.
+// Pressure alone can hold up a column of about this depth, found by experiment at stiffness 0.04, spacing 0.1 and 4
+// substeps. It is the usual explicit limit, so it scales with stiffness, spacing squared and substeps squared. It is a
+// pure number: the depth is this times stiffness spacing^2 / ( g h^2 ), which is a length in any units, so it needs no
+// b2_lengthUnitsPerMeter.
 #define B2F_DEPTH_LIMIT_SCALE 4.34f
 
 // Fields every particle carries, kept in sort order. Sorting, compaction, splits and spawning all go through
@@ -150,8 +152,8 @@ typedef struct b2fPatch
 #define B2F_PATCH_GAP 3.0f
 
 // A body slower than this, with liquid all the way round, gets exactly its buoyancy from the liquid; the share falls
-// to nothing at this speed, in m/s
-#define B2F_STILL_SPEED 0.5f
+// to nothing at this speed, 0.5 m/s in the caller's length units
+#define B2F_STILL_SPEED ( 0.5f * b2_lengthUnitsPerMeter )
 
 // Liquid against a face whose outward normal is closer to up than this, as a cosine, lies on top of the body rather
 // than standing beside it, so it does not count towards the level a body reports
@@ -439,8 +441,9 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 #define FOR_NEIGHBOURS( f, i, j ) FOR_NEIGHBOURS_WITHIN( f, i, j, f->uniformWindow > 0 ? f->uniformWindow : f->window[i] )
 
 // A shape's outline where it is now, and its bounds in the world, for testing whether particle centres are inside it.
-// The calls that pick particles in a region use it for boxes and circles too: a box has the type b2_shapeTypeCount
-// and is its bounds alone.
+// Every call that picks particles in a region tests this one outline (b2fPicks), whatever the region's type: a box
+// has the type b2_shapeTypeCount and is its bounds alone, so its test is four compares, and a proxy is turned into a
+// circle, capsule or polygon once per call.
 typedef struct b2fOutline
 {
 	b2WorldTransform transform;
@@ -498,6 +501,8 @@ void b2fDestroyEmitters( b2fFluid* f, int liquid );
 // state.c
 // Returns false for shapes with no inside, segments and chains
 bool b2fMakeOutline( b2ShapeId shapeId, b2fOutline* outline );
+// The outline of a region, or false for a region with no inside: a segment or chain shape, or bad input
+bool b2fMakeRegionOutline( const b2FluidRegion* region, b2fOutline* outline );
 // A box between two corners, and a circle
 b2fOutline b2fMakeBoxOutline( b2Pos lower, b2Pos upper );
 b2fOutline b2fMakeCircleOutline( b2Pos center, float radius );
