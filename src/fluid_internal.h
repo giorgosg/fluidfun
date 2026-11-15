@@ -113,8 +113,8 @@ static inline float b2fLatticeSize( float size )
 #define B2F_DECLARE_FIELD( type, name ) type* name;
 
 // Springs a particle holds, each to a partner by id, since indices change with every sort, with removals between
-// steps, and with merges and splits at the end of each. The spring pass finds each partner in an id table it builds every substep. Both ends
-// hold the same spring, and work it out the same way, so it stays the same at both.
+// steps, and with merges and splits at the end of each. The spring pass finds each partner in an id table it builds
+// every substep. Both ends hold the same spring, and work it out the same way, so it stays the same at both.
 #define B2F_SPRINGS_PER_PARTICLE 16
 
 typedef struct b2fSprings
