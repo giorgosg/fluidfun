@@ -559,19 +559,6 @@ static void FindPatches( b2fFluid* f )
 // Shapes near the liquid, gathered once a step
 void b2fGatherShapes( b2fFluid* f )
 {
-	// A sleeping body cannot feel the liquid, so it would never lift off. The particles still find it, as a wall, and
-	// a body that had liquid within reach last step wakes now. Waking one body wakes the bodies it rests on or
-	// against. One that had none may sleep, however near the liquid's bounds it is. A body the liquid reaches while
-	// it sleeps holds still for that one step. Still water keeps a floating body awake, as it did before.
-	for ( int i = 0; i < f->bodyCount; ++i )
-	{
-		b2BodyId id = f->bodies[i].id;
-		if ( f->bodies[i].reached && b2Body_IsValid( id ) && b2Body_GetType( id ) == b2_dynamicBody && b2Body_IsAwake( id ) == false )
-		{
-			b2Body_SetAwake( id, true );
-		}
-	}
-
 	f->shapeCount = 0;
 	f->bodyCount = 0;
 	f->shapesFiltered = false;
@@ -615,6 +602,22 @@ void b2fGatherShapes( b2fFluid* f )
 	}
 
 	FindPatches( f );
+}
+
+// A sleeping body cannot feel the liquid, so it would never lift off. The particles still find it, as a wall, and a
+// body the liquid reached during the step wakes now, after it, with the bodies it rests on or against. It held still
+// for that one step. Awake bodies with liquid in reach did not fall asleep (RecordReactions), so these are bodies
+// that slept before the liquid came; one the liquid never reaches may sleep, however near the liquid it is.
+void b2fWakeReached( b2fFluid* f )
+{
+	for ( int i = 0; i < f->bodyCount; ++i )
+	{
+		const b2fBody* body = f->bodies + i;
+		if ( body->reached && body->adheres == false )
+		{
+			b2WakeBody( f->world, b2Array_Get( f->world->bodies, body->id.index1 - 1 ) );
+		}
+	}
 }
 
 static inline void SegmentDistance( b2Vec2 p, b2Vec2 a, b2Vec2 b, float* distance, b2Vec2* normal )
@@ -1168,7 +1171,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 // What b2Fluid_GetBodyState reports, summed over the step: the liquid's push once patches are applied, before added
 // mass shares the body's change of motion with the liquid, and the share of the body under liquid, the one patches
 // use, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies, except
-// that a body with liquid within reach, asleep or not, is woken at the next step.
+// sleep: an awake body with liquid within reach does not fall asleep this step, and a sleeping one wakes after it
+// (b2fWakeReached).
 static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
@@ -1189,6 +1193,16 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 		if ( total->wetMass <= 0.0f )
 		{
 			continue;
+		}
+
+		// Liquid in reach keeps a body moved by forces from sleeping. Box2D adds the step's time to sleepTime after
+		// the substeps, and puts an island to sleep only once each of its bodies has been slow for B2_TIME_TO_SLEEP,
+		// so the body and its island stay awake until that long after the liquid last reached it. A body floating
+		// in still liquid moves slower than the sleep threshold, but the liquid holds it up only while it is awake;
+		// asleep it is a wall that feels nothing. Without this it slept for a step and was woken about once a second.
+		if ( body->adheres == false )
+		{
+			b2Array_Get( f->world->bodies, body->id.index1 - 1 )->sleepTime = 0.0f;
 		}
 
 		// Without gravity there is no under, and only liquid all round counts

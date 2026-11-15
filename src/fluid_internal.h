@@ -215,8 +215,8 @@ typedef struct b2fBody
 	b2Vec2 stepImpulse;
 	float stepAngular, stepSubmerged;
 	bool stepWet;
-	// Whether liquid was within reach of the body in some substep of this step, asleep or not. The next step wakes
-	// the bodies that had it, and lets the rest sleep.
+	// Whether liquid was within reach of the body in some substep of this step, asleep or not. Those asleep wake once
+	// the step is done (b2fWakeReached).
 	bool reached;
 	// Where the body is at the start of the step, and where its shapes start in b2fFluid::bodyShapes, for finding
 	// patches
@@ -546,6 +546,7 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context );
 // boundary.c
 void b2fBuildWallTable( b2fFluid* f );
 void b2fGatherShapes( b2fFluid* f );
+void b2fWakeReached( b2fFluid* f );
 void b2fUpdateBodies( b2fFluid* f );
 void b2fFindContacts( b2fFluid* f, b2SubStepContext* context );
 void b2fCollide( b2fFluid* f, b2SubStepContext* context );

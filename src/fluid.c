@@ -762,6 +762,7 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 // moves. The step's reports come first, from the particles as the last substep left them.
 void b2FinishFluid( b2fFluid* f )
 {
+	b2fWakeReached( f );
 	b2fFinishStep( f );
 
 	uint64_t ticks = b2GetTicks();

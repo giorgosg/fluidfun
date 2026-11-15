@@ -25,8 +25,8 @@ void b2PrepareFluid( struct b2fFluid* fluid, float timeStep, int subStepCount );
 // Once per sub-step, after the bodies have moved
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, struct b2fFluid* fluid );
 
-// After a step, while the world is unlocked: works out what the liquid tells the caller, body states, events and
-// the liquid in sensors, then changes particle sizes
+// After a step, while the world is unlocked: wakes the sleeping bodies the liquid reached, works out what the liquid
+// tells the caller, body states, events and the liquid in sensors, then changes particle sizes
 void b2FinishFluid( struct b2fFluid* fluid );
 
 // Throws the liquid as b2World_Explode throws bodies, between steps. Returns how many particles it pushed.
