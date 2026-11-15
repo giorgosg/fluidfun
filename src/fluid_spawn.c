@@ -156,8 +156,8 @@ static int CreateGradedParticles( b2fFluid* f, int liquid, b2Pos lower, b2Pos up
 
 // A lattice at the finest size over the shape's bounds, centred on a point near the shape, keeping the points inside
 // it, edges included. The test takes points relative to that centre, in float. Every shape spawns this way, and a box
-// too unless its liquid has adaptive sizes. With adaptive sizes and adaptiveCoarsenSpawns the new particles take their
-// sizes at the start of the next step.
+// too unless its liquid has adaptive sizes without adaptiveCoarsenSpawns. With adaptive sizes and adaptiveCoarsenSpawns
+// the new particles take their sizes, and settle into place, at the start of the next step.
 typedef struct b2fSpawnShape
 {
 	b2ShapeType type;
@@ -234,7 +234,8 @@ int b2Liquid_SpawnBox( b2LiquidId liquidId, b2Pos lower, b2Pos upper, b2Vec2 vel
 		return 0;
 	}
 
-	if ( f->liquids[liquid].def.tuning.adaptiveRatio > 1.0f )
+	const b2LiquidTuning* tuning = &f->liquids[liquid].def.tuning;
+	if ( tuning->adaptiveRatio > 1.0f && tuning->adaptiveCoarsenSpawns == false )
 	{
 		return CreateGradedParticles( f, liquid, lower, upper, velocity );
 	}

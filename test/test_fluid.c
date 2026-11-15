@@ -1570,11 +1570,83 @@ static int FluidCoarsenSpawns( void )
 	ENSURE( b2AbsFloat( after.area - area ) < 1e-3f * area );
 	b2DestroyWorld( worldId );
 
+	// Settling moves the merged particles alone. Liquid spawned before, beside the new spawn and moving, and a crate
+	// standing in the spawn, keep where they are and their velocities, and the spawn keeps its own velocity.
+	{
+		worldId = b2CreateWorld( &worldDef );
+		b2BodyDef bodyDef = b2DefaultBodyDef();
+		b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+		b2ShapeDef shapeDef = b2DefaultShapeDef();
+		b2Polygon floor = b2MakeOffsetBox( 12.0f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity );
+		b2CreatePolygonShape( groundId, &shapeDef, &floor );
+		fluidId = b2CreateFluid( worldId, &def );
+		waterId = b2CreateLiquid( fluidId, &water );
+		b2Liquid_SpawnBox( waterId, ( b2Pos ){ -8.0f, 0.1f }, ( b2Pos ){ -4.2f, 1.0f }, b2Vec2_zero );
+		for ( int i = 0; i < 3; ++i )
+		{
+			b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		}
+
+		bodyDef.type = b2_dynamicBody;
+		bodyDef.position = ( b2Pos ){ 1.0f, 4.0f };
+		bodyDef.linearVelocity = ( b2Vec2 ){ 0.5f, 0.0f };
+		b2BodyId crateId = b2CreateBody( worldId, &bodyDef );
+		b2Polygon crate = b2MakeBox( 0.5f, 0.5f );
+		b2CreatePolygonShape( crateId, &shapeDef, &crate );
+
+		b2fFluid* f = b2fGetFluid( fluidId );
+		int before = f->count, firstNew = f->nextParticleId;
+		b2Pos* oldPos = malloc( (size_t)before * sizeof( b2Pos ) );
+		b2Vec2* oldVel = malloc( (size_t)before * sizeof( b2Vec2 ) );
+		int* oldId = malloc( (size_t)before * sizeof( int ) );
+		for ( int i = 0; i < before; ++i )
+		{
+			oldPos[i] = f->pos[i];
+			oldVel[i] = ( b2Vec2 ){ f->vx[i], f->vy[i] };
+			oldId[i] = f->id[i];
+		}
+		b2Vec2 velocity = { 1.0f, 0.0f };
+		int added = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -4.0f, 0.1f }, ( b2Pos ){ 4.0f, 6.0f }, velocity );
+		f->worldGravity = b2World_GetGravity( worldId );
+		b2fCoarsenSpawned( f, 1.0f / 240.0f );
+		ENSURE( f->count < before + added / 2 );
+
+		int kept = 0;
+		for ( int i = 0; i < f->count; ++i )
+		{
+			ENSURE( isfinite( (float)f->pos[i].x ) && isfinite( (float)f->pos[i].y ) );
+			if ( f->id[i] >= firstNew )
+			{
+				ENSURE( b2AbsFloat( f->vx[i] - velocity.x ) < 1e-5f && b2AbsFloat( f->vy[i] - velocity.y ) < 1e-5f );
+				continue;
+			}
+			for ( int k = 0; k < before; ++k )
+			{
+				if ( oldId[k] == f->id[i] )
+				{
+					ENSURE( f->pos[i].x == oldPos[k].x && f->pos[i].y == oldPos[k].y );
+					ENSURE( f->vx[i] == oldVel[k].x && f->vy[i] == oldVel[k].y );
+					kept += 1;
+				}
+			}
+		}
+		ENSURE( kept == before );
+		ENSURE( b2Body_GetPosition( crateId ).x == 1.0f && b2Body_GetPosition( crateId ).y == 4.0f );
+		ENSURE( b2Body_GetLinearVelocity( crateId ).x == 0.5f && b2Body_GetLinearVelocity( crateId ).y == 0.0f );
+		free( oldPos );
+		free( oldVel );
+		free( oldId );
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		b2DestroyWorld( worldId );
+	}
+
 	// A box graded before the first step for 60 Hz and 4 substeps, stepped with 1, where sizes reach far less deep
-	// with adaptiveDepth at zero, is coarsened to fit at the start of that step
+	// with adaptiveDepth at zero, is coarsened to fit at the start of that step. Boxes are graded so with
+	// adaptiveCoarsenSpawns off.
 	worldId = b2CreateWorld( &worldDef );
 	def.adaptiveDepth = 0.0f;
 	fluidId = b2CreateFluid( worldId, &def );
+	water.tuning.adaptiveCoarsenSpawns = false;
 	waterId = b2CreateLiquid( fluidId, &water );
 	int graded = b2Liquid_SpawnBox( waterId, ( b2Pos ){ -5.0f, 0.0f }, ( b2Pos ){ 5.0f, 20.0f }, b2Vec2_zero );
 	b2World_Step( worldId, 1.0f / 60.0f, 1 );

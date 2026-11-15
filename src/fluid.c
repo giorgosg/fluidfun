@@ -764,7 +764,8 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 	uint64_t ticks = b2GetTicks();
 
 	// This reads where shapes and bodies were last substep, so it has to come before they are gathered again. Spawned
-	// particles waiting for their sizes get them first, at this step's substep; a spawn holds off the usual pass.
+	// particles waiting for their sizes get them first, at this step's substep, and settle into place, which gathers
+	// the shapes itself, where they are now; a spawn holds off the usual pass.
 	f->worldGravity = b2World_GetGravity( f->worldId );
 	if ( ( f->coarsenLiquids | f->guessedLiquids ) != 0 && timeStep > 0.0f )
 	{
