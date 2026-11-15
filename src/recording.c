@@ -8,6 +8,7 @@
 #include "recording.h"
 
 #include "body.h"
+#include "fluid.h"
 #include "physics_world.h"
 #include "snapshot.h"
 
@@ -513,6 +514,89 @@ void b2RecW_TREESTATS( b2RecBuffer* buf, b2TreeStats v )
 	b2RecW_I32( buf, v.leafVisits );
 }
 
+// fluidfun: the fluid's ids, defs and regions. The fluid id goes out whole; replay maps it to the replay world's fluid.
+
+void b2RecW_FLUIDID( b2RecBuffer* buf, b2FluidId v )
+{
+	b2RecW_I32( buf, v.index1 );
+	b2RecW_U16( buf, v.world0 );
+	b2RecW_U16( buf, v.generation );
+}
+
+void b2RecW_LIQUIDID( b2RecBuffer* buf, b2LiquidId v )
+{
+	b2RecW_I32( buf, v.index1 );
+	b2RecW_U16( buf, v.world0 );
+	b2RecW_U16( buf, v.generation );
+}
+
+void b2RecW_EMITTERID( b2RecBuffer* buf, b2EmitterId v )
+{
+	b2RecW_I32( buf, v.index1 );
+	b2RecW_U16( buf, v.world0 );
+	b2RecW_U16( buf, v.generation );
+}
+
+void b2RecW_FLUIDDEF( b2RecBuffer* buf, b2FluidDef v )
+{
+	b2RecW_F32( buf, v.particleSpacing );
+	b2RecW_F32( buf, v.adaptiveDepth );
+	b2RecW_F32( buf, v.adaptiveFullBox );
+	b2RecW_I32( buf, v.capacity );
+	b2RecW_I32( buf, v.maxCapacity );
+	// internalValue omitted
+}
+
+void b2RecW_LIQUIDDEF( b2RecBuffer* buf, b2LiquidDef v )
+{
+	b2RecW_F32( buf, v.density );
+	b2RecW_F32( buf, v.viscosity );
+	b2RecW_F32( buf, v.cohesion );
+	b2RecW_F32( buf, v.adhesion );
+	b2RecW_F32( buf, v.friction );
+	b2RecW_F32( buf, v.gravityScale );
+	b2RecW_F32( buf, v.springStiffness );
+	b2RecW_F32( buf, v.plasticity );
+	b2RecW_F32( buf, v.yieldRatio );
+	b2RecW_U64( buf, v.categoryBits );
+	b2RecW_U64( buf, v.maskBits );
+	const b2LiquidTuning* t = &v.tuning;
+	b2RecW_F32( buf, t->stiffness );
+	b2RecW_F32( buf, t->nearStiffness );
+	b2RecW_F32( buf, t->tensilePressure );
+	b2RecW_F32( buf, t->quadraticViscosity );
+	b2RecW_F32( buf, t->buoyancyAssist );
+	b2RecW_F32( buf, t->addedMass );
+	b2RecW_F32( buf, t->adaptiveRatio );
+	b2RecW_F32( buf, t->adaptiveSpeed );
+	b2RecW_BOOL( buf, t->adaptiveDepthLimit );
+	b2RecW_F32( buf, t->adaptiveTolerance );
+	b2RecW_F32( buf, t->adaptiveLimit );
+	b2RecW_F32( buf, t->adaptiveRate );
+	// internalValue omitted
+}
+
+void b2RecW_EMITTERDEF( b2RecBuffer* buf, b2EmitterDef v )
+{
+	b2RecW_BODYID( buf, v.bodyId );
+	b2RecW_POSITION( buf, v.point1 );
+	b2RecW_POSITION( buf, v.point2 );
+	b2RecW_VEC2( buf, v.velocity );
+	b2RecW_BOOL( buf, v.enabled );
+	// internalValue omitted
+}
+
+// Every field of every kind, so a region reads back whole whatever its type
+void b2RecW_REGION( b2RecBuffer* buf, b2FluidRegion v )
+{
+	b2RecW_I32( buf, (int32_t)v.type );
+	b2RecW_POSITION( buf, v.lowerBound );
+	b2RecW_POSITION( buf, v.upperBound );
+	b2RecW_SHAPEID( buf, v.shapeId );
+	b2RecW_POSITION( buf, v.origin );
+	b2RecW_SHAPEPROXY( buf, v.proxy );
+}
+
 // Patch helpers for query hit-count backfill
 
 int b2RecReserveU32( b2RecBuffer* buf )
@@ -633,6 +717,9 @@ void b2RecEndRecord( b2Recording* rec )
 		__VA_ARGS__                                                                                                              \
 	}
 #include "recording_ops.inl"
+#define B2_REC_FLUID_OP B2_REC_OP
+#include "recording_fluid_ops.inl"
+#undef B2_REC_FLUID_OP
 #undef B2_REC_OP
 #undef ARG
 
@@ -662,6 +749,20 @@ void b2RecEndRecord( b2Recording* rec )
 	}
 #include "recording_ops.inl"
 #undef B2_REC_OP
+
+// fluidfun: the fluid's full writers, under the one fluid opcode with the subop first in the payload
+#define B2_REC_FLUID_OP( op, Name, RET, ... )                                                                                    \
+	void b2RecWrite_##Name( b2Recording* rec, const b2RecArgs_##Name* a )                                                        \
+	{                                                                                                                            \
+		b2LockMutex( rec->lock );                                                                                                \
+		b2RecBeginRecord( rec, (uint8_t)B2_REC_OP_FLUID );                                                                       \
+		b2RecW_U8( &rec->buffer, (uint8_t)( op ) );                                                                              \
+		b2RecWriteArgs_##Name( rec, a );                                                                                         \
+		b2RecEndRecord( rec );                                                                                                   \
+		b2UnlockMutex( rec->lock );                                                                                              \
+	}
+#include "recording_fluid_ops.inl"
+#undef B2_REC_FLUID_OP
 
 // Codegen: create-op writers that append the returned id inside the record. The RET tag
 // selects the id type and its write primitive. RET_NONE ops generate nothing.
@@ -702,6 +803,33 @@ void b2RecEndRecord( b2Recording* rec )
 #undef B2_REC_RETWRITE_RET_CHAINID
 #undef B2_REC_RETWRITE_RET_JOINTID
 #undef B2_REC_RETWRITE
+
+// fluidfun: the same for the fluid's creates, and for its calls that return how many particles they touched
+#define B2_REC_FLUID_RETWRITE( op, Name, idType, idW )                                                                           \
+	void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, idType id )                                          \
+	{                                                                                                                            \
+		b2LockMutex( rec->lock );                                                                                                \
+		b2RecBeginRecord( rec, (uint8_t)B2_REC_OP_FLUID );                                                                       \
+		b2RecW_U8( &rec->buffer, (uint8_t)( op ) );                                                                              \
+		b2RecWriteArgs_##Name( rec, a );                                                                                         \
+		idW( &rec->buffer, id );                                                                                                 \
+		b2RecEndRecord( rec );                                                                                                   \
+		b2UnlockMutex( rec->lock );                                                                                              \
+	}
+#define B2_REC_FLUID_RETWRITE_RET_NONE( op, Name )
+#define B2_REC_FLUID_RETWRITE_RET_FLUIDID( op, Name ) B2_REC_FLUID_RETWRITE( op, Name, b2FluidId, b2RecW_FLUIDID )
+#define B2_REC_FLUID_RETWRITE_RET_LIQUIDID( op, Name ) B2_REC_FLUID_RETWRITE( op, Name, b2LiquidId, b2RecW_LIQUIDID )
+#define B2_REC_FLUID_RETWRITE_RET_EMITTERID( op, Name ) B2_REC_FLUID_RETWRITE( op, Name, b2EmitterId, b2RecW_EMITTERID )
+#define B2_REC_FLUID_RETWRITE_RET_I32( op, Name ) B2_REC_FLUID_RETWRITE( op, Name, int32_t, b2RecW_I32 )
+#define B2_REC_FLUID_OP( op, Name, RET, ... ) B2_REC_FLUID_RETWRITE_##RET( op, Name )
+#include "recording_fluid_ops.inl"
+#undef B2_REC_FLUID_OP
+#undef B2_REC_FLUID_RETWRITE_RET_NONE
+#undef B2_REC_FLUID_RETWRITE_RET_FLUIDID
+#undef B2_REC_FLUID_RETWRITE_RET_LIQUIDID
+#undef B2_REC_FLUID_RETWRITE_RET_EMITTERID
+#undef B2_REC_FLUID_RETWRITE_RET_I32
+#undef B2_REC_FLUID_RETWRITE
 
 // Lifecycle
 
@@ -757,12 +885,13 @@ void b2StartRecordingIntoBuffer( b2World* world, b2Recording* recording )
 
 	// Serialize the live world into a blob that follows the header and seeds replay.
 	b2RecBuffer blob = { 0 };
-	b2SerializeWorld( world, &blob );
+	b2SerializeWorldWithFluid( world, &blob );
 
 	b2RecHeader hdr = { 0 };
 	hdr.magic = B2_REC_MAGIC;
 	hdr.versionMajor = B2_REC_VERSION_MAJOR;
 	hdr.versionMinor = B2_REC_VERSION_MINOR;
+	hdr.forkFormat = B2_REC_FORK_FLUIDFUN;
 	hdr.lengthScale = b2GetLengthUnitsPerMeter();
 	hdr.pointerWidth = (uint8_t)sizeof( void* );
 	hdr.bigEndian = 0;
@@ -923,6 +1052,13 @@ uint64_t b2HashWorldState( b2World* world )
 		}
 
 #undef B2_HASH_FLOAT
+	}
+
+	// fluidfun: with a fluid, every particle and each body's sleep, so a divergence of the liquid, or of a body the
+	// liquid keeps awake or wakes, is caught at the frame it happens. A world without a fluid hashes as before.
+	if ( world->fluid != NULL )
+	{
+		hash = b2fHashFluid( world, hash, false );
 	}
 
 	return hash;

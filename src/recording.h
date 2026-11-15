@@ -5,6 +5,7 @@
 
 #include "core.h"
 
+#include "box2d/fluidfun.h"
 #include "box2d/id.h"
 #include "box2d/math_types.h"
 #include "box2d/types.h"
@@ -50,6 +51,14 @@ typedef struct b2World b2World;
 #define B2_REC_VERSION_MAJOR 3
 #define B2_REC_VERSION_MINOR 13 // shape queries not recorded
 
+// fluidfun: the fork's own format, in a field Box2D reserves, so that the fork never takes a version number upstream
+// Box2D may give a format of its own. 'FF' and the fork's format number, which counts changes to the fluid's records
+// and snapshot section. A file with zero here was written by Box2D itself, has no fluid records, and loads as before;
+// any other value refuses to load. Box2D's own reader ignores the field, and skips the fluid's records as unknown.
+#define B2_REC_FORK_FLUIDFUN 0x46460001u
+// The one opcode the fluid's records go out under, each with a subop from recording_fluid_ops.inl first
+#define B2_REC_OP_FLUID 0xFE
+
 // File header, fixed 32 bytes, little-endian
 typedef struct b2RecHeader
 {
@@ -62,7 +71,7 @@ typedef struct b2RecHeader
 	uint8_t pointerWidth;	   // sizeof(void*), gates POD-def memcpy
 	uint8_t bigEndian;		   // 0 on all supported targets
 	uint8_t validationEnabled; // 1 if built with validation, only for diagnostics on a layout mismatch
-	uint32_t reserved1;
+	uint32_t forkFormat; // reserved by Box2D (reserved1); B2_REC_FORK_FLUIDFUN in files this fork writes
 	uint64_t snapshotSize; // bytes of snapshot blob after the header
 } b2RecHeader;
 
@@ -134,6 +143,14 @@ typedef b2WheelJointDef b2RecCType_WHEELJOINTDEF;
 typedef b2AABB b2RecCType_AABB;
 typedef b2QueryFilter b2RecCType_QUERYFILTER;
 typedef b2ShapeProxy b2RecCType_SHAPEPROXY;
+// fluidfun
+typedef b2FluidId b2RecCType_FLUIDID;
+typedef b2LiquidId b2RecCType_LIQUIDID;
+typedef b2EmitterId b2RecCType_EMITTERID;
+typedef b2FluidDef b2RecCType_FLUIDDEF;
+typedef b2LiquidDef b2RecCType_LIQUIDDEF;
+typedef b2EmitterDef b2RecCType_EMITTERDEF;
+typedef b2FluidRegion b2RecCType_REGION;
 
 // Codegen pass 1a: arg structs, generated in recording.c, declared here for call sites.
 // These are typedef'd in recording.c before the write helpers, but must be visible
@@ -158,6 +175,13 @@ typedef b2ShapeProxy b2RecCType_SHAPEPROXY;
 	} b2RecArgs_##Name;
 #include "recording_ops.inl"
 #undef B2_REC_OP
+#define B2_REC_FLUID_OP( op, Name, RET, ... )                                                                                    \
+	typedef struct                                                                                                               \
+	{                                                                                                                            \
+		__VA_ARGS__                                                                                                              \
+	} b2RecArgs_##Name;
+#include "recording_fluid_ops.inl"
+#undef B2_REC_FLUID_OP
 #undef ARG
 
 // Low level buffer helpers
@@ -214,6 +238,14 @@ void b2RecW_SHAPEPROXY( b2RecBuffer* buf, b2ShapeProxy v );
 void b2RecW_RAYRESULT( b2RecBuffer* buf, b2RayResult v );
 void b2RecW_PLANERESULT( b2RecBuffer* buf, b2PlaneResult v );
 void b2RecW_TREESTATS( b2RecBuffer* buf, b2TreeStats v );
+// fluidfun
+void b2RecW_FLUIDID( b2RecBuffer* buf, b2FluidId v );
+void b2RecW_LIQUIDID( b2RecBuffer* buf, b2LiquidId v );
+void b2RecW_EMITTERID( b2RecBuffer* buf, b2EmitterId v );
+void b2RecW_FLUIDDEF( b2RecBuffer* buf, b2FluidDef v );
+void b2RecW_LIQUIDDEF( b2RecBuffer* buf, b2LiquidDef v );
+void b2RecW_EMITTERDEF( b2RecBuffer* buf, b2EmitterDef v );
+void b2RecW_REGION( b2RecBuffer* buf, b2FluidRegion v );
 
 // Record framing
 void b2RecBeginRecord( b2Recording* rec, uint8_t opcode );
@@ -226,6 +258,9 @@ void b2RecEndRecord( b2Recording* rec );
 	void b2RecWriteArgs_##Name( b2Recording* rec, const b2RecArgs_##Name* a );                                                   \
 	void b2RecWrite_##Name( b2Recording* rec, const b2RecArgs_##Name* a );
 #include "recording_ops.inl"
+#define B2_REC_FLUID_OP B2_REC_OP
+#include "recording_fluid_ops.inl"
+#undef B2_REC_FLUID_OP
 #undef B2_REC_OP
 
 // Create ops also need a writer that appends the returned id inside the same record.
@@ -236,9 +271,20 @@ void b2RecEndRecord( b2Recording* rec );
 #define B2_REC_RETDECL_RET_SHAPEID( Name ) void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, b2ShapeId id );
 #define B2_REC_RETDECL_RET_CHAINID( Name ) void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, b2ChainId id );
 #define B2_REC_RETDECL_RET_JOINTID( Name ) void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, b2JointId id );
+#define B2_REC_RETDECL_RET_FLUIDID( Name ) void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, b2FluidId id );
+#define B2_REC_RETDECL_RET_LIQUIDID( Name ) void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, b2LiquidId id );
+#define B2_REC_RETDECL_RET_EMITTERID( Name ) void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, b2EmitterId id );
+#define B2_REC_RETDECL_RET_I32( Name ) void b2RecWriteRet_##Name( b2Recording* rec, const b2RecArgs_##Name* a, int32_t result );
 #define B2_REC_OP( op, Name, RET, ... ) B2_REC_RETDECL_##RET( Name )
 #include "recording_ops.inl"
+#define B2_REC_FLUID_OP B2_REC_OP
+#include "recording_fluid_ops.inl"
+#undef B2_REC_FLUID_OP
 #undef B2_REC_OP
+#undef B2_REC_RETDECL_RET_FLUIDID
+#undef B2_REC_RETDECL_RET_LIQUIDID
+#undef B2_REC_RETDECL_RET_EMITTERID
+#undef B2_REC_RETDECL_RET_I32
 #undef B2_REC_RETDECL_RET_NONE
 #undef B2_REC_RETDECL_RET_BODYID
 #undef B2_REC_RETDECL_RET_SHAPEID
@@ -307,6 +353,6 @@ void b2StopRecordingInternal( b2World* world );
 // Fold one step's world bounds into the running union the recorder writes out at stop.
 void b2RecAccumulateBounds( b2Recording* rec, b2AABB bounds );
 
-// Deterministic hash over all body transforms and velocities.
+// Deterministic hash over all body transforms and velocities, and with a fluid, every particle and each body's sleep.
 // Called by both recorder and replayer to verify simulation reproduces exactly.
 uint64_t b2HashWorldState( b2World* world );

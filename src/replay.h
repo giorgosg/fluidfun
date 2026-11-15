@@ -190,6 +190,14 @@ b2ShapeProxy b2RecR_SHAPEPROXY( b2RecReader* rdr );
 b2RayResult b2RecR_RAYRESULT( b2RecReader* rdr );
 b2PlaneResult b2RecR_PLANERESULT( b2RecReader* rdr );
 b2TreeStats b2RecR_TREESTATS( b2RecReader* rdr );
+// fluidfun
+b2FluidId b2RecR_FLUIDID( b2RecReader* rdr );
+b2LiquidId b2RecR_LIQUIDID( b2RecReader* rdr );
+b2EmitterId b2RecR_EMITTERID( b2RecReader* rdr );
+b2FluidDef b2RecR_FLUIDDEF( b2RecReader* rdr );
+b2LiquidDef b2RecR_LIQUIDDEF( b2RecReader* rdr );
+b2EmitterDef b2RecR_EMITTERDEF( b2RecReader* rdr );
+b2FluidRegion b2RecR_REGION( b2RecReader* rdr );
 
 // Grow the reader's hit scratch to at least n entries
 void b2RecEnsureHits( b2RecReader* rdr, int n );

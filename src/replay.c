@@ -12,6 +12,7 @@
 #include "snapshot.h"
 
 #include "box2d/box2d.h"
+#include "box2d/fluidfun.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -632,6 +633,102 @@ b2TreeStats b2RecR_TREESTATS( b2RecReader* rdr )
 	v.nodeVisits = b2RecR_I32( rdr );
 	v.leafVisits = b2RecR_I32( rdr );
 	return v;
+}
+
+// fluidfun: the fluid's ids, defs and regions, as b2RecW_* in recording.c writes them
+
+b2FluidId b2RecR_FLUIDID( b2RecReader* rdr )
+{
+	b2FluidId id;
+	id.index1 = b2RecR_I32( rdr );
+	id.world0 = b2RecR_U16( rdr );
+	id.generation = b2RecR_U16( rdr );
+	return id;
+}
+
+b2LiquidId b2RecR_LIQUIDID( b2RecReader* rdr )
+{
+	b2LiquidId id;
+	id.index1 = b2RecR_I32( rdr );
+	id.world0 = b2RecR_U16( rdr );
+	id.generation = b2RecR_U16( rdr );
+	return id;
+}
+
+b2EmitterId b2RecR_EMITTERID( b2RecReader* rdr )
+{
+	b2EmitterId id;
+	id.index1 = b2RecR_I32( rdr );
+	id.world0 = b2RecR_U16( rdr );
+	id.generation = b2RecR_U16( rdr );
+	return id;
+}
+
+b2FluidDef b2RecR_FLUIDDEF( b2RecReader* rdr )
+{
+	b2FluidDef def = b2DefaultFluidDef();
+	def.particleSpacing = b2RecR_F32( rdr );
+	def.adaptiveDepth = b2RecR_F32( rdr );
+	def.adaptiveFullBox = b2RecR_F32( rdr );
+	def.capacity = b2RecR_I32( rdr );
+	def.maxCapacity = b2RecR_I32( rdr );
+	return def;
+}
+
+b2LiquidDef b2RecR_LIQUIDDEF( b2RecReader* rdr )
+{
+	b2LiquidDef def = b2DefaultLiquidDef();
+	def.density = b2RecR_F32( rdr );
+	def.viscosity = b2RecR_F32( rdr );
+	def.cohesion = b2RecR_F32( rdr );
+	def.adhesion = b2RecR_F32( rdr );
+	def.friction = b2RecR_F32( rdr );
+	def.gravityScale = b2RecR_F32( rdr );
+	def.springStiffness = b2RecR_F32( rdr );
+	def.plasticity = b2RecR_F32( rdr );
+	def.yieldRatio = b2RecR_F32( rdr );
+	def.categoryBits = b2RecR_U64( rdr );
+	def.maskBits = b2RecR_U64( rdr );
+	b2LiquidTuning* t = &def.tuning;
+	t->stiffness = b2RecR_F32( rdr );
+	t->nearStiffness = b2RecR_F32( rdr );
+	t->tensilePressure = b2RecR_F32( rdr );
+	t->quadraticViscosity = b2RecR_F32( rdr );
+	t->buoyancyAssist = b2RecR_F32( rdr );
+	t->addedMass = b2RecR_F32( rdr );
+	t->adaptiveRatio = b2RecR_F32( rdr );
+	t->adaptiveSpeed = b2RecR_F32( rdr );
+	t->adaptiveDepthLimit = b2RecR_BOOL( rdr );
+	t->adaptiveTolerance = b2RecR_F32( rdr );
+	t->adaptiveLimit = b2RecR_F32( rdr );
+	t->adaptiveRate = b2RecR_F32( rdr );
+	return def;
+}
+
+// The body keeps its recorded world0; the dispatcher maps it
+b2EmitterDef b2RecR_EMITTERDEF( b2RecReader* rdr )
+{
+	b2EmitterDef def = b2DefaultEmitterDef();
+	def.bodyId = b2RecR_BODYID( rdr );
+	def.point1 = b2RecR_POSITION( rdr );
+	def.point2 = b2RecR_POSITION( rdr );
+	def.velocity = b2RecR_VEC2( rdr );
+	def.enabled = b2RecR_BOOL( rdr );
+	return def;
+}
+
+// The shape keeps its recorded world0; the dispatcher maps it
+b2FluidRegion b2RecR_REGION( b2RecReader* rdr )
+{
+	b2FluidRegion region;
+	memset( &region, 0, sizeof( region ) );
+	region.type = (b2FluidRegionType)b2RecR_I32( rdr );
+	region.lowerBound = b2RecR_POSITION( rdr );
+	region.upperBound = b2RecR_POSITION( rdr );
+	region.shapeId = b2RecR_SHAPEID( rdr );
+	region.origin = b2RecR_POSITION( rdr );
+	region.proxy = b2RecR_SHAPEPROXY( rdr );
+	return region;
 }
 
 // Reserve reader scratch for a count taken from an untrusted file. Every recorded element
@@ -1955,6 +2052,324 @@ static void b2RecDispatch_QueryCastMover( const b2RecArgs_QueryCastMover* a, b2R
 	}
 }
 
+// fluidfun: the fluid's calls. Liquid and emitter ids carry the slot and a generation the snapshot restores, so they map
+// as body ids do, by the replay world's slot. A fluid id carries the world's generation, so it maps to the replay world's
+// fluid. Creates compare the id they get with the recorded one, a structural check; calls that return how many
+// particles they touched compare that count, and a different count is a divergence.
+
+static b2FluidId b2RecMakeFluidId( b2RecReader* rdr, b2FluidId recorded )
+{
+	b2FluidId id;
+	id.index1 = recorded.index1;
+	id.world0 = (uint16_t)( rdr->replayWorldId.index1 - 1u );
+	id.generation = rdr->replayWorldId.generation;
+	return id;
+}
+
+static b2LiquidId b2RecMakeLiquidId( b2RecReader* rdr, b2LiquidId recorded )
+{
+	if ( B2_IS_NULL( recorded ) )
+	{
+		return b2_nullLiquidId;
+	}
+	b2LiquidId id = recorded;
+	id.world0 = (uint16_t)( rdr->replayWorldId.index1 - 1u );
+	return id;
+}
+
+static b2EmitterId b2RecMakeEmitterId( b2RecReader* rdr, b2EmitterId recorded )
+{
+	b2EmitterId id = recorded;
+	id.world0 = (uint16_t)( rdr->replayWorldId.index1 - 1u );
+	return id;
+}
+
+// An id the fluid's calls assert on would stop replay in a debug build; a recorded id with no match is a fatal drift
+static bool b2RecFluidOk( b2RecReader* rdr, b2FluidId id )
+{
+	if ( b2Fluid_IsValid( id ) == false )
+	{
+		printf( "b2ReplayFile: fluid id %d has no fluid\n", id.index1 );
+		rdr->ok = false;
+	}
+	return rdr->ok;
+}
+
+static bool b2RecLiquidOk( b2RecReader* rdr, b2LiquidId id )
+{
+	if ( B2_IS_NON_NULL( id ) && b2Liquid_IsValid( id ) == false )
+	{
+		printf( "b2ReplayFile: liquid id %d gen %u has no liquid\n", id.index1, (unsigned)id.generation );
+		rdr->ok = false;
+	}
+	return rdr->ok;
+}
+
+static bool b2RecEmitterOk( b2RecReader* rdr, b2EmitterId id )
+{
+	if ( b2Emitter_IsValid( id ) == false )
+	{
+		printf( "b2ReplayFile: emitter id %d gen %u has no emitter\n", id.index1, (unsigned)id.generation );
+		rdr->ok = false;
+	}
+	return rdr->ok;
+}
+
+static void b2RecCheckCount( b2RecReader* rdr, const char* kind, int got )
+{
+	int recorded = b2RecR_I32( rdr );
+	if ( rdr->ok && got != recorded )
+	{
+		printf( "b2ReplayFile: %s touched %d particles, recorded %d\n", kind, got, recorded );
+		rdr->diverged = true;
+	}
+}
+
+static b2FluidRegion b2RecMakeRegion( b2RecReader* rdr, b2FluidRegion region )
+{
+	if ( region.type == b2_shapeRegion )
+	{
+		region.shapeId = b2RecMakeShapeId( rdr, region.shapeId );
+	}
+	return region;
+}
+
+static b2EmitterDef b2RecMakeEmitterDef( b2RecReader* rdr, b2EmitterDef def )
+{
+	if ( B2_IS_NON_NULL( def.bodyId ) )
+	{
+		def.bodyId = b2RecMakeBodyId( rdr, def.bodyId );
+	}
+	return def;
+}
+
+static void b2RecDispatch_CreateFluid( const b2RecArgs_CreateFluid* a, b2RecReader* rdr )
+{
+	b2FluidId recorded = b2RecR_FLUIDID( rdr );
+	if ( rdr->ok == false )
+	{
+		return;
+	}
+	b2FluidId got = b2CreateFluid( rdr->replayWorldId, &a->def );
+	b2RecCheckId( rdr, "fluid", got.index1, 0, recorded.index1, 0 );
+}
+
+static void b2RecDispatch_DestroyFluid( const b2RecArgs_DestroyFluid* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	if ( b2RecFluidOk( rdr, id ) )
+	{
+		b2DestroyFluid( id );
+	}
+}
+
+static void b2RecDispatch_FluidSetAdaptiveDepth( const b2RecArgs_FluidSetAdaptiveDepth* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	if ( b2RecFluidOk( rdr, id ) )
+	{
+		b2Fluid_SetAdaptiveDepth( id, a->adaptiveDepth );
+	}
+}
+
+static void b2RecDispatch_FluidSetAdaptiveFullBox( const b2RecArgs_FluidSetAdaptiveFullBox* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	if ( b2RecFluidOk( rdr, id ) )
+	{
+		b2Fluid_SetAdaptiveFullBox( id, a->adaptiveFullBox );
+	}
+}
+
+static void b2RecDispatch_FluidSetMaxCapacity( const b2RecArgs_FluidSetMaxCapacity* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	if ( b2RecFluidOk( rdr, id ) )
+	{
+		b2Fluid_SetMaxCapacity( id, a->maxCapacity );
+	}
+}
+
+static void b2RecDispatch_CreateLiquid( const b2RecArgs_CreateLiquid* a, b2RecReader* rdr )
+{
+	b2LiquidId recorded = b2RecR_LIQUIDID( rdr );
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	if ( b2RecFluidOk( rdr, id ) )
+	{
+		b2LiquidId got = b2CreateLiquid( id, &a->def );
+		b2RecCheckId( rdr, "liquid", got.index1, got.generation, recorded.index1, recorded.generation );
+	}
+}
+
+static void b2RecDispatch_DestroyLiquid( const b2RecArgs_DestroyLiquid* a, b2RecReader* rdr )
+{
+	b2LiquidId id = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecLiquidOk( rdr, id ) )
+	{
+		b2DestroyLiquid( id );
+	}
+}
+
+static void b2RecDispatch_LiquidSetDef( const b2RecArgs_LiquidSetDef* a, b2RecReader* rdr )
+{
+	b2LiquidId id = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecLiquidOk( rdr, id ) )
+	{
+		b2Liquid_SetDef( id, &a->def );
+	}
+}
+
+static void b2RecDispatch_LiquidSetCohesionBetween( const b2RecArgs_LiquidSetCohesionBetween* a, b2RecReader* rdr )
+{
+	b2LiquidId idA = b2RecMakeLiquidId( rdr, a->liquidA ), idB = b2RecMakeLiquidId( rdr, a->liquidB );
+	if ( b2RecLiquidOk( rdr, idA ) && b2RecLiquidOk( rdr, idB ) )
+	{
+		b2Liquid_SetCohesionBetween( idA, idB, a->cohesion );
+	}
+}
+
+static void b2RecDispatch_LiquidSpawnBox( const b2RecArgs_LiquidSpawnBox* a, b2RecReader* rdr )
+{
+	b2LiquidId id = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecLiquidOk( rdr, id ) )
+	{
+		b2RecCheckCount( rdr, "spawn", b2Liquid_SpawnBox( id, a->lowerBound, a->upperBound, a->velocity ) );
+	}
+}
+
+static void b2RecDispatch_LiquidSpawnCircle( const b2RecArgs_LiquidSpawnCircle* a, b2RecReader* rdr )
+{
+	b2LiquidId id = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecLiquidOk( rdr, id ) )
+	{
+		b2RecCheckCount( rdr, "spawn", b2Liquid_SpawnCircle( id, a->center, a->radius, a->velocity ) );
+	}
+}
+
+static void b2RecDispatch_LiquidSpawnCapsule( const b2RecArgs_LiquidSpawnCapsule* a, b2RecReader* rdr )
+{
+	b2LiquidId id = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecLiquidOk( rdr, id ) )
+	{
+		b2RecCheckCount( rdr, "spawn", b2Liquid_SpawnCapsule( id, a->center1, a->center2, a->radius, a->velocity ) );
+	}
+}
+
+static void b2RecDispatch_LiquidSpawnPolygon( const b2RecArgs_LiquidSpawnPolygon* a, b2RecReader* rdr )
+{
+	b2LiquidId id = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecLiquidOk( rdr, id ) )
+	{
+		b2RecCheckCount( rdr, "spawn", b2Liquid_SpawnPolygon( id, a->origin, a->rotation, &a->polygon, a->velocity ) );
+	}
+}
+
+static void b2RecDispatch_FluidRemove( const b2RecArgs_FluidRemove* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	b2LiquidId liquid = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecFluidOk( rdr, id ) && b2RecLiquidOk( rdr, liquid ) )
+	{
+		b2RecCheckCount( rdr, "remove", b2Fluid_Remove( id, liquid, b2RecMakeRegion( rdr, a->region ), a->maxCount ) );
+	}
+}
+
+static void b2RecDispatch_FluidAccelerate( const b2RecArgs_FluidAccelerate* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	b2LiquidId liquid = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecFluidOk( rdr, id ) && b2RecLiquidOk( rdr, liquid ) )
+	{
+		b2RecCheckCount( rdr, "accelerate",
+						 b2Fluid_Accelerate( id, liquid, b2RecMakeRegion( rdr, a->region ), a->velocityChange ) );
+	}
+}
+
+static void b2RecDispatch_FluidBlendVelocity( const b2RecArgs_FluidBlendVelocity* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	b2LiquidId liquid = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecFluidOk( rdr, id ) && b2RecLiquidOk( rdr, liquid ) )
+	{
+		b2RecCheckCount( rdr, "blend",
+						 b2Fluid_BlendVelocity( id, liquid, b2RecMakeRegion( rdr, a->region ), a->velocity, a->share ) );
+	}
+}
+
+static void b2RecDispatch_FluidExplode( const b2RecArgs_FluidExplode* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	if ( b2RecFluidOk( rdr, id ) )
+	{
+		b2RecCheckCount( rdr, "explode", b2Fluid_Explode( id, &a->def ) );
+	}
+}
+
+static void b2RecDispatch_CreateEmitter( const b2RecArgs_CreateEmitter* a, b2RecReader* rdr )
+{
+	b2EmitterId recorded = b2RecR_EMITTERID( rdr );
+	b2LiquidId liquid = b2RecMakeLiquidId( rdr, a->liquid );
+	if ( b2RecLiquidOk( rdr, liquid ) )
+	{
+		b2EmitterDef def = b2RecMakeEmitterDef( rdr, a->def );
+		b2EmitterId got = b2CreateEmitter( liquid, &def );
+		b2RecCheckId( rdr, "emitter", got.index1, got.generation, recorded.index1, recorded.generation );
+	}
+}
+
+static void b2RecDispatch_DestroyEmitter( const b2RecArgs_DestroyEmitter* a, b2RecReader* rdr )
+{
+	b2EmitterId id = b2RecMakeEmitterId( rdr, a->emitter );
+	if ( b2RecEmitterOk( rdr, id ) )
+	{
+		b2DestroyEmitter( id );
+	}
+}
+
+static void b2RecDispatch_EmitterSetDef( const b2RecArgs_EmitterSetDef* a, b2RecReader* rdr )
+{
+	b2EmitterId id = b2RecMakeEmitterId( rdr, a->emitter );
+	if ( b2RecEmitterOk( rdr, id ) )
+	{
+		b2EmitterDef def = b2RecMakeEmitterDef( rdr, a->def );
+		b2Emitter_SetDef( id, &def );
+	}
+}
+
+// One fluid record: the subop, then the args, as the manifest reads them
+static void b2RecDispatchFluid( b2RecReader* rdr, int payloadStart, uint32_t payloadSize )
+{
+	uint8_t subop = b2RecR_U8( rdr );
+	if ( rdr->ok == false )
+	{
+		return;
+	}
+
+	switch ( subop )
+	{
+#define ARG( TAG, field ) a.field = b2RecR_##TAG( rdr );
+#define B2_REC_FLUID_OP( op, Name, RET, ... )                                                                                    \
+	case op:                                                                                                                     \
+	{                                                                                                                            \
+		b2RecArgs_##Name a;                                                                                                      \
+		memset( &a, 0, sizeof( a ) );                                                                                            \
+		__VA_ARGS__                                                                                                              \
+		if ( rdr->ok )                                                                                                           \
+		{                                                                                                                        \
+			b2RecDispatch_##Name( &a, rdr );                                                                                     \
+		}                                                                                                                        \
+		break;                                                                                                                   \
+	}
+#include "recording_fluid_ops.inl"
+#undef B2_REC_FLUID_OP
+#undef ARG
+		default:
+			printf( "b2ReplayFile: unknown fluid subop 0x%02X, skipping\n", subop );
+			rdr->cursor = payloadStart + (int)payloadSize;
+			break;
+	}
+}
+
 static void b2RecDispatch_StateHash( const b2RecArgs_StateHash* a, b2RecReader* rdr )
 {
 	b2World* world = b2GetWorldFromId( rdr->replayWorldId );
@@ -2016,6 +2431,16 @@ static int b2RecDispatchOne( b2Replay* player )
 #include "recording_ops.inl"
 #undef B2_REC_OP
 #undef ARG
+		case B2_REC_OP_FLUID:
+			if ( payloadSize > (uint32_t)( rdr->size - payloadStart ) )
+			{
+				rdr->ok = false;
+			}
+			else
+			{
+				b2RecDispatchFluid( rdr, payloadStart, payloadSize );
+			}
+			break;
 		default:
 			printf( "b2ReplayFile: unknown opcode 0x%02X, skipping %u bytes\n", opcode, payloadSize );
 			// payloadStart is in bounds, so size - payloadStart is the bytes left to skip over
@@ -2102,6 +2527,13 @@ b2Replay* b2CreateReplay( const void* data, int size, int workerCount )
 	{
 		printf( "b2CreateReplay: version mismatch (file=%u.%u, runtime=%u.%u)\n", hdr.versionMajor, hdr.versionMinor,
 				B2_REC_VERSION_MAJOR, B2_REC_VERSION_MINOR );
+		return NULL;
+	}
+
+	// fluidfun: zero is a file of Box2D's own, which loads as before
+	if ( hdr.forkFormat != 0 && hdr.forkFormat != B2_REC_FORK_FLUIDFUN )
+	{
+		printf( "b2CreateReplay: fork format mismatch (file=0x%08X, runtime=0x%08X)\n", hdr.forkFormat, B2_REC_FORK_FLUIDFUN );
 		return NULL;
 	}
 
@@ -2239,7 +2671,7 @@ static void b2RecCaptureKeyframe( b2Replay* player )
 	// and copy. The buffer over-allocates, so the budget and free track its capacity, not its size.
 	b2World* world = b2GetWorldFromId( player->rdr.replayWorldId );
 	b2RecBuffer buf = { 0 };
-	b2SerializeWorld( world, &buf );
+	b2SerializeWorldWithFluid( world, &buf );
 
 	size_t bodyBytes = (size_t)player->bodyIdCount * sizeof( b2BodyId );
 	size_t newBytes = (size_t)buf.capacity + bodyBytes;

@@ -7,6 +7,7 @@
 
 #include "box2d/box2d.h"
 #include "box2d/constants.h"
+#include "box2d/fluidfun.h"
 
 #include <GLFW/glfw3.h>
 #include <float.h>
@@ -464,6 +465,7 @@ public:
 		if ( B2_IS_NON_NULL( m_worldId ) )
 		{
 			b2World_Draw( m_worldId, &m_context->debugDraw );
+			DrawFluid();
 			if ( m_selKind == SelQuery )
 			{
 				b2Replay_DrawFrameQueries( m_player, &m_context->debugDraw, m_selQuery );
@@ -474,6 +476,31 @@ public:
 		if ( m_context->showUI )
 		{
 			DrawOutlinePanel();
+		}
+	}
+
+	// fluidfun: the replay world's liquid, coloured by liquid as the fluid samples colour it, lighter with speed, each dot
+	// as large as its particle against the finest
+	void DrawFluid()
+	{
+		b2FluidId fluidId = b2World_GetFluid( m_worldId );
+		if ( B2_IS_NULL( fluidId ) )
+		{
+			return;
+		}
+
+		b2FluidParticles particles = b2Fluid_GetParticles( fluidId );
+		float fine = b2Fluid_GetParticleSpacing( fluidId );
+		static const float tints[3][3] = { { 40.0f, 110.0f, 255.0f }, { 230.0f, 170.0f, 40.0f }, { 200.0f, 40.0f, 60.0f } };
+		for ( int i = 0; i < particles.count; ++i )
+		{
+			float speed = b2MinFloat( b2Length( { particles.velocitiesX[i], particles.velocitiesY[i] } ) / 8.0f, 1.0f );
+			const float* tint = tints[particles.liquids[i] % 3];
+			uint32_t red = (uint32_t)( tint[0] + ( 255.0f - tint[0] ) * speed );
+			uint32_t green = (uint32_t)( tint[1] + ( 255.0f - tint[1] ) * speed );
+			uint32_t blue = (uint32_t)( tint[2] + ( 255.0f - tint[2] ) * speed );
+			DrawPoint( m_context->draw, particles.positions[i], 4.0f * particles.sizes[i] / fine,
+					   b2HexColor( ( red << 16 ) | ( green << 8 ) | blue ) );
 		}
 	}
 

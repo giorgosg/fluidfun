@@ -49,6 +49,7 @@ set(BOX2D_SOURCE_FILES
 	pogo_joint.c
 	prismatic_joint.c
 	recording_ops.inl
+	recording_fluid_ops.inl
 	recording.c
 	recording.h
 	replay.c
@@ -88,6 +89,7 @@ set(FLUIDFUN_SOURCE_FILES
 	fluid_solver.c
 	fluid_spawn.c
 	fluid_state.c
+	fluid_snapshot.c
 )
 
 set(BOX2D_API_FILES

@@ -6,6 +6,9 @@
 
 #include "box2d/types.h"
 
+#include <stdbool.h>
+#include <stdint.h>
+
 struct b2fFluid;
 
 // The fluid's parallel loops in a step, defined in solver.c. The fluid reads and changes bodies, shapes and contacts
@@ -34,3 +37,19 @@ int b2fExplode( struct b2fFluid* fluid, const b2ExplosionDef* def );
 
 // Frees a fluid the world is done with
 void b2FreeFluid( struct b2fFluid* fluid );
+
+// Snapshots and recording (fluid_snapshot.c). A world's snapshot carries a fluid section when the world has a fluid or
+// has had one, and a recording's seed and keyframes always do: the serials ids are made from, and the fluid. Without
+// one the image is Box2D's own.
+struct b2World;
+struct b2RecBuffer;
+bool b2fHasFluidSection( const struct b2World* world );
+void b2fSerializeFluid( const struct b2World* world, struct b2RecBuffer* buf );
+// Reads the section at data[*cursor], replacing the world's fluid and serials, and advances the cursor. Returns false
+// on a corrupt or foreign section, which leaves the world without a fluid.
+bool b2fDeserializeFluid( struct b2World* world, const uint8_t* data, int size, int* cursor );
+// For an image without a section: no fluid, and the fluid serial of a world that never had one. The slot's liquid and
+// emitter serials stay as they are, only growing, so no old id fits a later liquid or emitter.
+void b2fClearFluidState( struct b2World* world );
+// Mixes the fluid's state into a hash: every particle, and each body's sleep. Deep adds what else persists.
+uint64_t b2fHashFluid( const struct b2World* world, uint64_t hash, bool deep );

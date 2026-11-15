@@ -908,6 +908,21 @@ static void b2Collide( b2StepContext* context )
 	b2TracyCZoneEnd( collide );
 }
 
+// The state hash and bounds recorded at the end of each step
+static void b2RecordStepEnd( b2World* world, b2WorldId worldId )
+{
+	uint64_t hash = b2HashWorldState( world );
+	b2RecArgs_StateHash stateHash = { worldId, hash };
+	b2RecWrite_StateHash( world->recording, &stateHash );
+
+	// Grow the recorded bounds so a replay can frame the whole motion, not just frame 0
+	b2AABB bounds;
+	if ( b2ComputeWorldBounds( world, &bounds ) )
+	{
+		b2RecAccumulateBounds( world->recording, bounds );
+	}
+}
+
 void b2World_Step( b2WorldId worldId, float timeStep, int subStepCount )
 {
 	B2_CHECK_INPUT( b2IsValidFloat( timeStep ) );
@@ -1056,21 +1071,14 @@ void b2World_Step( b2WorldId worldId, float timeStep, int subStepCount )
 	b2Array_Clear( world->sensorEndEvents[world->endEventArrayIndex] );
 	b2Array_Clear( world->contactEndEvents[world->endEventArrayIndex] );
 
-	if ( world->recording != NULL )
+	// fluidfun: with a fluid, the step's state hash waits for the end of the fluid's step, which changes particle sizes
+	// and wakes the bodies the liquid reached, so the hash covers all of the step
+	if ( world->recording != NULL && world->fluid == NULL )
 	{
 		// Write the per-step StateHash while the world is still locked. Queries early return while
 		// locked, so this keeps the shared recording buffer single-writer without a lock. StateHash
 		// proves the simulation reproduced exactly on replay.
-		uint64_t hash = b2HashWorldState( world );
-		b2RecArgs_StateHash stateHash = { worldId, hash };
-		b2RecWrite_StateHash( world->recording, &stateHash );
-
-		// Grow the recorded bounds so a replay can frame the whole motion, not just frame 0
-		b2AABB bounds;
-		if ( b2ComputeWorldBounds( world, &bounds ) )
-		{
-			b2RecAccumulateBounds( world->recording, bounds );
-		}
+		b2RecordStepEnd( world, worldId );
 	}
 
 	world->locked = false;
@@ -1078,6 +1086,10 @@ void b2World_Step( b2WorldId worldId, float timeStep, int subStepCount )
 	if ( world->fluid != NULL )
 	{
 		b2FinishFluid( world->fluid );
+		if ( world->recording != NULL )
+		{
+			b2RecordStepEnd( world, worldId );
+		}
 	}
 
 	b2TracyCFrame;
