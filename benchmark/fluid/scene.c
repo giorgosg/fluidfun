@@ -357,6 +357,14 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 8.0f;
 			break;
 
+		case lab_tiles:
+			s.name = "Tile Floor";
+			s.viewCenter = (b2Vec2){ 0.0f, 3.5f };
+			s.viewHalfWidth = 9.0f;
+			s.tankWidth = 16.0f;
+			s.floorTiles = 32;
+			break;
+
 		default:
 			break;
 	}
@@ -1113,6 +1121,29 @@ static void AddNozzle( LabScene* scene, b2BodyId arm, float side )
 	scene->emitter = b2CreateEmitter( scene->liquids[0], &nozzle );
 }
 
+// A tank built as a tile map builds one: a floor of square tiles half a metre across, a step one tile high at the
+// right, and three crates, of 0.5, 0.9 and 1.2 times the liquid's density, dropped into a dam break. The liquid
+// should cross the seams between tiles as it crosses one box.
+static b2FluidId CreateTiles( b2WorldId worldId, LabScene* scene, const LabDef* def )
+{
+	AddCrate( scene, worldId, -6.5f, 6.5f, 0.4f, 0.5f );
+	AddCrate( scene, worldId, -5.0f, 6.5f, 0.4f, 0.9f );
+	AddCrate( scene, worldId, -3.5f, 6.5f, 0.4f, 1.2f );
+
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float half = 0.5f * scene->tankWidth, tile = 0.5f;
+	AddFloor( scene, ground, half, 0.5f * tile );
+	for ( int i = 0; i < 6; ++i )
+	{
+		AddBox( ground, half - ( (float)i + 0.5f ) * tile, 0.5f * tile, 0.5f * tile, 0.5f * tile, 0.0f, 0.0f );
+	}
+	AddBox( ground, -half - 0.5f, 4.0f, 0.5f, 4.5f, 0.0f, 0.0f );
+	AddBox( ground, half + 0.5f, 4.0f, 0.5f, 4.5f, 0.0f, 0.0f );
+
+	float margin = def->fluid.particleSpacing;
+	return AddLiquid( worldId, scene, def, (b2Vec2){ -half + margin, margin }, (b2Vec2){ -2.5f, 5.0f } );
+}
+
 static b2FluidId CreateSprinkler( b2WorldId worldId, LabScene* scene, const LabDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
@@ -1204,6 +1235,9 @@ b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def 
 			break;
 		case lab_sprinkler:
 			fluid = CreateSprinkler( worldId, scene, def );
+			break;
+		case lab_tiles:
+			fluid = CreateTiles( worldId, scene, def );
 			break;
 		default:
 			fluid = CreateTank( worldId, scene, def );
