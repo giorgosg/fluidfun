@@ -307,6 +307,6 @@ void b2StopRecordingInternal( b2World* world );
 // Fold one step's world bounds into the running union the recorder writes out at stop.
 void b2RecAccumulateBounds( b2Recording* rec, b2AABB bounds );
 
-// Deterministic hash over all body transforms and velocities.
+// Deterministic hash over all body transforms and velocities, and with a fluid, every particle and each body's sleep.
 // Called by both recorder and replayer to verify simulation reproduces exactly.
 uint64_t b2HashWorldState( b2World* world );

@@ -2239,7 +2239,7 @@ static void b2RecCaptureKeyframe( b2Replay* player )
 	// and copy. The buffer over-allocates, so the budget and free track its capacity, not its size.
 	b2World* world = b2GetWorldFromId( player->rdr.replayWorldId );
 	b2RecBuffer buf = { 0 };
-	b2SerializeWorld( world, &buf );
+	b2SerializeWorldWithFluid( world, &buf );
 
 	size_t bodyBytes = (size_t)player->bodyIdCount * sizeof( b2BodyId );
 	size_t newBytes = (size_t)buf.capacity + bodyBytes;

@@ -8,6 +8,7 @@
 #include "recording.h"
 
 #include "body.h"
+#include "fluid.h"
 #include "physics_world.h"
 #include "snapshot.h"
 
@@ -757,7 +758,7 @@ void b2StartRecordingIntoBuffer( b2World* world, b2Recording* recording )
 
 	// Serialize the live world into a blob that follows the header and seeds replay.
 	b2RecBuffer blob = { 0 };
-	b2SerializeWorld( world, &blob );
+	b2SerializeWorldWithFluid( world, &blob );
 
 	b2RecHeader hdr = { 0 };
 	hdr.magic = B2_REC_MAGIC;
@@ -923,6 +924,13 @@ uint64_t b2HashWorldState( b2World* world )
 		}
 
 #undef B2_HASH_FLOAT
+	}
+
+	// fluidfun: with a fluid, every particle and each body's sleep, so a divergence of the liquid, or of a body the
+	// liquid keeps awake or wakes, is caught at the frame it happens. A world without a fluid hashes as before.
+	if ( world->fluid != NULL )
+	{
+		hash = b2fHashFluid( world, hash, false );
 	}
 
 	return hash;

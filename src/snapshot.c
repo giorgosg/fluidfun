@@ -11,6 +11,7 @@
 #include "container.h"
 #include "core.h"
 #include "dynamic_tree.h"
+#include "fluid.h"
 #include "id_pool.h"
 #include "island.h"
 #include "joint.h"
@@ -37,6 +38,9 @@
 // Header flag bits
 #define B2_SNAP_FLAG_VALIDATION 0x1u // image was built with validation, only used for diagnostics
 #define B2_SNAP_FLAG_DOUBLE_PRECISION 0x2u // image was built with double precision world positions
+// fluidfun: the image ends with the fluid's section (fluid_snapshot.c). A bit far from Box2D's own, which an image
+// without a fluid leaves clear, so such an image is Box2D's; Box2D's reader stops before the section.
+#define B2_SNAP_FLAG_FLUIDFUN 0x10000u
 
 // Layout hash seeds from all structs we memcpy, plus key constants.
 // Changing any struct or constant updates the hash. Re-purposing or swapping
@@ -106,6 +110,7 @@ typedef struct b2SnapReader
 	int cursor;
 	int size;
 	bool ok;
+	bool hasFluid; // fluidfun: the image ends with a fluid section
 } b2SnapReader;
 
 static void b2SnapRCheck( b2SnapReader* r, int need )
@@ -496,7 +501,9 @@ static void b2DesWorldConfig( b2SnapReader* r, b2World* world )
 	world->enableRestitutionPropagation = ( flags & 0x10u ) != 0;
 }
 
-void b2SerializeWorld( b2World* world, b2RecBuffer* buf )
+// fluidfun: a recording's seed and a replay's keyframes always carry the fluid's section, so the serials the fluid's ids
+// come from replay exactly; a snapshot of a world that never had a fluid is Box2D's image
+static void b2SerializeWorldImage( b2World* world, b2RecBuffer* buf, bool alwaysFluid )
 {
 	// Image header
 	b2SnapHeader hdr;
@@ -507,6 +514,11 @@ void b2SerializeWorld( b2World* world, b2RecBuffer* buf )
 	if ( b2IsDoublePrecision() )
 	{
 		hdr.flags |= B2_SNAP_FLAG_DOUBLE_PRECISION;
+	}
+	bool fluid = alwaysFluid || b2fHasFluidSection( world );
+	if ( fluid )
+	{
+		hdr.flags |= B2_SNAP_FLAG_FLUIDFUN;
 	}
 	b2SnapW_Bytes( buf, &hdr, (int)sizeof( hdr ) );
 
@@ -598,6 +610,21 @@ void b2SerializeWorld( b2World* world, b2RecBuffer* buf )
 	{
 		b2SerGraphColor( buf, &graph->colors[c], c == B2_OVERFLOW_INDEX );
 	}
+
+	if ( fluid )
+	{
+		b2fSerializeFluid( world, buf );
+	}
+}
+
+void b2SerializeWorld( b2World* world, b2RecBuffer* buf )
+{
+	b2SerializeWorldImage( world, buf, false );
+}
+
+void b2SerializeWorldWithFluid( b2World* world, b2RecBuffer* buf )
+{
+	b2SerializeWorldImage( world, buf, true );
 }
 
 // Free per-object heap the overwrite steps below don't reach, so restoring over a
@@ -849,6 +876,16 @@ static bool b2DeserializeIntoShell( b2SnapReader* r, b2World* world )
 	b2Array_Clear( world->contactHitEvents );
 	b2Array_Clear( world->jointEvents );
 
+	// fluidfun: the fluid and the serials its ids come from, or none
+	if ( r->ok && r->hasFluid )
+	{
+		r->ok = b2fDeserializeFluid( world, r->data, r->size, &r->cursor );
+	}
+	else
+	{
+		b2fClearFluidState( world );
+	}
+
 	return r->ok;
 }
 
@@ -901,6 +938,7 @@ static bool b2OpenSnapshotImage( const uint8_t* image, int size, b2SnapReader* r
 	r->cursor = (int)sizeof( hdr );
 	r->size = size;
 	r->ok = true;
+	r->hasFluid = ( hdr.flags & B2_SNAP_FLAG_FLUIDFUN ) != 0;
 	return true;
 }
 
@@ -1192,6 +1230,12 @@ uint64_t b2HashWorldStateDeep( b2World* world )
 
 	// Solver set count
 	hash = b2FnvMixInt( hash, world->solverSets.count );
+
+	// fluidfun: a world without a fluid hashes as before
+	if ( world->fluid != NULL )
+	{
+		hash = b2fHashFluid( world, hash, true );
+	}
 
 	return hash;
 }

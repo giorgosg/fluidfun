@@ -559,6 +559,12 @@ typedef struct b2fOutline
 
 // fluid.c
 b2fFluid* b2fGetFluid( b2FluidId fluidId );
+// A fluid with room for capacity particles and no liquids, as b2CreateFluid makes one
+b2fFluid* b2fMakeFluid( struct b2World* world, const b2FluidDef* def, int capacity );
+// Rebuilds what the passes read from the liquids' settings
+void b2fUpdateLiquids( b2fFluid* f );
+// Makes the fields only adaptive sizes, adaptiveSpeed or springs use, if not made yet
+void b2fAllocateOptional( b2fFluid* f, bool adapt, bool speed, bool springs );
 // Makes room for at least needed particles, doubling, up to maxCapacity. Not during a substep.
 // Returns false if needed is past maxCapacity.
 bool b2fGrow( b2fFluid* f, int needed );

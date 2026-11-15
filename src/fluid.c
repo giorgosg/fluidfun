@@ -152,9 +152,39 @@ static size_t IdMapSlots( int capacity )
 	return slots;
 }
 
+// Fields only adaptive sizes, adaptiveSpeed and springs use are made the first time some liquid needs them, zeroed, as
+// they would have been at the start, and kept from then on
+void b2fAllocateOptional( b2fFluid* f, bool adapt, bool speed, bool springs )
+{
+	size_t n = (size_t)f->capacity + 1;
+	if ( adapt && f->adaptMass == NULL )
+	{
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+		B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
+		B2F_ADAPT_FIELDS( B2F_ALLOC_FIELD )
+#undef B2F_ALLOC_FIELD
+	}
+	if ( speed && f->speedMemory == NULL )
+	{
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+#define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
+		B2F_SPEED_FIELDS( B2F_ALLOC_FIELD )
+		B2F_SPEED_FIELDS( B2F_ALLOC_SORTED )
+#undef B2F_ALLOC_FIELD
+#undef B2F_ALLOC_SORTED
+	}
+
+	if ( springs && f->springs == NULL )
+	{
+		f->springs = b2AllocZero( n * sizeof( b2fSprings ) );
+		f->sortedSprings = b2AllocZero( n * sizeof( b2fSprings ) );
+		f->idMap = b2Alloc( IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
+	}
+}
+
 // Rebuilds what the passes read from the liquids' settings. A destroyed liquid's slot keeps its last settings, which
 // nothing reads since no particle is of it.
-static void UpdateLiquids( b2fFluid* f )
+void b2fUpdateLiquids( b2fFluid* f )
 {
 	float spacing = f->spacing;
 	f->adaptive = false;
@@ -174,32 +204,7 @@ static void UpdateLiquids( b2fFluid* f )
 		}
 	}
 
-	// Fields only adaptive sizes use are made the first time some liquid needs them, zeroed, as they would have been
-	// at the start, and kept from then on
-	size_t n = (size_t)f->capacity + 1;
-	if ( f->adaptive && f->adaptMass == NULL )
-	{
-#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
-		B2F_CARRIED_FIELDS( B2F_ALLOC_FIELD )
-		B2F_ADAPT_FIELDS( B2F_ALLOC_FIELD )
-#undef B2F_ALLOC_FIELD
-	}
-	if ( fastSpeed && f->speedMemory == NULL )
-	{
-#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
-#define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
-		B2F_SPEED_FIELDS( B2F_ALLOC_FIELD )
-		B2F_SPEED_FIELDS( B2F_ALLOC_SORTED )
-#undef B2F_ALLOC_FIELD
-#undef B2F_ALLOC_SORTED
-	}
-
-	if ( f->springy && f->springs == NULL )
-	{
-		f->springs = b2AllocZero( n * sizeof( b2fSprings ) );
-		f->sortedSprings = b2AllocZero( n * sizeof( b2fSprings ) );
-		f->idMap = b2Alloc( IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
-	}
+	b2fAllocateOptional( f, f->adaptive, fastSpeed, f->springy );
 
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
@@ -301,17 +306,28 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 		return b2_nullFluidId;
 	}
 
+	b2FluidDef clamped = *def;
+	clamped.capacity = def->capacity > 0 ? def->capacity : 0;
+	// Never below the room the fluid starts with, so the def holds the limit growing goes by
+	clamped.maxCapacity = def->maxCapacity > clamped.capacity ? def->maxCapacity : clamped.capacity;
+	world->fluid = b2fMakeFluid( world, &clamped, clamped.capacity );
+	world->fluidSerial += 1;
+	b2FluidId id = { world->fluidSerial, world->worldId, world->generation };
+	return id;
+}
+
+// A fluid with room for capacity particles and no liquids, as b2CreateFluid makes one, and as a snapshot restores one
+b2fFluid* b2fMakeFluid( b2World* world, const b2FluidDef* def, int capacity )
+{
 	b2fFluid* f = b2AllocZero( sizeof( b2fFluid ) );
 	f->world = world;
 	f->def = *def;
-	f->capacity = def->capacity > 0 ? def->capacity : 0;
-	// Never below the room the fluid starts with, so the def holds the limit growing goes by
-	f->def.maxCapacity = def->maxCapacity > f->capacity ? def->maxCapacity : f->capacity;
+	f->capacity = capacity;
 	f->spacing = b2fLatticeSize( def->particleSpacing );
 	f->radius = 2.0f * f->spacing;
 	f->cellSize = 1.1f * f->radius;
 	f->fineArea = 0.8660254f * f->spacing * f->spacing / B2F_REST_FILL;
-	UpdateLiquids( f );
+	b2fUpdateLiquids( f );
 	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
 
@@ -326,10 +342,7 @@ b2FluidId b2CreateFluid( b2WorldId worldId, const b2FluidDef* def )
 	f->contacts = b2AllocZero( n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
 	f->pairs = b2Alloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
 	b2fBuildWallTable( f );
-
-	world->fluid = f;
-	world->fluidSerial += 1;
-	return ( b2FluidId ){ world->fluidSerial, world->worldId, world->generation };
+	return f;
 }
 
 void b2DestroyFluid( b2FluidId fluidId )
@@ -408,7 +421,8 @@ void b2FreeFluid( b2fFluid* f )
 void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth )
 {
 	B2_CHECK_INPUT( b2IsValidFloat( adaptiveDepth ) && adaptiveDepth >= 0.0f );
-	b2fGetFluid( fluidId )->def.adaptiveDepth = adaptiveDepth;
+	b2fFluid* f = b2fGetFluid( fluidId );
+	f->def.adaptiveDepth = adaptiveDepth;
 }
 
 float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId )
@@ -419,7 +433,8 @@ float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId )
 void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox )
 {
 	B2_CHECK_INPUT( b2IsValidFloat( adaptiveFullBox ) && adaptiveFullBox > 0.0f );
-	b2fGetFluid( fluidId )->def.adaptiveFullBox = adaptiveFullBox;
+	b2fFluid* f = b2fGetFluid( fluidId );
+	f->def.adaptiveFullBox = adaptiveFullBox;
 }
 
 float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId )
@@ -595,7 +610,8 @@ int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region
 	}
 
 	MarkInside( f, liquid, &outline, maxCount );
-	return b2fRemoveMarked( f );
+	int removed = b2fRemoveMarked( f );
+	return removed;
 }
 
 b2LiquidId b2fMakeLiquidId( const b2fFluid* f, int index )
@@ -665,8 +681,9 @@ b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 		f->cohesionBetween[index][other] = 0.0f;
 		f->cohesionBetween[other][index] = 0.0f;
 	}
-	UpdateLiquids( f );
-	return ( b2LiquidId ){ index + 1, fluidId.world0, f->liquids[index].generation };
+	b2fUpdateLiquids( f );
+	b2LiquidId id = { index + 1, fluidId.world0, f->liquids[index].generation };
+	return id;
 }
 
 void b2DestroyLiquid( b2LiquidId liquidId )
@@ -694,7 +711,7 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 	{
 		f->liquidCount -= 1;
 	}
-	UpdateLiquids( f );
+	b2fUpdateLiquids( f );
 }
 
 void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
@@ -717,7 +734,7 @@ void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
 	{
 		f->coarsenLiquids &= ~( 1u << index );
 	}
-	UpdateLiquids( f );
+	b2fUpdateLiquids( f );
 }
 
 b2LiquidDef b2Liquid_GetDef( b2LiquidId liquidId )
@@ -754,7 +771,7 @@ void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB, float 
 	{
 		f->cohesionBetween[a][b] = cohesion;
 		f->cohesionBetween[b][a] = cohesion;
-		UpdateLiquids( f );
+		b2fUpdateLiquids( f );
 	}
 }
 
