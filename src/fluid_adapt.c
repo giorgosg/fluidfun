@@ -304,11 +304,15 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		{
 			continue;
 		}
+		// Clamped to the outer cells' centres before the weights are taken, so a particle in the outer half cell reads
+		// the edge cell alone
 		float u = (float)( f->pos[i].x - originX ) / cell - 0.5f, v = (float)( f->pos[i].y - originY ) / cell - 0.5f;
-		int cx = (int)floorf( u ), cy = (int)floorf( v );
+		u = u < 0.0f ? 0.0f : ( u > (float)( width - 1 ) ? (float)( width - 1 ) : u );
+		v = v < 0.0f ? 0.0f : ( v > (float)( height - 1 ) ? (float)( height - 1 ) : v );
+		int cx = (int)u, cy = (int)v;
+		cx = cx > width - 2 ? width - 2 : cx;
+		cy = cy > height - 2 ? height - 2 : cy;
 		float fx = u - (float)cx, fy = v - (float)cy;
-		cx = cx < 0 ? 0 : ( cx > width - 2 ? width - 2 : cx );
-		cy = cy < 0 ? 0 : ( cy > height - 2 ? height - 2 : cy );
 		int c = cy * width + cx;
 		float a = ( 1.0f - fx ) * ( 1.0f - fy ), b = fx * ( 1.0f - fy ), e = ( 1.0f - fx ) * fy, d = fx * fy;
 		depth[i] = a * f->boxDepth[c] + b * f->boxDepth[c + 1] + e * f->boxDepth[c + width] + d * f->boxDepth[c + width + 1];
