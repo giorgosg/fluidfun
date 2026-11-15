@@ -3,6 +3,8 @@
 
 #include "box2d/fluidfun.h"
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -36,6 +38,7 @@ typedef enum LabSceneType
 } LabSceneType;
 
 #define LAB_MAX_BODIES 64
+#define LAB_MAX_SEAMS 256
 
 // What a scene is made from: the fluid's settings and those of its first liquid, which the other liquids of a scene
 // start from
@@ -61,6 +64,15 @@ typedef struct LabScene
 	float liquidHeight;
 	int crateCount;
 	float crateHalfSize;
+
+	// The tank's floor: 0 for one box, more for that many boxes side by side, as a tile map lays them, and below 0 for
+	// a chain of that many segments, or as many plain segments with floorSegments set. With floorMixed set the tiles
+	// come in four widths in turn. The seams between them, for probes.
+	int floorTiles;
+	bool floorMixed;
+	bool floorSegments;
+	float seamX[LAB_MAX_SEAMS];
+	int seamCount;
 
 	// Colour of liquid 0 in the sample, red, green and blue from 0 to 255, or all zero for the usual blue
 	float color[3];

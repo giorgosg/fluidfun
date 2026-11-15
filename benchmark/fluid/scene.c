@@ -422,6 +422,71 @@ void LabSceneSettings( LabSceneType type, LabDef* def )
 	}
 }
 
+// The tank's floor, from -halfWidth to halfWidth with its top at 0: one box, a row of boxes, a chain or plain segments
+static void AddFloor( LabScene* scene, b2BodyId body, float halfWidth, float halfHeight )
+{
+	int n = scene->floorTiles < 0 ? -scene->floorTiles : scene->floorTiles;
+	n = n < LAB_MAX_SEAMS ? n : LAB_MAX_SEAMS;
+	scene->seamCount = 0;
+	if ( n == 0 )
+	{
+		AddBox( body, 0.0f, -halfHeight, halfWidth, halfHeight, 0.0f, 0.0f );
+		return;
+	}
+
+	static const float widths[] = { 2.0f, 1.0f, 0.5f, 1.5f };
+	float total = 0.0f;
+	for ( int i = 0; i < n; ++i )
+	{
+		total += scene->floorMixed ? widths[i % 4] : 1.0f;
+	}
+
+	b2Vec2 points[LAB_MAX_SEAMS + 1];
+	float x = -halfWidth;
+	points[0] = (b2Vec2){ x, 0.0f };
+	for ( int i = 0; i < n; ++i )
+	{
+		float width = 2.0f * halfWidth * ( scene->floorMixed ? widths[i % 4] : 1.0f ) / total;
+		float next = i == n - 1 ? halfWidth : x + width;
+		if ( scene->floorTiles > 0 )
+		{
+			AddBox( body, 0.5f * ( x + next ), -halfHeight, 0.5f * ( next - x ), halfHeight, 0.0f, 0.0f );
+		}
+		if ( i > 0 )
+		{
+			scene->seamX[scene->seamCount++] = x;
+		}
+		x = next;
+		points[i + 1] = (b2Vec2){ x, 0.0f };
+	}
+
+	if ( scene->floorTiles < 0 && scene->floorSegments )
+	{
+		b2ShapeDef shapeDef = b2DefaultShapeDef();
+		for ( int i = 0; i < n; ++i )
+		{
+			b2Segment segment = { points[i], points[i + 1] };
+			b2CreateSegmentShape( body, &shapeDef, &segment );
+		}
+	}
+	else if ( scene->floorTiles < 0 )
+	{
+		// Chains collide on their right side, so the points run from right to left
+		for ( int i = 0; i < ( n + 1 ) / 2; ++i )
+		{
+			b2Vec2 swap = points[i];
+			points[i] = points[n - i];
+			points[n - i] = swap;
+		}
+		b2ChainDef chain = b2DefaultChainDef();
+		chain.points = points;
+		chain.pointCount = n + 1;
+		chain.ghost1 = (b2Vec2){ halfWidth + 1.0f, 0.0f };
+		chain.ghost2 = (b2Vec2){ -halfWidth - 1.0f, 0.0f };
+		b2CreateChain( body, &chain );
+	}
+}
+
 static b2FluidId CreateTank( b2WorldId worldId, LabScene* scene, const LabDef* def )
 {
 	static const float densities[] = { 0.5f, 0.25f, 0.75f, 0.1f, 2.0f };
@@ -432,7 +497,7 @@ static b2FluidId CreateTank( b2WorldId worldId, LabScene* scene, const LabDef* d
 
 	b2BodyId tank = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float w = 0.5f * scene->tankWidth, h = scene->tankHeight, t = 1.0f;
-	AddBox( tank, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddFloor( scene, tank, w + 2.0f * t, t );
 	AddBox( tank, -w - t, 0.5f * h, t, 0.5f * h + 2.0f * t, 0.0f, 0.0f );
 	AddBox( tank, w + t, 0.5f * h, t, 0.5f * h + 2.0f * t, 0.0f, 0.0f );
 
