@@ -1571,6 +1571,235 @@ static int FluidCoarsenSpawns( void )
 	return 0;
 }
 
+// The fluid allocates through Box2D, so its memory is in b2GetByteCount, and all of it goes with the fluid or the world.
+// Room for 500 particles that grows, with springs, a sensor, a body in the liquid and events, touches every
+// array the fluid has.
+static int FluidMemory( void )
+{
+	size_t start = b2GetByteCount();
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon floor = b2MakeOffsetBox( 4.0f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &floor );
+	b2Polygon wall = b2MakeOffsetBox( 0.5f, 3.0f, ( b2Vec2 ){ -4.5f, 2.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &wall );
+	wall = b2MakeOffsetBox( 0.5f, 3.0f, ( b2Vec2 ){ 4.5f, 2.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &wall );
+	b2ShapeDef sensorDef = b2DefaultShapeDef();
+	sensorDef.isSensor = true;
+	b2Polygon sensorBox = b2MakeOffsetBox( 1.0f, 0.3f, ( b2Vec2 ){ 2.0f, 0.4f }, b2Rot_identity );
+	b2ShapeId sensorId = b2CreatePolygonShape( groundId, &sensorDef, &sensorBox );
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ -2.0f, 2.0f };
+	b2BodyId crateId = b2CreateBody( worldId, &bodyDef );
+	shapeDef.density = 0.5f;
+	b2Polygon crate = b2MakeBox( 0.3f, 0.3f );
+	b2CreatePolygonShape( crateId, &shapeDef, &crate );
+
+	// Steps first, so the world's own arrays have grown before the fluid comes
+	for ( int i = 0; i < 10; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	size_t worldOnly = b2GetByteCount();
+	ENSURE( worldOnly > start );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 500;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	water.tuning.adaptiveRatio = 4.0f;
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2LiquidDef jelly = b2MakeJellyDef();
+	b2LiquidId jellyId = b2CreateLiquid( fluidId, &jelly );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -3.9f, 0.0f }, ( b2Pos ){ 3.9f, 1.2f }, b2Vec2_zero );
+	b2Liquid_SpawnCircle( jellyId, ( b2Pos ){ 2.0f, 2.5f }, 0.4f, b2Vec2_zero );
+	b2EmitterDef emitterDef = b2DefaultEmitterDef();
+	emitterDef.point1 = ( b2Pos ){ 0.0f, 3.0f };
+	emitterDef.point2 = ( b2Pos ){ 0.5f, 3.0f };
+	emitterDef.velocity = ( b2Vec2 ){ 0.0f, -2.0f };
+	b2CreateEmitter( waterId, &emitterDef );
+	ENSURE( b2Fluid_GetCapacity( fluidId ) > def.capacity );
+
+	int bodyBegins = 0;
+	for ( int i = 0; i < 30; ++i )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		bodyBegins += b2Fluid_GetEvents( fluidId ).bodyBeginCount;
+	}
+	ENSURE( bodyBegins > 0 );
+	ENSURE( b2Fluid_GetSensorArea( fluidId, sensorId ) > 0.0f );
+
+	// Each particle of room takes about 820 bytes with springs, as b2FluidDef::maxCapacity says
+	size_t withFluid = b2GetByteCount();
+	ENSURE( withFluid - worldOnly > (size_t)b2Fluid_GetCapacity( fluidId ) * 800 );
+
+	b2DestroyFluid( fluidId );
+	ENSURE( b2GetByteCount() == worldOnly );
+
+	// A fluid the world destroys goes with it
+	fluidId = b2CreateFluid( worldId, &def );
+	waterId = b2CreateLiquid( fluidId, &water );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -3.9f, 0.0f }, ( b2Pos ){ 3.9f, 1.2f }, b2Vec2_zero );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	ENSURE( b2GetByteCount() > worldOnly );
+	b2DestroyWorld( worldId );
+	ENSURE( b2GetByteCount() == start );
+	return 0;
+}
+
+// Defs are checked as Box2D checks its own: a value a field does not allow is logged, asserted and turned away, and a
+// def that did not come from its b2Default or b2Make function fails an assert. The asserts are silenced and counted
+// here, since only the log is there in every build.
+static int rejectLogs, rejectAsserts;
+
+static void CountRejectLog( const char* message )
+{
+	(void)message;
+	rejectLogs += 1;
+}
+
+static int CountRejectAssert( const char* condition, const char* fileName, int lineNumber )
+{
+	(void)condition;
+	(void)fileName;
+	(void)lineNumber;
+	rejectAsserts += 1;
+	return 0;
+}
+
+#define FLUID_REJECTS( CALL )                                                                                                    \
+	do                                                                                                                           \
+	{                                                                                                                            \
+		int logsBefore = rejectLogs;                                                                                             \
+		CALL;                                                                                                                    \
+		if ( rejectLogs != logsBefore + 1 )                                                                                      \
+		{                                                                                                                        \
+			printf( "not rejected: " #CALL "\n" );                                                                               \
+			return 1;                                                                                                            \
+		}                                                                                                                        \
+	}                                                                                                                            \
+	while ( false )
+
+static int FluidInvalidDefs( void )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+
+	rejectLogs = 0;
+	rejectAsserts = 0;
+	b2SetLogCallback( CountRejectLog );
+	b2SetAssertCallback( CountRejectAssert );
+
+	const float bad[] = { NAN, INFINITY, -1.0f };
+	for ( int k = 0; k < 3; ++k )
+	{
+		b2FluidDef def = b2DefaultFluidDef();
+		def.particleSpacing = bad[k];
+		b2FluidId badId = b2_nullFluidId;
+		FLUID_REJECTS( badId = b2CreateFluid( worldId, &def ) );
+		ENSURE( B2_IS_NULL( badId ) );
+	}
+	b2FluidDef badFluid = b2DefaultFluidDef();
+	badFluid.adaptiveFullBox = 0.0f;
+	FLUID_REJECTS( b2CreateFluid( worldId, &badFluid ) );
+	badFluid = b2DefaultFluidDef();
+	badFluid.capacity = -1;
+	FLUID_REJECTS( b2CreateFluid( worldId, &badFluid ) );
+	ENSURE( rejectLogs == 5 );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	def.capacity = 1000;
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	ENSURE( b2Fluid_IsValid( fluidId ) );
+
+	// Every preset is a valid def
+	b2LiquidDef presets[] = { b2DefaultLiquidDef(), b2MakeOilDef(),	  b2MakeHoneyDef(), b2MakeMercuryDef(),
+							  b2MakeSlimeDef(),		b2MakeJellyDef(), b2MakeDoughDef() };
+	for ( int k = 0; k < 7; ++k )
+	{
+		b2LiquidId presetId = b2CreateLiquid( fluidId, presets + k );
+		ENSURE( b2Liquid_IsValid( presetId ) );
+		b2DestroyLiquid( presetId );
+	}
+	ENSURE( rejectLogs == 5 );
+
+	b2LiquidDef badLiquid[12];
+	for ( int k = 0; k < 12; ++k )
+	{
+		badLiquid[k] = b2DefaultLiquidDef();
+	}
+	badLiquid[0].density = 0.0f;
+	badLiquid[1].viscosity = -1.0f;
+	badLiquid[2].friction = 1.5f;
+	badLiquid[3].cohesion = NAN;
+	badLiquid[4].gravityScale = INFINITY;
+	badLiquid[5].springStiffness = -1.0f;
+	badLiquid[6].tuning.tensilePressure = 2.0f;
+	badLiquid[7].tuning.addedMass = -0.5f;
+	badLiquid[8].tuning.adaptiveRatio = 0.5f;
+	badLiquid[9].tuning.adaptiveTolerance = 1.0f;
+	badLiquid[10].tuning.adaptiveLimit = 1.0f;
+	badLiquid[11].tuning.stiffness = NAN;
+	for ( int k = 0; k < 12; ++k )
+	{
+		b2LiquidId badId = b2_nullLiquidId;
+		FLUID_REJECTS( badId = b2CreateLiquid( fluidId, badLiquid + k ) );
+		ENSURE( B2_IS_NULL( badId ) );
+	}
+	ENSURE( b2Fluid_GetLiquidCount( fluidId ) == 0 );
+
+	// A set call turns a bad def away and keeps the last good one
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	b2LiquidId oilId = b2CreateLiquid( fluidId, &presets[1] );
+	FLUID_REJECTS( b2Liquid_SetDef( waterId, badLiquid + 0 ) );
+	ENSURE( b2Liquid_GetDef( waterId ).density == water.density );
+	FLUID_REJECTS( b2Liquid_SetCohesionBetween( waterId, oilId, NAN ) );
+	b2FluidDef badSet = b2DefaultFluidDef();
+	badSet.adaptiveDepth = -1.0f;
+	FLUID_REJECTS( b2Fluid_SetDef( fluidId, &badSet ) );
+
+	// What a get call returns can be passed back
+	b2LiquidDef got = b2Liquid_GetDef( waterId );
+	got.viscosity = 2.0f;
+	int logsBeforeGood = rejectLogs, assertsBefore = rejectAsserts;
+	b2Liquid_SetDef( waterId, &got );
+	ENSURE( rejectLogs == logsBeforeGood && rejectAsserts == assertsBefore );
+	ENSURE( b2Liquid_GetDef( waterId ).viscosity == 2.0f );
+
+	b2EmitterDef emitterDef = b2DefaultEmitterDef();
+	emitterDef.point1 = ( b2Pos ){ NAN, 0.0f };
+	b2EmitterId badEmitter = b2_nullEmitterId;
+	FLUID_REJECTS( badEmitter = b2CreateEmitter( waterId, &emitterDef ) );
+	ENSURE( B2_IS_NULL( badEmitter ) );
+	emitterDef = b2DefaultEmitterDef();
+	emitterDef.velocity = ( b2Vec2 ){ 0.0f, -1.0f };
+	b2EmitterId emitterId = b2CreateEmitter( waterId, &emitterDef );
+	ENSURE( b2Emitter_IsValid( emitterId ) );
+	b2EmitterDef badVelocity = b2Emitter_GetDef( emitterId );
+	badVelocity.velocity = ( b2Vec2 ){ 0.0f, INFINITY };
+	FLUID_REJECTS( b2Emitter_SetDef( emitterId, &badVelocity ) );
+	ENSURE( b2Emitter_GetDef( emitterId ).velocity.y == -1.0f );
+
+	// A def that skipped its default function fails the cookie assert, where asserts are built in
+#if !defined( NDEBUG ) || defined( B2_ENABLE_ASSERT )
+	assertsBefore = rejectAsserts;
+	b2LiquidDef zeroed = water;
+	zeroed.internalValue = 0;
+	b2Liquid_SetDef( waterId, &zeroed );
+	ENSURE( rejectAsserts == assertsBefore + 1 );
+#endif
+
+	b2SetAssertCallback( TestAssertFcn );
+	b2SetLogCallback( TestLogFcn );
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -1585,5 +1814,7 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidAdaptiveGravity );
 	RUN_SUBTEST( FluidAdaptiveStepRate );
 	RUN_SUBTEST( FluidCoarsenSpawns );
+	RUN_SUBTEST( FluidMemory );
+	RUN_SUBTEST( FluidInvalidDefs );
 	return 0;
 }

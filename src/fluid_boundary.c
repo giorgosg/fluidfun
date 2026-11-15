@@ -58,8 +58,9 @@ static int FindBody( b2fFluid* f, b2BodyId id )
 
 	if ( f->bodyCount == f->bodyCapacity )
 	{
-		f->bodyCapacity = f->bodyCapacity == 0 ? 32 : 2 * f->bodyCapacity;
-		f->bodies = realloc( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
+		int capacity = f->bodyCapacity == 0 ? 32 : 2 * f->bodyCapacity;
+		f->bodies = b2fGrowArray( f->bodies, f->bodyCapacity, capacity, sizeof( b2fBody ) );
+		f->bodyCapacity = capacity;
 	}
 	f->bodies[f->bodyCount] = (b2fBody){
 		.id = id,
@@ -92,8 +93,9 @@ static bool OverlapShape( b2ShapeId shapeId, void* context )
 
 	if ( f->shapeCount == f->shapeCapacity )
 	{
-		f->shapeCapacity = f->shapeCapacity == 0 ? 32 : 2 * f->shapeCapacity;
-		f->shapes = realloc( f->shapes, (size_t)f->shapeCapacity * sizeof( b2fShape ) );
+		int capacity = f->shapeCapacity == 0 ? 32 : 2 * f->shapeCapacity;
+		f->shapes = b2fGrowArray( f->shapes, f->shapeCapacity, capacity, sizeof( b2fShape ) );
+		f->shapeCapacity = capacity;
 	}
 
 	b2fShape* shape = f->shapes + f->shapeCount;
@@ -169,8 +171,9 @@ static void AddPatch( b2fFluid* f, int bodyIndex, int otherIndex, b2Vec2 normal 
 {
 	if ( f->patchCount == f->patchCapacity )
 	{
-		f->patchCapacity = f->patchCapacity == 0 ? 32 : 2 * f->patchCapacity;
-		f->patches = realloc( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
+		int capacity = f->patchCapacity == 0 ? 32 : 2 * f->patchCapacity;
+		f->patches = b2fGrowArray( f->patches, f->patchCapacity, capacity, sizeof( b2fPatch ) );
+		f->patchCapacity = capacity;
 	}
 	f->patches[f->patchCount++] = ( b2fPatch ){ normal.x, normal.y, bodyIndex, otherIndex };
 	f->bodies[bodyIndex].patchCount += 1;
@@ -301,8 +304,8 @@ void b2fGatherShapes( b2fFluid* f )
 	int needed = f->bodyCount * B2F_CHUNK_COUNT;
 	if ( needed > f->reactionCapacity )
 	{
+		f->reactions = b2fGrowArray( f->reactions, f->reactionCapacity, 2 * needed, sizeof( b2fReaction ) );
 		f->reactionCapacity = 2 * needed;
-		f->reactions = realloc( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );
 	}
 
 	// A sleeping body cannot feel the liquid, so it would never lift off. For now nothing near the

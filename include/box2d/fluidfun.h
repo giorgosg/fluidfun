@@ -120,6 +120,9 @@ typedef struct b2LiquidDef
 
 	/// The solver's settings, for those who need them
 	b2LiquidTuning tuning;
+
+	/// Used internally to detect a valid definition. DO NOT SET.
+	int internalValue;
 } b2LiquidDef;
 
 /// Settings every liquid in a fluid shares
@@ -138,11 +141,14 @@ typedef struct b2FluidDef
 	/// particle splitting needs more, the fluid doubles its room, up to maxCapacity. Growing happens only between steps
 	/// and does not change how the liquid moves.
 	int capacity;
-	/// The most particles the fluid will grow to hold. Each particle of room takes 536 bytes, and 950 to 965 once some
-	/// liquid has springs (568 and 980 to 995 when Box2D is built for large worlds), so the default of 1,000,000 is up to
-	/// 0.54 GB, or 0.96 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above
-	/// this is kept as the most.
+	/// The most particles the fluid will grow to hold. Each particle of room takes 533 bytes, and 810 to 830 once some
+	/// liquid has springs (565 and 840 to 860 when Box2D is built for large worlds), so the default of 1,000,000 is up to
+	/// 0.53 GB, or 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above
+	/// this is kept as the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it.
 	int maxCapacity;
+
+	/// Used internally to detect a valid definition. DO NOT SET.
+	int internalValue;
 } b2FluidDef;
 
 /// Timing of the last step in milliseconds, summed over substeps.
@@ -160,6 +166,9 @@ typedef struct b2FluidProfile
 	float measure;
 } b2FluidProfile;
 
+/// Use these to initialize the defs, as for every Box2D def: create and set calls check that they came from here.
+/// Values outside what each field allows, such as a negative viscosity or a value that is not finite, are turned
+/// away with an assert and a log, and a create then returns a null id, as Box2D's own creates do.
 B2_API b2FluidDef b2DefaultFluidDef( void );
 
 /// Water, which the other liquids below start from
@@ -313,6 +322,9 @@ typedef struct b2EmitterDef
 	b2Vec2 velocity;
 	/// An emitter that is not enabled adds nothing and keeps its place in the stream
 	bool enabled;
+
+	/// Used internally to detect a valid definition. DO NOT SET.
+	int internalValue;
 } b2EmitterDef;
 
 /// A mouth from the origin to one metre along x, emitting nothing until given a velocity

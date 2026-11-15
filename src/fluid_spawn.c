@@ -284,7 +284,16 @@ b2EmitterDef b2DefaultEmitterDef( void )
 	b2EmitterDef def = { 0 };
 	def.point2 = (b2Pos){ 1.0f, 0.0f };
 	def.enabled = true;
+	def.internalValue = B2_SECRET_COOKIE;
 	return def;
+}
+
+static bool IsValidEmitterDef( const b2EmitterDef* def )
+{
+	B2_CHECK_DEF( def );
+	B2_CHECK_INPUT_RETURN( b2IsValidPos( def->point1 ) && b2IsValidPos( def->point2 ), false );
+	B2_CHECK_INPUT_RETURN( b2IsValidVec2( def->velocity ), false );
+	return true;
 }
 
 static b2fEmitter* FindEmitter( b2EmitterId emitterId, b2fFluid** fluid )
@@ -323,6 +332,10 @@ b2EmitterId b2CreateEmitter( b2LiquidId liquidId, const b2EmitterDef* def )
 {
 	b2fFluid* f;
 	int liquid = b2fGetLiquid( liquidId, &f );
+	if ( IsValidEmitterDef( def ) == false )
+	{
+		return b2_nullEmitterId;
+	}
 	b2World* world = b2GetWorld( liquidId.world0 );
 	B2_ASSERT( world->locked == false );
 	if ( world->locked )
@@ -376,7 +389,7 @@ bool b2Emitter_IsValid( b2EmitterId emitterId )
 void b2Emitter_SetDef( b2EmitterId emitterId, const b2EmitterDef* def )
 {
 	b2fEmitter* emitter = GetEmitter( emitterId );
-	if ( emitter != NULL )
+	if ( emitter != NULL && IsValidEmitterDef( def ) )
 	{
 		emitter->def = *def;
 	}

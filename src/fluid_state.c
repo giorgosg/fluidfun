@@ -8,8 +8,9 @@ static void* Push( void** array, int* count, int* capacity, size_t size )
 {
 	if ( *count == *capacity )
 	{
-		*capacity = *capacity == 0 ? 16 : 2 * *capacity;
-		*array = realloc( *array, (size_t)*capacity * size );
+		int grown = *capacity == 0 ? 16 : 2 * *capacity;
+		*array = b2fGrowArray( *array, *capacity, grown, size );
+		*capacity = grown;
 	}
 	return (char*)*array + (size_t)( *count )++ * size;
 }
@@ -44,8 +45,9 @@ static int AddRecord( b2fFluid* f, b2BodyId id )
 {
 	if ( f->recordCount == f->recordCapacity )
 	{
-		f->recordCapacity = f->recordCapacity == 0 ? 16 : 2 * f->recordCapacity;
-		f->records = realloc( f->records, (size_t)f->recordCapacity * sizeof( b2fBodyRecord ) );
+		int capacity = f->recordCapacity == 0 ? 16 : 2 * f->recordCapacity;
+		f->records = b2fGrowArray( f->records, f->recordCapacity, capacity, sizeof( b2fBodyRecord ) );
+		f->recordCapacity = capacity;
 	}
 	int k = id.index1 - 1;
 	if ( k >= f->recordOfBodyCapacity )
@@ -55,7 +57,7 @@ static int AddRecord( b2fFluid* f, b2BodyId id )
 		{
 			capacity *= 2;
 		}
-		f->recordOfBody = realloc( f->recordOfBody, (size_t)capacity * sizeof( int ) );
+		f->recordOfBody = b2fGrowArray( f->recordOfBody, f->recordOfBodyCapacity, capacity, sizeof( int ) );
 		memset( f->recordOfBody + f->recordOfBodyCapacity, 0, (size_t)( capacity - f->recordOfBodyCapacity ) * sizeof( int ) );
 		f->recordOfBodyCapacity = capacity;
 	}
@@ -137,8 +139,8 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 	}
 	if ( needed > f->bodyLiquidCapacity )
 	{
+		f->bodyLiquidMass = b2fGrowArray( f->bodyLiquidMass, f->bodyLiquidCapacity, needed, sizeof( float ) );
 		f->bodyLiquidCapacity = needed;
-		f->bodyLiquidMass = realloc( f->bodyLiquidMass, (size_t)needed * sizeof( float ) );
 	}
 	memset( f->bodyLiquidMass, 0, (size_t)needed * sizeof( float ) );
 
@@ -378,7 +380,7 @@ static void MeasureSensors( b2fFluid* f )
 		return;
 	}
 
-	b2fSensorShape* shapes = malloc( (size_t)count * sizeof( b2fSensorShape ) );
+	b2fSensorShape* shapes = b2Alloc( (size_t)count * sizeof( b2fSensorShape ) );
 	int shapeCount = 0;
 	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
 	for ( int i = 0; i < f->sensorCount; ++i )
@@ -424,13 +426,14 @@ static void MeasureSensors( b2fFluid* f )
 	{
 		f->sensors[shapes[k].sensor].area = (float)shapes[k].area;
 	}
-	free( shapes );
+	b2Free( shapes, (size_t)count * sizeof( b2fSensorShape ) );
 }
 
 static void UpdateSensors( b2fFluid* f )
 {
 	// A destroyed sensor that held liquid ends now. What is left held liquid last step or is near it now.
-	bool* held = malloc( (size_t)( f->sensorCount > 0 ? f->sensorCount : 1 ) * sizeof( bool ) );
+	int heldCount = f->sensorCount > 0 ? f->sensorCount : 1;
+	bool* held = b2Alloc( (size_t)heldCount * sizeof( bool ) );
 	for ( int i = 0; i < f->sensorCount; )
 	{
 		b2fSensor* sensor = f->sensors + i;
@@ -473,7 +476,7 @@ static void UpdateSensors( b2fFluid* f )
 		}
 	}
 	f->sensorCount = kept;
-	free( held );
+	b2Free( held, (size_t)heldCount * sizeof( bool ) );
 }
 
 void b2fFinishStep( b2fFluid* f )
@@ -498,14 +501,14 @@ void b2fFinishStep( b2fFluid* f )
 
 void b2fFreeState( b2fFluid* f )
 {
-	free( f->records );
-	free( f->recordOfBody );
-	free( f->sensors );
-	free( f->bodyLiquidMass );
-	free( f->bodyBeginEvents );
-	free( f->bodyEndEvents );
-	free( f->sensorBeginEvents );
-	free( f->sensorEndEvents );
+	b2Free( f->records, (size_t)f->recordCapacity * sizeof( b2fBodyRecord ) );
+	b2Free( f->recordOfBody, (size_t)f->recordOfBodyCapacity * sizeof( int ) );
+	b2Free( f->sensors, (size_t)f->sensorCapacity * sizeof( b2fSensor ) );
+	b2Free( f->bodyLiquidMass, (size_t)f->bodyLiquidCapacity * sizeof( float ) );
+	b2Free( f->bodyBeginEvents, (size_t)f->bodyBeginCapacity * sizeof( b2FluidBodyBeginEvent ) );
+	b2Free( f->bodyEndEvents, (size_t)f->bodyEndCapacity * sizeof( b2FluidBodyEndEvent ) );
+	b2Free( f->sensorBeginEvents, (size_t)f->sensorBeginCapacity * sizeof( b2FluidSensorBeginEvent ) );
+	b2Free( f->sensorEndEvents, (size_t)f->sensorEndCapacity * sizeof( b2FluidSensorEndEvent ) );
 }
 
 b2FluidBodyState b2Fluid_GetBodyState( b2FluidId fluidId, b2BodyId bodyId )

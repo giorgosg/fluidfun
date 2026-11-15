@@ -86,16 +86,17 @@ static void BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	int stride = width + 1, nodes = stride * ( height + 1 );
 	if ( nodes > f->boxCapacity )
 	{
-		f->boxCapacity = 2 * nodes;
-		f->boxMass = realloc( f->boxMass, (size_t)f->boxCapacity * sizeof( double ) );
-		f->boxPx = realloc( f->boxPx, (size_t)f->boxCapacity * sizeof( double ) );
-		f->boxPy = realloc( f->boxPy, (size_t)f->boxCapacity * sizeof( double ) );
-		f->boxWeight = realloc( f->boxWeight, (size_t)f->boxCapacity * sizeof( double ) );
-		f->boxMixed = realloc( f->boxMixed, (size_t)f->boxCapacity * sizeof( double ) );
-		f->boxLiquid = realloc( f->boxLiquid, (size_t)f->boxCapacity );
-		f->boxPressure = realloc( f->boxPressure, (size_t)f->boxCapacity * sizeof( float ) );
-		f->boxDepth = realloc( f->boxDepth, (size_t)f->boxCapacity * sizeof( float ) );
-		f->boxFlow = realloc( f->boxFlow, (size_t)f->boxCapacity * sizeof( float ) );
+		int old = f->boxCapacity, capacity = 2 * nodes;
+		f->boxMass = b2fGrowArray( f->boxMass, old, capacity, sizeof( double ) );
+		f->boxPx = b2fGrowArray( f->boxPx, old, capacity, sizeof( double ) );
+		f->boxPy = b2fGrowArray( f->boxPy, old, capacity, sizeof( double ) );
+		f->boxWeight = b2fGrowArray( f->boxWeight, old, capacity, sizeof( double ) );
+		f->boxMixed = b2fGrowArray( f->boxMixed, old, capacity, sizeof( double ) );
+		f->boxLiquid = b2fGrowArray( f->boxLiquid, old, capacity, 1 );
+		f->boxPressure = b2fGrowArray( f->boxPressure, old, capacity, sizeof( float ) );
+		f->boxDepth = b2fGrowArray( f->boxDepth, old, capacity, sizeof( float ) );
+		f->boxFlow = b2fGrowArray( f->boxFlow, old, capacity, sizeof( float ) );
+		f->boxCapacity = capacity;
 	}
 
 	memset( f->boxMass, 0, (size_t)nodes * sizeof( double ) );

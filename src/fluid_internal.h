@@ -3,6 +3,7 @@
 #pragma once
 
 #include "box2d/fluidfun.h"
+#include "core.h"
 #include "fluid.h"
 
 // Inside the library the fluid is a plain struct; callers hold a b2FluidId
@@ -23,6 +24,14 @@ typedef float b2fCoord;
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+// The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount see its memory. b2Free takes the size, so
+// every array is freed with the count it was made with. This grows an array of oldCount items to newCount, keeping
+// what it held; the new part is not cleared.
+static inline void* b2fGrowArray( void* array, int oldCount, int newCount, size_t itemSize )
+{
+	return b2GrowAlloc( array, (size_t)oldCount * itemSize, (size_t)newCount * itemSize );
+}
 
 #define B2F_CHUNK_COUNT 64
 #define B2F_CONTACTS_PER_PARTICLE 4
