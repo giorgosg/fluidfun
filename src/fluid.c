@@ -350,6 +350,15 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
 	b2Free( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );
 	b2Free( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
+	b2fShapeBins* bins[2] = { &f->shapeBins, &f->fixedBins };
+	for ( int i = 0; i < 2; ++i )
+	{
+		b2Free( bins[i]->start, (size_t)bins[i]->startCapacity * sizeof( int ) );
+		b2Free( bins[i]->shapes, (size_t)bins[i]->shapeCapacity * sizeof( int ) );
+	}
+	b2Free( f->bodyShapes, (size_t)f->markCapacity * sizeof( int ) );
+	b2Free( f->shapeMark, (size_t)f->markCapacity * sizeof( int ) );
+	b2Free( f->candidates, (size_t)f->markCapacity * sizeof( int ) );
 	size_t boxes = (size_t)f->boxCapacity;
 	b2Free( f->boxMass, boxes * sizeof( double ) );
 	b2Free( f->boxPx, boxes * sizeof( double ) );

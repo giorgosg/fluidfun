@@ -66,6 +66,11 @@ static inline float b2fLatticeSize( float size )
 
 #define B2F_WALL_TABLE_SIZE 128
 
+// Blocks of this many grid cells a side, as a power of two, carry the largest particle size near them, and the
+// shapes whose bounds overlap them
+#define B2F_BLOCK_SHIFT 2
+#define B2F_BLOCK_CELLS ( 1 << B2F_BLOCK_SHIFT )
+
 // Neighbours the density pass keeps per particle for the move pass. A particle with more keeps none, and the
 // move pass scans the grid for it as before.
 #define B2F_PAIRS_PER_PARTICLE 32
@@ -189,7 +194,30 @@ typedef struct b2fBody
 	b2Vec2 stepImpulse;
 	float stepAngular, stepSubmerged;
 	bool stepWet;
+	// Whether liquid was within reach of the body in some substep of this step, asleep or not. The next step wakes
+	// the bodies that had it, and lets the rest sleep.
+	bool reached;
+	// Where the body is at the start of the step, and where its shapes start in b2fFluid::bodyShapes, for finding
+	// patches
+	b2WorldTransform transform;
+	int firstShape, shapeCount;
 } b2fBody;
+
+// Shapes sorted into the squares of a grid by their bounds, so that a point or a box finds the shapes it could touch
+// without testing all of them. A shape is in every square its bounds overlap, and each square lists its shapes in
+// their order in b2fFluid::shapes, so a pass that walks a square's list meets them in the order a walk over every
+// shape would. A point or bounds outside the grid counts as in the nearest square on its edge, which keeps every
+// overlap: clamping does not change the order of coordinates.
+typedef struct b2fShapeBins
+{
+	b2fCoord x, y;	 // lower corner of the grid
+	float inverse;	 // one over the side of a square
+	int width, height;
+	// Where each square's list starts in shapes, width * height + 1 of them
+	int* start;
+	int* shapes;
+	int startCapacity, shapeCapacity;
+} b2fShapeBins;
 
 // A body that has been in liquid lately, kept across steps, since the list of bodies is rebuilt every step
 typedef struct b2fBodyRecord
@@ -372,6 +400,15 @@ struct b2fFluid
 	int reactionCapacity;
 	b2fPatch* patches;
 	int patchCount, patchCapacity;
+	// The shapes in the blocks of each substep's grid, and the shapes forces do not move in a grid over them, once a
+	// step, for finding patches
+	b2fShapeBins shapeBins, fixedBins;
+	// Scratch for finding patches, one of each per shape: the shapes of each body in order, a mark per shape, and
+	// the candidates of one query
+	int* bodyShapes;
+	int* shapeMark;
+	int* candidates;
+	int markCapacity;
 
 	// Set per substep. Gravity is the world's; each liquid scales it by its gravityScale.
 	float h;

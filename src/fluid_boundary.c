@@ -189,13 +189,241 @@ static b2ShapeProxy ShapeProxy( const b2fShape* s )
 	return b2MakeProxy( points, s->type == b2_circleShape ? 1 : 2, s->radius );
 }
 
+// The square a coordinate falls in along one side of a grid of count squares, clamped to the grid. Clamping in float
+// before the conversion keeps any coordinate in range, and keeps the order of coordinates, so bounds that overlap
+// get squares that overlap.
+static inline int BinIndex( b2fCoord v, b2fCoord origin, float inverse, int count )
+{
+	float t = (float)( v - origin ) * inverse, last = (float)( count - 1 );
+	t = t > 0.0f ? ( t < last ? t : last ) : 0.0f;
+	return (int)t;
+}
+
+static inline int BinOf( const b2fShapeBins* bins, b2fCoord x, b2fCoord y )
+{
+	return BinIndex( y, bins->y, bins->inverse, bins->height ) * bins->width + BinIndex( x, bins->x, bins->inverse, bins->width );
+}
+
+// Sorts the shapes into the bins, whose grid the caller has set, by the bounds in the shapes: every shape, or only
+// those of bodies forces do not move. A counting sort over the shapes in order, so each square lists its shapes in
+// order.
+static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
+{
+	int squares = bins->width * bins->height;
+	if ( squares + 1 > bins->startCapacity )
+	{
+		int capacity = 2 * ( squares + 1 );
+		b2Free( bins->start, (size_t)bins->startCapacity * sizeof( int ) );
+		bins->start = b2Alloc( (size_t)capacity * sizeof( int ) );
+		bins->startCapacity = capacity;
+	}
+	memset( bins->start, 0, ( (size_t)squares + 1 ) * sizeof( int ) );
+
+	int total = 0;
+	for ( int si = 0; si < f->shapeCount; ++si )
+	{
+		const b2fShape* s = f->shapes + si;
+		if ( fixedOnly && f->bodies[s->bodyIndex].adheres == false )
+		{
+			continue;
+		}
+		int x0 = BinIndex( s->minX, bins->x, bins->inverse, bins->width ), x1 = BinIndex( s->maxX, bins->x, bins->inverse, bins->width );
+		int y0 = BinIndex( s->minY, bins->y, bins->inverse, bins->height ), y1 = BinIndex( s->maxY, bins->y, bins->inverse, bins->height );
+		for ( int y = y0; y <= y1; ++y )
+		{
+			for ( int x = x0; x <= x1; ++x )
+			{
+				bins->start[y * bins->width + x + 1] += 1;
+			}
+		}
+		total += ( x1 - x0 + 1 ) * ( y1 - y0 + 1 );
+	}
+
+	if ( total > bins->shapeCapacity )
+	{
+		int capacity = 2 * total;
+		b2Free( bins->shapes, (size_t)bins->shapeCapacity * sizeof( int ) );
+		bins->shapes = b2Alloc( (size_t)capacity * sizeof( int ) );
+		bins->shapeCapacity = capacity;
+	}
+
+	for ( int q = 0; q < squares; ++q )
+	{
+		bins->start[q + 1] += bins->start[q];
+	}
+	for ( int si = 0; si < f->shapeCount; ++si )
+	{
+		const b2fShape* s = f->shapes + si;
+		if ( fixedOnly && f->bodies[s->bodyIndex].adheres == false )
+		{
+			continue;
+		}
+		int x0 = BinIndex( s->minX, bins->x, bins->inverse, bins->width ), x1 = BinIndex( s->maxX, bins->x, bins->inverse, bins->width );
+		int y0 = BinIndex( s->minY, bins->y, bins->inverse, bins->height ), y1 = BinIndex( s->maxY, bins->y, bins->inverse, bins->height );
+		for ( int y = y0; y <= y1; ++y )
+		{
+			for ( int x = x0; x <= x1; ++x )
+			{
+				bins->shapes[bins->start[y * bins->width + x]++] = si;
+			}
+		}
+	}
+	for ( int q = squares; q > 0; --q )
+	{
+		bins->start[q] = bins->start[q - 1];
+	}
+	bins->start[0] = 0;
+}
+
+// Where the list of a square goes on after shape si: the first of its shapes past si
+static int NextInBin( const b2fShapeBins* bins, int bin, int si )
+{
+	int lo = bins->start[bin], hi = bins->start[bin + 1];
+	while ( lo < hi )
+	{
+		int mid = lo + ( ( hi - lo ) >> 1 );
+		if ( bins->shapes[mid] <= si )
+		{
+			lo = mid + 1;
+		}
+		else
+		{
+			hi = mid;
+		}
+	}
+	return lo;
+}
+
+// Bins the shapes into the blocks of this substep's grid, once the particles are sorted and the shapes' bounds set.
+// Blocks of 1 or 2 cells a side measured no faster in the Tank, the Boat or 100 crates over a chain of 500 segments.
+static void BinShapes( b2fFluid* f )
+{
+	b2fShapeBins* bins = &f->shapeBins;
+	bins->x = f->gridX;
+	bins->y = f->gridY;
+	bins->inverse = 1.0f / ( B2F_BLOCK_CELLS * f->gridCell );
+	bins->width = ( f->gridWidth + B2F_BLOCK_CELLS - 1 ) / B2F_BLOCK_CELLS;
+	bins->height = ( f->gridHeight + B2F_BLOCK_CELLS - 1 ) / B2F_BLOCK_CELLS;
+	FillBins( f, bins, false );
+}
+
+static int CompareInts( const void* a, const void* b )
+{
+	int x = *(const int*)a, y = *(const int*)b;
+	return ( x > y ) - ( x < y );
+}
+
+// A shape's bounds in the world, radius included, with its body where it is now
+static void SetBounds( b2fShape* s, b2WorldTransform transform )
+{
+	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+	int count = s->type == b2_polygonShape ? s->polygon.count : 2;
+	for ( int j = 0; j < count; ++j )
+	{
+		b2Vec2 local = s->type == b2_polygonShape ? s->polygon.vertices[j] : ( j == 0 ? s->p1 : s->p2 );
+		b2Pos p = b2TransformWorldPoint( transform, local );
+		minX = minX < p.x ? minX : p.x;
+		minY = minY < p.y ? minY : p.y;
+		maxX = maxX > p.x ? maxX : p.x;
+		maxY = maxY > p.y ? maxY : p.y;
+	}
+	s->minX = minX - s->radius;
+	s->minY = minY - s->radius;
+	s->maxX = maxX + s->radius;
+	s->maxY = maxY + s->radius;
+}
+
+// Bins the shapes of bodies forces do not move, by their bounds with the bodies where they are at the start of the
+// step, into squares about as many as the shapes. Each body's shapes are listed in order too. The shapes' bounds
+// are those until b2fUpdateBodies sets them for the first substep. Returns how many shapes were binned.
+static int BinFixedShapes( b2fFluid* f, float range )
+{
+	if ( f->shapeCount > f->markCapacity )
+	{
+		size_t old = (size_t)f->markCapacity * sizeof( int ), size = (size_t)f->shapeCapacity * sizeof( int );
+		b2Free( f->bodyShapes, old );
+		b2Free( f->shapeMark, old );
+		b2Free( f->candidates, old );
+		f->bodyShapes = b2Alloc( size );
+		f->shapeMark = b2Alloc( size );
+		f->candidates = b2Alloc( size );
+		f->markCapacity = f->shapeCapacity;
+	}
+	memset( f->shapeMark, 0, (size_t)f->shapeCount * sizeof( int ) );
+
+	for ( int b = 0; b < f->bodyCount; ++b )
+	{
+		f->bodies[b].transform = b2Body_GetTransform( f->bodies[b].id );
+		f->bodies[b].shapeCount = 0;
+	}
+
+	int count = 0;
+	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+	for ( int si = 0; si < f->shapeCount; ++si )
+	{
+		b2fShape* s = f->shapes + si;
+		b2fBody* body = f->bodies + s->bodyIndex;
+		SetBounds( s, body->transform );
+		body->shapeCount += 1;
+		if ( body->adheres )
+		{
+			minX = minX < s->minX ? minX : s->minX;
+			minY = minY < s->minY ? minY : s->minY;
+			maxX = maxX > s->maxX ? maxX : s->maxX;
+			maxY = maxY > s->maxY ? maxY : s->maxY;
+			count += 1;
+		}
+	}
+
+	int first = 0;
+	for ( int b = 0; b < f->bodyCount; ++b )
+	{
+		f->bodies[b].firstShape = first;
+		first += f->bodies[b].shapeCount;
+		f->bodies[b].shapeCount = 0;
+	}
+	for ( int si = 0; si < f->shapeCount; ++si )
+	{
+		b2fBody* body = f->bodies + f->shapes[si].bodyIndex;
+		f->bodyShapes[body->firstShape + body->shapeCount++] = si;
+	}
+
+	if ( count == 0 )
+	{
+		return 0;
+	}
+
+	// Squares no smaller than the gap, and few enough that there are at most about three for each shape: the first
+	// bound keeps the area to one square a shape, the second the squares along a long thin strip
+	float width = (float)( maxX - minX ), height = (float)( maxY - minY );
+	float side = sqrtf( width * height / (float)count );
+	float along = ( width > height ? width : height ) / (float)count;
+	side = side > along ? side : along;
+	side = side > range ? side : range;
+	b2fShapeBins* bins = &f->fixedBins;
+	bins->x = minX;
+	bins->y = minY;
+	bins->inverse = 1.0f / side;
+	bins->width = (int)( width / side ) + 1;
+	bins->height = (int)( height / side ) + 1;
+	FillBins( f, bins, true );
+	return count;
+}
+
 // What each moving body touches or nearly touches, found once a step from where the bodies are then. Box2D's own
 // contacts end 2 cm apart, well short of the gap a particle fits in, so a body lifting off had nothing under it
-// in between.
+// in between. Only the shapes forces do not move whose bounds come within the gap of a shape's are measured, in
+// their order, which is the order a test of every pair found them in.
 static void FindPatches( b2fFluid* f )
 {
 	float range = B2F_PATCH_GAP * f->spacing;
 	f->patchCount = 0;
+	int fixedCount = BinFixedShapes( f, range );
+	const b2fShapeBins* bins = &f->fixedBins;
+
+	// A little past the gap, so that rounding in the bounds never leaves out a pair the distance would keep
+	float reach = 1.1f * range;
+	int query = 0;
 	for ( int bodyIndex = 0; bodyIndex < f->bodyCount; ++bodyIndex )
 	{
 		b2fBody* body = f->bodies + bodyIndex;
@@ -206,29 +434,51 @@ static void FindPatches( b2fFluid* f )
 			continue;
 		}
 
-		b2WorldTransform transform = b2Body_GetTransform( body->id );
-		for ( int i = 0; i < f->shapeCount; ++i )
+		b2WorldTransform transform = body->transform;
+		for ( int k = 0; k < body->shapeCount && fixedCount > 0; ++k )
 		{
-			if ( f->shapes[i].bodyIndex != bodyIndex )
-			{
-				continue;
-			}
+			const b2fShape* shape = f->shapes + f->bodyShapes[body->firstShape + k];
+			b2fCoord minX = shape->minX - reach, minY = shape->minY - reach, maxX = shape->maxX + reach, maxY = shape->maxY + reach;
+			int x0 = BinIndex( minX, bins->x, bins->inverse, bins->width ), x1 = BinIndex( maxX, bins->x, bins->inverse, bins->width );
+			int y0 = BinIndex( minY, bins->y, bins->inverse, bins->height ), y1 = BinIndex( maxY, bins->y, bins->inverse, bins->height );
 
-			b2ShapeProxy proxy = ShapeProxy( f->shapes + i );
-			for ( int j = 0; j < f->shapeCount; ++j )
+			// Each shape once, though it may be in several squares, and in order
+			query += 1;
+			int candidateCount = 0;
+			for ( int y = y0; y <= y1; ++y )
+			{
+				for ( int x = x0; x <= x1; ++x )
+				{
+					int square = y * bins->width + x;
+					for ( int e = bins->start[square]; e < bins->start[square + 1]; ++e )
+					{
+						int j = bins->shapes[e];
+						const b2fShape* other = f->shapes + j;
+						if ( f->shapeMark[j] == query )
+						{
+							continue;
+						}
+						f->shapeMark[j] = query;
+						if ( other->maxX >= minX && other->minX <= maxX && other->maxY >= minY && other->minY <= maxY )
+						{
+							f->candidates[candidateCount++] = j;
+						}
+					}
+				}
+			}
+			qsort( f->candidates, (size_t)candidateCount, sizeof( int ), CompareInts );
+
+			b2ShapeProxy proxy = ShapeProxy( shape );
+			for ( int c = 0; c < candidateCount; ++c )
 			{
 				// Only shapes that forces do not move count from a distance. A wheel turning beside its hull is always
 				// close to it, and its thrust is the liquid's push towards the hull, which this would cancel.
-				int otherIndex = f->shapes[j].bodyIndex;
-				if ( otherIndex == bodyIndex || f->bodies[otherIndex].adheres == false )
-				{
-					continue;
-				}
-
+				const b2fShape* other = f->shapes + f->candidates[c];
+				int otherIndex = other->bodyIndex;
 				b2DistanceInput input = { 0 };
 				input.proxyA = proxy;
-				input.proxyB = ShapeProxy( f->shapes + j );
-				input.transform = b2InvMulWorldTransforms( transform, b2Body_GetTransform( f->bodies[otherIndex].id ) );
+				input.proxyB = ShapeProxy( other );
+				input.transform = b2InvMulWorldTransforms( transform, f->bodies[otherIndex].transform );
 				input.useRadii = true;
 				b2SimplexCache cache = { 0 };
 				b2DistanceOutput output = b2ComputeShapeDistance( &input, &cache, NULL, 0 );
@@ -272,6 +522,19 @@ static void FindPatches( b2fFluid* f )
 // Shapes near the liquid, gathered once a step
 void b2fGatherShapes( b2fFluid* f )
 {
+	// A sleeping body cannot feel the liquid, so it would never lift off. The particles still find it, as a wall, and
+	// a body that had liquid within reach last step wakes now. Waking one body wakes the bodies it rests on or
+	// against. One that had none may sleep, however near the liquid's bounds it is. A body the liquid reaches while
+	// it sleeps holds still for that one step. Still water keeps a floating body awake, as it did before.
+	for ( int i = 0; i < f->bodyCount; ++i )
+	{
+		b2BodyId id = f->bodies[i].id;
+		if ( f->bodies[i].reached && b2Body_IsValid( id ) && b2Body_GetType( id ) == b2_dynamicBody && b2Body_IsAwake( id ) == false )
+		{
+			b2Body_SetAwake( id, true );
+		}
+	}
+
 	f->shapeCount = 0;
 	f->bodyCount = 0;
 	f->shapesFiltered = false;
@@ -306,16 +569,6 @@ void b2fGatherShapes( b2fFluid* f )
 	{
 		f->reactions = b2fGrowArray( f->reactions, f->reactionCapacity, 2 * needed, sizeof( b2fReaction ) );
 		f->reactionCapacity = 2 * needed;
-	}
-
-	// A sleeping body cannot feel the liquid, so it would never lift off. For now nothing near the
-	// liquid sleeps, which is the blunt answer to the sleeping problem in DESIGN.md.
-	for ( int i = 0; i < f->bodyCount; ++i )
-	{
-		if ( b2Body_GetType( f->bodies[i].id ) == b2_dynamicBody && b2Body_IsAwake( f->bodies[i].id ) == false )
-		{
-			b2Body_SetAwake( f->bodies[i].id, true );
-		}
 	}
 
 	FindPatches( f );
@@ -400,6 +653,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	bool filtered = f->shapesFiltered;
+	const b2fShapeBins* bins = &f->shapeBins;
 	for ( int i = start; i < end; ++i )
 	{
 		float h = 2.0f * b2fLatticeSize( f->size[i] ), tableScale = (float)B2F_WALL_TABLE_SIZE / h;
@@ -407,9 +661,10 @@ static void ContactTask( int start, int end, int worker, void* context )
 		float density = 0.0f, nearDensity = 0.0f;
 		int count = 0;
 		b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
-		for ( int si = 0; si < f->shapeCount && count < B2F_CONTACTS_PER_PARTICLE; ++si )
+		int bin = BinOf( bins, x, y );
+		for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd && count < B2F_CONTACTS_PER_PARTICLE; ++k )
 		{
-			const b2fShape* s = f->shapes + si;
+			const b2fShape* s = f->shapes + bins->shapes[k];
 			if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
 			{
 				continue;
@@ -484,6 +739,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
 	float spray = 0.4f * f->restDensity;
+	const b2fShapeBins* bins = &f->shapeBins;
 
 	for ( int chunk = start; chunk < end; ++chunk )
 	{
@@ -552,10 +808,19 @@ static void CollideTask( int start, int end, int worker, void* context )
 						reaction->inertia += lump * ( rx * rx + ry * ry );
 					}
 				}
+				else if ( body->adheres == false )
+				{
+					// A sleeping body feels nothing, but the liquid within its reach wakes it next step
+					reactions[contacts[c].bodyIndex].wetMass += m;
+				}
 			}
 
-			for ( int si = 0; si < f->shapeCount; ++si )
+			// The shapes whose bounds could hold the particle, in order. A push can carry it into another square,
+			// whose list then goes on from the next shape.
+			int bin = BinOf( bins, f->pos[i].x, f->pos[i].y );
+			for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd; ++k )
 			{
+				int si = bins->shapes[k];
 				const b2fShape* s = f->shapes + si;
 				b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 				if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
@@ -633,6 +898,13 @@ static void CollideTask( int start, int end, int worker, void* context )
 
 				f->pos[i].x = x + moveX;
 				f->pos[i].y = y + moveY;
+				int now = BinOf( bins, f->pos[i].x, f->pos[i].y );
+				if ( now != bin )
+				{
+					bin = now;
+					k = NextInBin( bins, bin, si ) - 1;
+					binEnd = bins->start[bin + 1];
+				}
 
 				if ( body->awake )
 				{
@@ -746,14 +1018,14 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 			b2Vec2 normal = { patch->normalX, patch->normalY };
 			if ( other->adheres == false )
 			{
-				// Off another moving body never downwards, and only when that body is in the liquid too. The area of
-				// a hull's planks says little about the lift of a hull, so pushing it down from a wet wheel or cargo
-				// to make up the difference sank the boat. Sideways still counts: liquid pressing on the outer
+				// Off another moving body never downwards, and only when that body is awake in the liquid too. The
+				// area of a hull's planks says little about the lift of a hull, so pushing it down from a wet wheel or
+				// cargo to make up the difference sank the boat. Sideways still counts: liquid pressing on the outer
 				// sides of crates in a row otherwise clamps them together.
 				float down = b2Dot( normal, up );
 				normal = down < 0.0f ? b2MulSub( normal, down, up ) : normal;
 				float length = b2Length( normal );
-				if ( totals[patch->otherIndex].wetMass <= 0.0f || length < 0.1f )
+				if ( other->awake == false || totals[patch->otherIndex].wetMass <= 0.0f || length < 0.1f )
 				{
 					continue;
 				}
@@ -780,7 +1052,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 
 // What b2Fluid_GetBodyState reports, summed over the step: the liquid's push once patches are applied, before added
 // mass shares the body's change of motion with the liquid, and the share of the body under liquid, the one patches
-// use, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies.
+// use, and all of it with liquid all the way round. Nothing here feeds back into the liquid or the bodies, except
+// that a body with liquid within reach, asleep or not, is woken at the next step.
 static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
@@ -789,6 +1062,7 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 	{
 		b2fBody* body = f->bodies + i;
 		const b2fReaction* total = totals + i;
+		body->reached = body->reached || total->wetMass > 0.0f;
 		if ( body->awake == false )
 		{
 			continue;
@@ -936,6 +1210,7 @@ void b2fFindContacts( b2fFluid* f, b2SubStepContext* context )
 	int n = f->count;
 	if ( f->shapeCount > 0 )
 	{
+		BinShapes( f );
 		b2SubStep_ParallelFor( context, ContactTask, n, 512, f );
 	}
 	else
