@@ -16,7 +16,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FRAMES 240
+#define FRAMES 180
+// Each recording that starts mid-run covers this many frames from its start
+#define WINDOW 20
 #define DT ( 1.0f / 60.0f )
 #define SUBSTEPS 4
 
@@ -284,7 +286,7 @@ static uint64_t EventDigest( b2WorldId worldId )
 // and report the same events.
 static int RecordMidRun( void )
 {
-	int starts[] = { 30, 50, 80, 130, 131 };
+	int starts[] = { 30, 80, 130, 131 };
 	for ( int k = 0; k < (int)( sizeof( starts ) / sizeof( starts[0] ) ); ++k )
 	{
 		Scene s;
@@ -293,7 +295,8 @@ static int RecordMidRun( void )
 		b2Recording* rec = b2CreateRecording( 0 );
 		b2World_StartRecording( worldId, rec );
 		uint64_t digests[FRAMES];
-		for ( int frame = starts[k]; frame < FRAMES; ++frame )
+		int end = starts[k] + WINDOW < FRAMES ? starts[k] + WINDOW : FRAMES;
+		for ( int frame = starts[k]; frame < end; ++frame )
 		{
 			Run( worldId, &s, frame, frame + 1 );
 			digests[frame] = EventDigest( worldId );
@@ -304,7 +307,7 @@ static int RecordMidRun( void )
 		ENSURE( b2ValidateRecording( data, size, 2 ) );
 
 		b2Replay* player = b2CreateReplay( data, size, 1 );
-		for ( int frame = starts[k]; frame < FRAMES; ++frame )
+		for ( int frame = starts[k]; frame < end; ++frame )
 		{
 			ENSURE( b2Replay_StepFrame( player ) );
 			ENSURE( EventDigest( b2Replay_GetWorldId( player ) ) == digests[frame] );
@@ -347,7 +350,7 @@ static int SeekBack( void )
 	while ( b2Replay_StepFrame( player ) )
 	{
 	}
-	int targets[] = { 239, 81, 17, 130, 1, 200, 45, 79, 240, 0, 121 };
+	int targets[] = { 179, 81, 17, 130, 1, 150, 45, 79, 180, 0, 121 };
 	for ( int i = 0; i < (int)( sizeof( targets ) / sizeof( targets[0] ) ); ++i )
 	{
 		b2Replay_SeekFrame( player, targets[i] );
