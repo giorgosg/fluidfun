@@ -97,24 +97,23 @@ static inline float b2fLatticeSize( float size )
 	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size )            \
 		X( float, speedMemory ) X( int, id ) X( unsigned char, liquid )
 
-// Working values that compaction carries along with the particle fields, though sorting does not. The size pass at
-// the start of a step reads the grid, cells and search windows of the last sort and the densities of the last
-// substep, so removing particles between steps keeps those with each particle. The size pass's own compaction keeps
-// the classes and targets for the splits that follow it.
+// Working values that compaction carries along with the particle fields, though sorting does not. Densities of the
+// last substep are read between steps, by the caller and by the coarsening of spawns, so removing particles keeps them
+// with each particle. The size pass's own compaction keeps the classes and targets for the splits that follow it.
 #define B2F_CARRIED_FIELDS( X )                                                                                         \
-	X( float, rho ) X( int, cell ) X( int, window ) X( unsigned char, adaptClass ) X( float, adaptTarget )
+	X( float, rho ) X( unsigned char, adaptClass ) X( float, adaptTarget )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. marked is
 // scratch for the calls that remove particles, and adaptUsed is the size pass's own.
 #define B2F_WORK_FIELDS( X )                                                                                            \
 	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rhoNear ) X( float, pressure ) X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) \
-		X( int, contactCount ) X( int, pairCount ) X( int, sortCell ) X( int, sortBlock ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
+		X( int, contactCount ) X( int, pairCount ) X( int, cell ) X( int, window ) X( int, sortCell ) X( int, sortBlock ) X( int, permutation ) X( float, adaptDepth ) X( float, adaptFlow )        \
 			X( float, adaptMass ) X( float, adaptPressure ) X( unsigned char, adaptUsed ) X( unsigned char, marked )
 
 #define B2F_DECLARE_FIELD( type, name ) type* name;
 
-// Springs a particle holds, each to a partner by id, since indices change with every sort and with removals, merges
-// and splits between steps. The spring pass finds each partner in an id table it builds every substep. Both ends
+// Springs a particle holds, each to a partner by id, since indices change with every sort, with removals between
+// steps, and with merges and splits at the end of each. The spring pass finds each partner in an id table it builds every substep. Both ends
 // hold the same spring, and work it out the same way, so it stays the same at both.
 #define B2F_SPRINGS_PER_PARTICLE 16
 
@@ -378,7 +377,6 @@ struct b2fFluid
 
 	int sizeChanges;
 	float maxRadius;
-	bool gridValid;
 	int nextParticleId;
 	// Particles spawned since the last step that take their sizes at the start of the next one, before they move: those
 	// of each liquid with a bit in coarsenLiquids and an id from coarsenFrom of that liquid on. Liquids in
@@ -499,11 +497,11 @@ typedef struct b2fOutline
 
 // fluid.c
 b2fFluid* b2fGetFluid( b2FluidId fluidId );
-// Makes room for at least needed particles, doubling, up to maxCapacity. Only between steps or in b2PrepareFluid.
+// Makes room for at least needed particles, doubling, up to maxCapacity. Not during a substep.
 // Returns false if needed is past maxCapacity.
 bool b2fGrow( b2fFluid* f, int needed );
-// Removes the particles with their mark set, keeping the order of the rest, and the grid from the last sort with it.
-// The particle fields and the carried fields go with each particle. Between steps only. Returns how many went.
+// Removes the particles with their mark set, keeping the order of the rest. The particle fields and the carried fields
+// go with each particle; the grid of the last sort no longer holds. Not during a substep. Returns how many went.
 int b2fRemoveMarked( b2fFluid* f );
 // The liquid's index in its fluid
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
@@ -564,7 +562,8 @@ void b2fFinishStep( b2fFluid* f );
 void b2fFreeState( b2fFluid* f );
 
 // adapt.c
-void b2fAdaptSizes( b2fFluid* f );
+// The size pass, at the end of a step that ran substeps. Returns whether it ran.
+bool b2fAdaptSizes( b2fFluid* f );
 // Gives particles waiting since their spawn the sizes their depth asks for, with no movement, for a step of h a substep
 void b2fCoarsenSpawned( b2fFluid* f, float h );
 // The substep a box spawned before the first step is graded for, that of 60 Hz with 4 substeps

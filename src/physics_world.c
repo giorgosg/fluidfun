@@ -936,7 +936,7 @@ void b2World_Step( b2WorldId worldId, float timeStep, int subStepCount )
 
 	b2TracyCZoneNC( world_step, "Step", b2_colorBox2DGreen, true );
 
-	// The fluid gathers the shapes near it and changes particle sizes while the world can still be asked things
+	// The fluid gathers the shapes near it while the world can still be asked things
 	if ( world->fluid != NULL )
 	{
 		b2PrepareFluid( world->fluid, timeStep, subStepCount );

@@ -156,18 +156,22 @@ typedef struct b2FluidDef
 	int internalValue;
 } b2FluidDef;
 
-/// Timing of the last step in milliseconds, summed over substeps.
+/// Timing of the last step in milliseconds. Total is the sum of sort, density and collide over the substeps; prepare
+/// and sizes come before and after them, and are not in it.
 typedef struct b2FluidProfile
 {
+	/// Before the substeps: coarsening spawns, emitters and gathering the shapes near the liquid
 	float prepare;
 	float sort;
 	/// Density relaxation and viscosity, which share a pass
 	float density;
 	float collide;
 	float total;
-	/// Splits, merges and mass shares in the last step
+	/// Splits, merges and mass shares at the end of the last step
 	int sizeChanges;
-	/// Part of prepare spent measuring depth, flow and distance to bodies
+	/// After the substeps, changing sizes
+	float sizes;
+	/// Part of sizes spent measuring depth, flow and distance to bodies
 	float measure;
 } b2FluidProfile;
 
@@ -311,9 +315,10 @@ B2_API b2FluidRegion b2MakeProxyRegion( b2Pos origin, const b2ShapeProxy* proxy 
 
 /// Remove the particles inside a region, of one liquid, or of every liquid if liquidId is null, but no more than
 /// maxCount of them, INT_MAX for all. When there are more, the first in the fluid's own order go: row by row up the
-/// world's y axis, then any added since the last step. A capped drain feeding an emitter is a pump with a steady flow.
-/// A drain is a sensor shape the caller empties each step. Returns how many went. The others keep their ids, and
-/// springs to a particle that went are dropped. Call between steps.
+/// world's y axis, then any added since the last substep, by splits at the end of the step and by spawns after it. A
+/// capped drain feeding an emitter is a pump with a steady flow. A drain is a sensor shape the caller empties each
+/// step. Returns how many went. The others keep their ids, and springs to a particle that went are dropped. Call
+/// between steps.
 B2_API int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region, int maxCount );
 
 /// Pushing the liquid. These change the velocity of the particles inside a region, of one liquid, or of every liquid if
@@ -415,7 +420,8 @@ typedef struct b2FluidParticles
 	const float* sizes;
 	/// The liquid each particle belongs to, as the number b2Liquid_GetIndex gives
 	const unsigned char* liquids;
-	/// Kernel density of each particle from the last substep, in the units of restDensity
+	/// Kernel density of each particle from the last substep, in the units of restDensity. Sizes change after the last
+	/// substep, so a particle that split then has its parent's density, and one that took mass keeps its own.
 	const float* densities;
 	/// A number for each particle, unique within the fluid and kept while the particle lasts, through every step.
 	/// Particles get them in the order they are made, from zero, and a number is not given again. With adaptive sizes

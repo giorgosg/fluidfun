@@ -475,42 +475,24 @@ bool b2fGrow( b2fFluid* f, int needed )
 	return true;
 }
 
-// Compaction keeps the order, so each cell's run of particles stays a run and the grid from the last sort holds with
-// its starts moved down. The size pass then still runs at the next step, which reads the grid and what
-// B2F_CARRIED_FIELDS lists, so those go with each particle here.
+// Compaction keeps the order. The size pass, which removes particles itself, runs right after a substep's sort, so
+// no grid has to outlast a removal; what B2F_CARRIED_FIELDS lists is read across one, so it goes with each particle.
 int b2fRemoveMarked( b2fFluid* f )
 {
-	int n = f->count, first = 0;
-	while ( first < n && f->marked[first] == 0 )
+	int n = f->count, kept = 0;
+	for ( int i = 0; i < n; ++i )
 	{
-		first += 1;
-	}
-	if ( first == n )
-	{
-		return 0;
-	}
-
-	bool keepGrid = f->gridValid;
-	int* before = keepGrid ? b2Alloc( ( (size_t)n + 1 ) * sizeof( int ) ) : NULL;
-	for ( int i = 0; keepGrid && i < first; ++i )
-	{
-		before[i] = i;
-	}
-	int kept = first;
-	for ( int i = first; i < n; ++i )
-	{
-		if ( keepGrid )
-		{
-			before[i] = kept;
-		}
 		if ( f->marked[i] )
 		{
 			continue;
 		}
-		b2fCopyParticle( f, kept, i );
+		if ( kept != i )
+		{
+			b2fCopyParticle( f, kept, i );
 #define B2F_CARRY_FIELD( type, name ) f->name[kept] = f->name[i];
-		B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
+			B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
 #undef B2F_CARRY_FIELD
+		}
 		kept += 1;
 	}
 
@@ -519,17 +501,6 @@ int b2fRemoveMarked( b2fFluid* f )
 		b2fClearParticle( f, i );
 	}
 	f->count = kept;
-
-	if ( keepGrid )
-	{
-		before[n] = kept;
-		int entries = f->gridWidth * f->gridHeight + 2;
-		for ( int c = 0; c < entries; ++c )
-		{
-			f->cellStart[c] = before[f->cellStart[c]];
-		}
-	}
-	b2Free( before, keepGrid ? ( (size_t)n + 1 ) * sizeof( int ) : 0 );
 	return n - kept;
 }
 
@@ -763,30 +734,36 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 {
 	uint64_t ticks = b2GetTicks();
 
-	// This reads where shapes and bodies were last substep, so it has to come before they are gathered again. Spawned
-	// particles waiting for their sizes get them first, at this step's substep, and settle into place, which gathers
-	// the shapes itself, where they are now; a spawn holds off the usual pass.
+	// Spawned particles waiting for their sizes get them first, at this step's substep, and settle into place, which
+	// gathers the shapes itself, where they are now
 	f->worldGravity = b2World_GetGravity( f->worldId );
 	if ( ( f->coarsenLiquids | f->guessedLiquids ) != 0 && timeStep > 0.0f )
 	{
 		b2fCoarsenSpawned( f, timeStep / (float)( subStepCount > 1 ? subStepCount : 1 ) );
 	}
-	b2fAdaptSizes( f );
-	// After the sizes, which need every particle to have a grid cell from the last sort, as new ones have not
 	b2fStepEmitters( f, timeStep );
 	b2fGatherShapes( f );
 
 	f->stepTime = 0.0f;
 	f->stepSubSteps = 0;
 	memset( &f->profile, 0, sizeof( f->profile ) );
-	f->profile.sizeChanges = f->sizeChanges;
 	f->profile.prepare = b2GetMilliseconds( ticks );
-	f->profile.measure = f->measureTime;
 }
 
+// Sizes change once the step is done, reading the grid, densities, shapes and bodies of its last substep, so nothing
+// the caller does between steps comes between the pass and what it reads, and the caller sees the sizes the next step
+// moves. The step's reports come first, from the particles as the last substep left them.
 void b2FinishFluid( b2fFluid* f )
 {
 	b2fFinishStep( f );
+
+	uint64_t ticks = b2GetTicks();
+	if ( b2fAdaptSizes( f ) )
+	{
+		f->profile.sizes = b2GetMilliseconds( ticks );
+		f->profile.sizeChanges = f->sizeChanges;
+		f->profile.measure = f->measureTime;
+	}
 }
 
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFluid* f )

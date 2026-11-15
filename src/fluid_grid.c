@@ -194,17 +194,16 @@ static void SwapArrays( b2fFluid* f )
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context )
 {
 	BuildGrid( f );
-	f->gridValid = true;
 	b2SubStep_ParallelFor( context, ReorderTask, f->count, 1024, f );
 	SwapArrays( f );
 }
 
-// Between steps the size pass reads densities, which a sort in a step leaves behind since the substep works them out
-// again. This sort carries them, so passes with sorts between them read each particle's own.
+// Coarsening spawns, the size pass runs pass after pass before a step and reads densities, which a sort in a substep
+// leaves behind since the substep works them out again. This sort carries them, so passes with sorts between them read
+// each particle's own.
 void b2fSortParticlesNow( b2fFluid* f )
 {
 	BuildGrid( f );
-	f->gridValid = true;
 	ReorderTask( 0, f->count, 0, f );
 	SwapArrays( f );
 	float* scratch = f->pressure;
