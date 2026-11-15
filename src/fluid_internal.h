@@ -164,6 +164,10 @@ typedef struct b2fPatch
 // than standing beside it, so it does not count towards the level a body reports
 #define B2F_TOP_FACING 0.5f
 
+// The nearest point of a shape counts as buried in another shape held fixed against it when it is closer to that
+// shape than this share of the particle's lattice size, as where two tiles of a floor meet
+#define B2F_SEAM_TOLERANCE 0.1f
+
 typedef struct b2fBody
 {
 	b2BodyId id;
@@ -184,6 +188,8 @@ typedef struct b2fBody
 	bool sharing;
 	// Static and kinematic bodies pull on the liquid with adhesion; bodies moved by forces do not
 	bool adheres;
+	// Static bodies never move, so their shapes keep where they are against each other, as a body's own shapes do
+	bool isStatic;
 	// Area of the body's shapes near the liquid, and how far they reach below and above its centre of mass, against
 	// gravity, this substep
 	float area, low, high;

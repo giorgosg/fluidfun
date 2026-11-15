@@ -357,6 +357,14 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 8.0f;
 			break;
 
+		case lab_tiles:
+			s.name = "Tile Floor";
+			s.viewCenter = (b2Vec2){ 0.0f, 3.5f };
+			s.viewHalfWidth = 9.0f;
+			s.tankWidth = 16.0f;
+			s.floorTiles = 32;
+			break;
+
 		default:
 			break;
 	}
@@ -422,6 +430,71 @@ void LabSceneSettings( LabSceneType type, LabDef* def )
 	}
 }
 
+// The tank's floor, from -halfWidth to halfWidth with its top at 0: one box, a row of boxes, a chain or plain segments
+static void AddFloor( LabScene* scene, b2BodyId body, float halfWidth, float halfHeight )
+{
+	int n = scene->floorTiles < 0 ? -scene->floorTiles : scene->floorTiles;
+	n = n < LAB_MAX_SEAMS ? n : LAB_MAX_SEAMS;
+	scene->seamCount = 0;
+	if ( n == 0 )
+	{
+		AddBox( body, 0.0f, -halfHeight, halfWidth, halfHeight, 0.0f, 0.0f );
+		return;
+	}
+
+	static const float widths[] = { 2.0f, 1.0f, 0.5f, 1.5f };
+	float total = 0.0f;
+	for ( int i = 0; i < n; ++i )
+	{
+		total += scene->floorMixed ? widths[i % 4] : 1.0f;
+	}
+
+	b2Vec2 points[LAB_MAX_SEAMS + 1];
+	float x = -halfWidth;
+	points[0] = (b2Vec2){ x, 0.0f };
+	for ( int i = 0; i < n; ++i )
+	{
+		float width = 2.0f * halfWidth * ( scene->floorMixed ? widths[i % 4] : 1.0f ) / total;
+		float next = i == n - 1 ? halfWidth : x + width;
+		if ( scene->floorTiles > 0 )
+		{
+			AddBox( body, 0.5f * ( x + next ), -halfHeight, 0.5f * ( next - x ), halfHeight, 0.0f, 0.0f );
+		}
+		if ( i > 0 )
+		{
+			scene->seamX[scene->seamCount++] = x;
+		}
+		x = next;
+		points[i + 1] = (b2Vec2){ x, 0.0f };
+	}
+
+	if ( scene->floorTiles < 0 && scene->floorSegments )
+	{
+		b2ShapeDef shapeDef = b2DefaultShapeDef();
+		for ( int i = 0; i < n; ++i )
+		{
+			b2Segment segment = { points[i], points[i + 1] };
+			b2CreateSegmentShape( body, &shapeDef, &segment );
+		}
+	}
+	else if ( scene->floorTiles < 0 )
+	{
+		// Chains collide on their right side, so the points run from right to left
+		for ( int i = 0; i < ( n + 1 ) / 2; ++i )
+		{
+			b2Vec2 swap = points[i];
+			points[i] = points[n - i];
+			points[n - i] = swap;
+		}
+		b2ChainDef chain = b2DefaultChainDef();
+		chain.points = points;
+		chain.pointCount = n + 1;
+		chain.ghost1 = (b2Vec2){ halfWidth + 1.0f, 0.0f };
+		chain.ghost2 = (b2Vec2){ -halfWidth - 1.0f, 0.0f };
+		b2CreateChain( body, &chain );
+	}
+}
+
 static b2FluidId CreateTank( b2WorldId worldId, LabScene* scene, const LabDef* def )
 {
 	static const float densities[] = { 0.5f, 0.25f, 0.75f, 0.1f, 2.0f };
@@ -432,7 +505,7 @@ static b2FluidId CreateTank( b2WorldId worldId, LabScene* scene, const LabDef* d
 
 	b2BodyId tank = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
 	float w = 0.5f * scene->tankWidth, h = scene->tankHeight, t = 1.0f;
-	AddBox( tank, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddFloor( scene, tank, w + 2.0f * t, t );
 	AddBox( tank, -w - t, 0.5f * h, t, 0.5f * h + 2.0f * t, 0.0f, 0.0f );
 	AddBox( tank, w + t, 0.5f * h, t, 0.5f * h + 2.0f * t, 0.0f, 0.0f );
 
@@ -1048,6 +1121,29 @@ static void AddNozzle( LabScene* scene, b2BodyId arm, float side )
 	scene->emitter = b2CreateEmitter( scene->liquids[0], &nozzle );
 }
 
+// A tank built as a tile map builds one: a floor of square tiles half a metre across, a step one tile high at the
+// right, and three crates, of 0.5, 0.9 and 1.2 times the liquid's density, dropped into a dam break. The liquid
+// should cross the seams between tiles as it crosses one box.
+static b2FluidId CreateTiles( b2WorldId worldId, LabScene* scene, const LabDef* def )
+{
+	AddCrate( scene, worldId, -6.5f, 6.5f, 0.4f, 0.5f );
+	AddCrate( scene, worldId, -5.0f, 6.5f, 0.4f, 0.9f );
+	AddCrate( scene, worldId, -3.5f, 6.5f, 0.4f, 1.2f );
+
+	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
+	float half = 0.5f * scene->tankWidth, tile = 0.5f;
+	AddFloor( scene, ground, half, 0.5f * tile );
+	for ( int i = 0; i < 6; ++i )
+	{
+		AddBox( ground, half - ( (float)i + 0.5f ) * tile, 0.5f * tile, 0.5f * tile, 0.5f * tile, 0.0f, 0.0f );
+	}
+	AddBox( ground, -half - 0.5f, 4.0f, 0.5f, 4.5f, 0.0f, 0.0f );
+	AddBox( ground, half + 0.5f, 4.0f, 0.5f, 4.5f, 0.0f, 0.0f );
+
+	float margin = def->fluid.particleSpacing;
+	return AddLiquid( worldId, scene, def, (b2Vec2){ -half + margin, margin }, (b2Vec2){ -2.5f, 5.0f } );
+}
+
 static b2FluidId CreateSprinkler( b2WorldId worldId, LabScene* scene, const LabDef* def )
 {
 	b2BodyId ground = AddBody( scene, worldId, b2_staticBody, 0.0f, 0.0f );
@@ -1139,6 +1235,9 @@ b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def 
 			break;
 		case lab_sprinkler:
 			fluid = CreateSprinkler( worldId, scene, def );
+			break;
+		case lab_tiles:
+			fluid = CreateTiles( worldId, scene, def );
 			break;
 		default:
 			fluid = CreateTank( worldId, scene, def );

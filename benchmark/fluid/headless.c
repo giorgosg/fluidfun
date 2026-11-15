@@ -3,9 +3,10 @@
 // runs can be compared across worker counts. Usage: fluid_headless [frames] [liquid scale]
 //
 // The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_CRATE_HALF, LAB_SUBSTEPS,
+// LAB_FLOOR (tiles of the tank's floor, below 0 a chain) with LAB_FLOOR_MIXED and LAB_FLOOR_SEGMENTS, LAB_LIQUID=width,height,
 // LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
 // ApplySettings, LAB_CAPACITY among them. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
+// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_STATE, LAB_HOLES and LAB_SEAMS (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
 // LAB_FRAME_EVERY, and LAB_START (every so many frames). LAB_HZ sets the step rate, 60 by default; frames count steps, and
 // the probes that print seconds assume 60 except LAB_START. LAB_WORLD_GRAVITY=x,y sets the world's gravity.
 #include "scene.h"
@@ -373,6 +374,100 @@ static void PrintShape( b2FluidId fluid, float spacing, int frame )
 	free( stack );
 }
 
+// LAB_SEAMS: the bottom row of a tank's liquid, below 1.1 sizes, by distance from the nearest seam of its floor (LAB_FLOOR), in fine
+// spacings: count, density over rest, height over size and mean speed across and along the floor. Then the surface
+// over the seams against away from them: the top particle in each column a spacing wide, averaged over columns whose
+// middle is within a spacing of a seam and over those more than three away. A floor of one box has no seams, so its
+// row is all in the last band.
+static void PrintSeams( b2FluidId fluid, const LabScene* scene, float spacing, int frame )
+{
+	b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+	int n = particles.count;
+	const b2Pos* pos = particles.positions;
+	const float* rho = particles.densities;
+	const float* size = particles.sizes;
+	const float* vx = particles.velocitiesX;
+	const float* vy = particles.velocitiesY;
+	float rest = particles.restDensity, half = 0.5f * scene->tankWidth;
+
+	enum { bandCount = 6, columnCount = 4096 };
+	static const float edges[bandCount] = { 0.5f, 1.0f, 2.0f, 3.0f, 5.0f, FLT_MAX };
+	double count[bandCount] = { 0 }, density[bandCount] = { 0 }, height[bandCount] = { 0 }, across[bandCount] = { 0 }, along[bandCount] = { 0 };
+	static float top[columnCount];
+	for ( int c = 0; c < columnCount; ++c )
+	{
+		top[c] = -FLT_MAX;
+	}
+	for ( int i = 0; i < n; ++i )
+	{
+		float x = (float)pos[i].x, y = (float)pos[i].y;
+		if ( x < -half || x > half )
+		{
+			continue;
+		}
+		int c = (int)( ( x + half ) / spacing );
+		if ( c >= 0 && c < columnCount )
+		{
+			top[c] = y > top[c] ? y : top[c];
+		}
+		if ( y > 1.1f * size[i] )
+		{
+			continue;
+		}
+		float nearest = FLT_MAX;
+		for ( int k = 0; k < scene->seamCount; ++k )
+		{
+			float d = fabsf( x - scene->seamX[k] ) / spacing;
+			nearest = d < nearest ? d : nearest;
+		}
+		int b = 0;
+		while ( nearest >= edges[b] )
+		{
+			b += 1;
+		}
+		count[b] += 1.0;
+		density[b] += rho[i] / rest;
+		height[b] += y / size[i];
+		across[b] += fabsf( vy[i] );
+		along[b] += fabsf( vx[i] );
+	}
+
+	double nearTop = 0.0, awayTop = 0.0;
+	int nearColumns = 0, awayColumns = 0;
+	for ( int c = 0; c < columnCount && ( (float)c + 0.5f ) * spacing < 2.0f * half; ++c )
+	{
+		if ( top[c] == -FLT_MAX )
+		{
+			continue;
+		}
+		float x = -half + ( (float)c + 0.5f ) * spacing, nearest = FLT_MAX;
+		for ( int k = 0; k < scene->seamCount; ++k )
+		{
+			float d = fabsf( x - scene->seamX[k] ) / spacing;
+			nearest = d < nearest ? d : nearest;
+		}
+		if ( nearest < 1.0f )
+		{
+			nearTop += top[c];
+			nearColumns += 1;
+		}
+		else if ( nearest > 3.0f )
+		{
+			awayTop += top[c];
+			awayColumns += 1;
+		}
+	}
+
+	printf( "SEAMS %d", frame );
+	for ( int b = 0; b < bandCount; ++b )
+	{
+		double k = count[b] > 0.0 ? count[b] : 1.0;
+		printf( " | <%.1f: %d %.3f %.3f %.3f %.3f", edges[b] < FLT_MAX ? (double)edges[b] : 99.0, (int)count[b], density[b] / k, height[b] / k, across[b] / k,
+				along[b] / k );
+	}
+	printf( " | top near %.4f away %.4f\n", nearColumns > 0 ? nearTop / nearColumns : 0.0, awayColumns > 0 ? awayTop / awayColumns : 0.0 );
+}
+
 int main( int argc, char** argv )
 {
 	int frames = argc > 1 ? atoi( argv[1] ) : 300;
@@ -403,6 +498,16 @@ int main( int argc, char** argv )
 		if ( getenv( "LAB_CRATE_HALF" ) )
 		{
 			scene.crateHalfSize = (float)atof( getenv( "LAB_CRATE_HALF" ) );
+		}
+		if ( getenv( "LAB_FLOOR" ) )
+		{
+			scene.floorTiles = atoi( getenv( "LAB_FLOOR" ) );
+			scene.floorMixed = getenv( "LAB_FLOOR_MIXED" ) != NULL;
+			scene.floorSegments = getenv( "LAB_FLOOR_SEGMENTS" ) != NULL;
+		}
+		if ( getenv( "LAB_LIQUID" ) )
+		{
+			sscanf( getenv( "LAB_LIQUID" ), "%f,%f", &scene.liquidWidth, &scene.liquidHeight );
 		}
 		scene.liquidWidth *= scale;
 		scene.tankWidth *= scale;
@@ -606,6 +711,10 @@ int main( int argc, char** argv )
 						under[k] += (float)count;
 					}
 				}
+			}
+			if ( getenv( "LAB_SEAMS" ) && ( i + 1 ) % atoi( getenv( "LAB_SEAMS" ) ) == 0 )
+			{
+				PrintSeams( fluid, &scene, def.fluid.particleSpacing, i + 1 );
 			}
 			if ( getenv( "LAB_HOLES" ) && ( i + 1 ) % atoi( getenv( "LAB_HOLES" ) ) == 0 )
 			{
