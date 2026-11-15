@@ -1662,6 +1662,37 @@ static int FluidCoarsenSpawns( void )
 	ENSURE( b2Fluid_GetParticleCount( fluidId ) < boxed / 2 );
 	b2DestroyWorld( worldId );
 
+	// A destroyed liquid's spawn waiting to coarsen goes with it, and so does one whose liquid loses adaptive sizes,
+	// so a liquid made in the same slot before the step is not coarsened for it (review B2)
+	{
+		worldId = b2CreateWorld( &worldDef );
+		def.adaptiveDepth = b2DefaultFluidDef().adaptiveDepth;
+		fluidId = b2CreateFluid( worldId, &def );
+		b2fFluid* f = b2fGetFluid( fluidId );
+		b2CreateLiquid( fluidId, &water );
+		waterId = b2CreateLiquid( fluidId, &water );
+		int slot = b2Liquid_GetIndex( waterId );
+		b2Liquid_SpawnCircle( waterId, ( b2Pos ){ 0.0f, 2.0f }, 2.0f, b2Vec2_zero );
+		ENSURE( f->coarsenLiquids == 1u << slot );
+		b2DestroyLiquid( waterId );
+		ENSURE( f->coarsenLiquids == 0 );
+
+		b2LiquidDef plain = water;
+		plain.tuning.adaptiveRatio = 1.0f;
+		b2LiquidId plainId = b2CreateLiquid( fluidId, &plain );
+		ENSURE( b2Liquid_GetIndex( plainId ) == slot );
+		int count = b2Liquid_SpawnCircle( plainId, ( b2Pos ){ 0.0f, 2.0f }, 2.0f, b2Vec2_zero );
+		ENSURE( f->coarsenLiquids == 0 );
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		ENSURE( b2Fluid_GetParticleCount( fluidId ) == count );
+
+		b2Liquid_SetDef( plainId, &water );
+		b2Liquid_SpawnCircle( plainId, ( b2Pos ){ 0.0f, 8.0f }, 1.0f, b2Vec2_zero );
+		ENSURE( f->coarsenLiquids == 1u << slot );
+		b2Liquid_SetDef( plainId, &plain );
+		ENSURE( f->coarsenLiquids == 0 );
+		b2DestroyWorld( worldId );
+	}
 	return 0;
 }
 

@@ -641,6 +641,8 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 	}
 	b2fRemoveMarked( f );
 	b2fDestroyEmitters( f, index );
+	// A spawn waiting to coarsen goes with it, or the next liquid in the slot would coarsen all its own particles
+	f->coarsenLiquids &= ~( 1u << index );
 
 	f->liquids[index].alive = false;
 	while ( f->liquidCount > 0 && f->liquids[f->liquidCount - 1].alive == false )
@@ -659,6 +661,11 @@ void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
 		return;
 	}
 	f->liquids[index].def = *def;
+	// Without adaptive sizes a spawn waiting to coarsen stays as it is
+	if ( def->tuning.adaptiveRatio <= 1.0f )
+	{
+		f->coarsenLiquids &= ~( 1u << index );
+	}
 	UpdateLiquids( f );
 }
 
