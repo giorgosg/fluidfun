@@ -838,36 +838,39 @@ static void CollideTask( int start, int end, int worker, void* context )
 				const b2fBody* body = f->bodies + s->bodyIndex;
 				b2Pos world = { x, y };
 				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( world, body->origin ) );
-				float distance;
-				b2Vec2 normal;
+				float distance = 0.0f;
+				b2Vec2 normal = b2Vec2_zero;
 				bool crossed = false;
-				if ( b2fShapeDistance( s, local, &distance, &normal ) == false )
+
+				// A small particle keeps only half its size from a surface, so a fast one can pass a segment or a thin
+				// capsule within one substep and come out behind it, where the push would carry it on through. If its
+				// path this substep cuts the segment, or the capsule's core, it goes back to the side it came from. A
+				// chain segment collides on its right side only, so only a path from there counts.
+				if ( s->type == b2_segmentShape || s->type == b2_chainSegmentShape || s->type == b2_capsuleShape )
 				{
-					// Behind a chain segment, which has no inside to push a particle out of. A small particle keeps
-					// only half its size from a surface, so a fast one can pass a segment within one substep. If it
-					// started the substep in front and its path cuts the segment, it goes back to the front.
 					b2Vec2 before = b2InvRotateVector( body->motion.rotation, b2SubPos( f->prev[i], body->origin ) );
 					b2Vec2 edge = b2Sub( s->p2, s->p1 );
 					float sideBefore = b2Cross( b2Sub( before, s->p1 ), edge ), sideNow = b2Cross( b2Sub( local, s->p1 ), edge );
 					float length2 = b2Dot( edge, edge );
-					if ( s->type != b2_chainSegmentShape || sideBefore < 0.0f || sideNow >= 0.0f || length2 <= 0.0f )
+					bool cuts = s->type == b2_chainSegmentShape ? sideBefore >= 0.0f && sideNow < 0.0f
+																: ( sideBefore > 0.0f && sideNow < 0.0f ) || ( sideBefore < 0.0f && sideNow > 0.0f );
+					if ( cuts && length2 > 0.0f )
 					{
-						continue;
+						b2Vec2 cut = b2Lerp( before, local, sideBefore / ( sideBefore - sideNow ) );
+						float along = b2Dot( b2Sub( cut, s->p1 ), edge ) / length2;
+						if ( along >= 0.0f && along <= 1.0f )
+						{
+							// Signed along the normal on the side the particle came from, so negative
+							float sign = sideBefore >= 0.0f ? 1.0f : -1.0f, length = sqrtf( length2 );
+							distance = sign * sideNow / length - s->radius;
+							normal = b2MulSV( sign / length, b2RightPerp( edge ) );
+							crossed = true;
+						}
 					}
-
-					b2Vec2 cut = b2Lerp( before, local, sideBefore / ( sideBefore - sideNow ) );
-					float along = b2Dot( b2Sub( cut, s->p1 ), edge ) / length2;
-					if ( along < 0.0f || along > 1.0f )
-					{
-						continue;
-					}
-
-					float length = sqrtf( length2 );
-					distance = sideNow / length;
-					normal = b2MulSV( 1.0f / length, b2RightPerp( edge ) );
-					crossed = true;
 				}
-				else if ( distance >= margin )
+
+				// Behind a chain segment, which has no inside to push a particle out of
+				if ( crossed == false && ( b2fShapeDistance( s, local, &distance, &normal ) == false || distance >= margin ) )
 				{
 					continue;
 				}
