@@ -364,24 +364,31 @@ static int CompareInts( const void* a, const void* b )
 	return ( x > y ) - ( x < y );
 }
 
-// A shape's bounds in the world, radius included, with its body where it is now
-static void SetBounds( b2fShape* s, b2WorldTransform transform )
+// A shape's bounds in the world with its body at origin turned by rotation, grown by grow. With a body, its lowest and
+// highest points along up, radius included, are widened to take the shape's.
+static void SetBounds( b2fShape* s, b2Pos origin, b2Rot rotation, float grow, b2fBody* body, b2Vec2 up )
 {
 	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
 	int count = s->type == b2_polygonShape ? s->polygon.count : 2;
 	for ( int j = 0; j < count; ++j )
 	{
 		b2Vec2 local = s->type == b2_polygonShape ? s->polygon.vertices[j] : ( j == 0 ? s->p1 : s->p2 );
-		b2Pos p = b2TransformWorldPoint( transform, local );
+		b2Pos p = b2OffsetPos( origin, b2RotateVector( rotation, local ) );
 		minX = minX < p.x ? minX : p.x;
 		minY = minY < p.y ? minY : p.y;
 		maxX = maxX > p.x ? maxX : p.x;
 		maxY = maxY > p.y ? maxY : p.y;
+		if ( body != NULL )
+		{
+			float height = b2Dot( b2SubPos( p, body->center ), up );
+			body->low = body->low < height - s->radius ? body->low : height - s->radius;
+			body->high = body->high > height + s->radius ? body->high : height + s->radius;
+		}
 	}
-	s->minX = minX - s->radius;
-	s->minY = minY - s->radius;
-	s->maxX = maxX + s->radius;
-	s->maxY = maxY + s->radius;
+	s->minX = minX - grow;
+	s->minY = minY - grow;
+	s->maxX = maxX + grow;
+	s->maxY = maxY + grow;
 }
 
 // Bins the shapes of bodies forces do not move, by their bounds with the bodies where they are at the start of the
@@ -415,7 +422,7 @@ static int BinFixedShapes( b2fFluid* f, float range )
 	{
 		b2fShape* s = f->shapes + si;
 		b2fBody* body = f->bodies + s->bodyIndex;
-		SetBounds( s, body->transform );
+		SetBounds( s, body->transform.p, body->transform.q, s->radius, NULL, b2Vec2_zero );
 		body->shapeCount += 1;
 		if ( body->adheres )
 		{
@@ -1510,6 +1517,8 @@ void b2fHoldBodies( b2fFluid* f )
 	SetShapeBounds( f );
 }
 
+// Every shape's bounds with its body where the substep has it, grown by the farthest a particle reaches, and every
+// body's lowest and highest points
 static void SetShapeBounds( b2fFluid* f )
 {
 	float g = b2Length( f->worldGravity );
@@ -1519,25 +1528,7 @@ static void SetShapeBounds( b2fFluid* f )
 	{
 		b2fShape* s = f->shapes + i;
 		b2fBody* body = f->bodies + s->bodyIndex;
-		b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
-		int count = s->type == b2_polygonShape ? s->polygon.count : 2;
-		for ( int j = 0; j < count; ++j )
-		{
-			b2Vec2 local = s->type == b2_polygonShape ? s->polygon.vertices[j] : ( j == 0 ? s->p1 : s->p2 );
-			b2Pos p = b2OffsetPos( body->origin, b2RotateVector( body->motion.rotation, local ) );
-			minX = minX < p.x ? minX : p.x;
-			minY = minY < p.y ? minY : p.y;
-			maxX = maxX > p.x ? maxX : p.x;
-			maxY = maxY > p.y ? maxY : p.y;
-			float height = b2Dot( b2SubPos( p, body->center ), up );
-			body->low = body->low < height - s->radius ? body->low : height - s->radius;
-			body->high = body->high > height + s->radius ? body->high : height + s->radius;
-		}
-		float grow = s->radius + f->maxRadius;
-		s->minX = minX - grow;
-		s->minY = minY - grow;
-		s->maxX = maxX + grow;
-		s->maxY = maxY + grow;
+		SetBounds( s, body->origin, body->motion.rotation, s->radius + f->maxRadius, body, up );
 	}
 }
 
