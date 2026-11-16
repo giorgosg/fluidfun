@@ -339,16 +339,16 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 	bins->start[0] = 0;
 }
 
-// Bins the shapes into the blocks of this substep's grid, once the particles are sorted and the shapes' bounds set.
+// Bins the shapes into the blocks of a grid, once the particles are sorted and the shapes' bounds set: the awake
+// particles' grid each substep, and the sleep grid for the asleep particles that find contacts.
 // Blocks of 1 or 2 cells a side measured no faster in the Tank, the Boat or 100 crates over a chain of 500 segments.
-static void BinShapes( b2fFluid* f )
+static void BinShapes( b2fFluid* f, b2fShapeBins* bins, const b2fGrid* grid )
 {
-	b2fShapeBins* bins = &f->shapeBins;
-	bins->x = f->gridX;
-	bins->y = f->gridY;
-	bins->inverse = 1.0f / ( B2F_BLOCK_CELLS * f->gridCell );
-	bins->width = ( f->gridWidth + B2F_BLOCK_CELLS - 1 ) / B2F_BLOCK_CELLS;
-	bins->height = ( f->gridHeight + B2F_BLOCK_CELLS - 1 ) / B2F_BLOCK_CELLS;
+	bins->x = grid->x;
+	bins->y = grid->y;
+	bins->inverse = 1.0f / ( B2F_BLOCK_CELLS * grid->cell );
+	bins->width = ( grid->width + B2F_BLOCK_CELLS - 1 ) / B2F_BLOCK_CELLS;
+	bins->height = ( grid->height + B2F_BLOCK_CELLS - 1 ) / B2F_BLOCK_CELLS;
 	FillBins( f, bins, false );
 }
 
@@ -696,7 +696,7 @@ void b2fGatherShapes( b2fFluid* f )
 		// over the liquid in each square outside it that has some, so the shapes between are not gathered
 		b2fBox all, bulk;
 		int border = f->adaptive ? (int)ceilf( f->maxRadius / f->cellSize ) + 1 : 1;
-		bool bulkOnly = b2fFindBulk( f, f->cellSize, border, &all, &bulk );
+		bool bulkOnly = b2fFindBulk( f, NULL, 0, f->count, f->cellSize, border, &all, &bulk );
 		int boxCount = 1;
 		b2AABB single;
 		b2AABB* boxes = &single;
@@ -857,14 +857,31 @@ static inline bool FixedTogether( const b2fFluid* f, const b2fShape* a, const b2
 	return a->bodyIndex == b->bodyIndex || ( f->bodies[a->bodyIndex].isStatic && f->bodies[b->bodyIndex].isStatic );
 }
 
+// The contacts of awake particles, in their grid's bins, and of asleep ones, in the sleep grid's: those in the shell,
+// or every asleep particle
+enum
+{
+	b2f_contactsAwake,
+	b2f_contactsShell,
+	b2f_contactsAsleep
+};
+
+typedef struct b2fContactPass
+{
+	b2fFluid* f;
+	int mode;
+} b2fContactPass;
+
 static void ContactTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
-	b2fFluid* f = context;
-	bool filtered = f->shapesFiltered;
-	const b2fShapeBins* bins = &f->shapeBins;
-	for ( int i = start; i < end; ++i )
+	const b2fContactPass* pass = context;
+	b2fFluid* f = pass->f;
+	bool filtered = f->shapesFiltered, awake = pass->mode == b2f_contactsAwake;
+	const b2fShapeBins* bins = awake ? &f->shapeBins : &f->sleepBins;
+	for ( int item = start; item < end; ++item )
 	{
+		int i = pass->mode == b2f_contactsShell ? f->shell[item] : ( awake ? item : f->activeCount + item );
 		float lattice = b2fLatticeSize( f->size[i] ), h = 2.0f * lattice, tableScale = (float)B2F_WALL_TABLE_SIZE / h;
 		float tolerance = B2F_SEAM_TOLERANCE * lattice;
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
@@ -877,8 +894,9 @@ static void ContactTask( int start, int end, int worker, void* context )
 			b2Pos point;
 		} found[2 * B2F_CONTACTS_PER_PARTICLE];
 		int foundCount = 0;
-		// Near an awake body, a particle may not sleep (MarkHeld)
-		unsigned char wake = f->holdMarked && f->cellHold[f->cell[i]] == f->holdSerial ? B2F_WAKE_HELD : 0;
+		// Near an awake body, a particle may not sleep (MarkHeld). Asleep ones near one woke before the substep
+		// (b2fWakeHeld), and their cells in the awake particles' grid can be clamped from far off.
+		unsigned char wake = awake && f->holdMarked && f->cellHold[f->cell[i]] == f->holdSerial ? B2F_WAKE_HELD : 0;
 		int bin = BinOf( bins, x, y );
 		for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd && foundCount < 2 * B2F_CONTACTS_PER_PARTICLE; ++k )
 		{
@@ -1019,8 +1037,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 		b2fReaction* reactions = f->reactions + chunk * f->bodyCount;
 		memset( reactions, 0, (size_t)f->bodyCount * sizeof( b2fReaction ) );
 
-		int first = (int)( (int64_t)f->count * chunk / B2F_CHUNK_COUNT );
-		int last = (int)( (int64_t)f->count * ( chunk + 1 ) / B2F_CHUNK_COUNT );
+		int first = (int)( (int64_t)f->activeCount * chunk / B2F_CHUNK_COUNT );
+		int last = (int)( (int64_t)f->activeCount * ( chunk + 1 ) / B2F_CHUNK_COUNT );
 		for ( int i = first; i < last; ++i )
 		{
 			// Asleep, a particle touches no awake body and holds still against the rest
@@ -1611,8 +1629,8 @@ static void MarkHeld( b2fFluid* f )
 		return;
 	}
 
-	int width = f->gridWidth, height = f->gridHeight, cells = width * height;
-	float inverse = 1.0f / f->gridCell;
+	int width = f->grid.width, height = f->grid.height, cells = width * height;
+	float inverse = 1.0f / f->grid.cell;
 	for ( int i = 0; i < f->shapeCount; ++i )
 	{
 		const b2fShape* s = f->shapes + i;
@@ -1633,8 +1651,8 @@ static void MarkHeld( b2fFluid* f )
 		}
 
 		float grow = 0.5f * (float)( s->maxX - s->minX > s->maxY - s->minY ? s->maxX - s->minX : s->maxY - s->minY );
-		float x0 = (float)( s->minX - f->gridX ) * inverse - grow * inverse, x1 = (float)( s->maxX - f->gridX ) * inverse + grow * inverse;
-		float y0 = (float)( s->minY - f->gridY ) * inverse - grow * inverse, y1 = (float)( s->maxY - f->gridY ) * inverse + grow * inverse;
+		float x0 = (float)( s->minX - f->grid.x ) * inverse - grow * inverse, x1 = (float)( s->maxX - f->grid.x ) * inverse + grow * inverse;
+		float y0 = (float)( s->minY - f->grid.y ) * inverse - grow * inverse, y1 = (float)( s->maxY - f->grid.y ) * inverse + grow * inverse;
 		if ( x1 < 0.0f || y1 < 0.0f || x0 >= (float)width || y0 >= (float)height )
 		{
 			continue;
@@ -1651,21 +1669,58 @@ static void MarkHeld( b2fFluid* f )
 	}
 }
 
-void b2fFindContacts( b2fFluid* f, b2SubStepContext* context )
+// Asleep particles hold still, and only shapes and bodies could change their contacts, which change only between
+// steps apart from awake bodies, which wake the liquid near them. So the shell finds its contacts every substep, and
+// every asleep particle only in the first substep of a step. Those against a shape then are in the shell for it, as they
+// would wake if the shape went.
+void b2fFindContacts( b2fFluid* f, b2SubStepContext* context, bool all )
 {
-	int n = f->count;
-	if ( f->shapeCount > 0 )
+	uint64_t ticks = b2GetTicks();
+	b2fFindShell( f, context );
+	f->profile.sleep += b2GetMilliseconds( ticks );
+
+	int a = f->activeCount, settled = f->settledCount;
+	if ( f->shapeCount == 0 )
 	{
-		BinShapes( f );
-		MarkHeld( f );
-		b2SubStep_ParallelFor( context, ContactTask, n, 512, f );
+		memset( f->contactCount, 0, (size_t)a * sizeof( int ) );
+		memset( f->wallDensity, 0, (size_t)a * sizeof( float ) );
+		memset( f->wallNearDensity, 0, (size_t)a * sizeof( float ) );
+		memset( f->wake, 0, (size_t)a );
+		for ( int k = 0; k < f->shellCount; ++k )
+		{
+			int i = f->shell[k];
+			f->contactCount[i] = 0;
+			f->wallDensity[i] = 0.0f;
+			f->wallNearDensity[i] = 0.0f;
+			f->wake[i] = 0;
+		}
+		return;
 	}
-	else
+
+	if ( a > 0 )
 	{
-		memset( f->contactCount, 0, (size_t)n * sizeof( int ) );
-		memset( f->wallDensity, 0, (size_t)n * sizeof( float ) );
-		memset( f->wallNearDensity, 0, (size_t)n * sizeof( float ) );
-		memset( f->wake, 0, (size_t)n );
+		BinShapes( f, &f->shapeBins, &f->grid );
+		MarkHeld( f );
+		b2fContactPass pass = { f, b2f_contactsAwake };
+		b2SubStep_ParallelFor( context, ContactTask, a, 256, &pass );
+	}
+	if ( settled > 0 && ( all || f->shellCount > 0 ) )
+	{
+		BinShapes( f, &f->sleepBins, &f->sleepGrid );
+		b2fContactPass pass = { f, all ? b2f_contactsAsleep : b2f_contactsShell };
+		b2SubStep_ParallelFor( context, ContactTask, all ? settled : f->shellCount, 512, &pass );
+	}
+	if ( all && settled > 0 )
+	{
+		ticks = b2GetTicks();
+		for ( int i = a; i < f->count; ++i )
+		{
+			if ( ( f->asleep[i] & B2F_ASLEEP_SHAPE ) != 0 && f->inShell[i] == 0 )
+			{
+				b2fAddShell( f, i );
+			}
+		}
+		f->profile.sleep += b2GetMilliseconds( ticks );
 	}
 }
 
@@ -1742,6 +1797,6 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 
 	if ( sharing )
 	{
-		b2SubStep_ParallelFor( context, ShareTask, f->count, 1024, f );
+		b2SubStep_ParallelFor( context, ShareTask, f->activeCount, 1024, f );
 	}
 }

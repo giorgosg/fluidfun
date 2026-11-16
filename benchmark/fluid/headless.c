@@ -841,9 +841,10 @@ int main( int argc, char** argv )
 					awake += 1;
 					speed2 += (double)particles.velocitiesX[k] * particles.velocitiesX[k] + (double)particles.velocitiesY[k] * particles.velocitiesY[k];
 				}
-				printf( "ASLEEP %.1f s: %d particles, %.3f asleep, awake rms %.4f, step %.2f ms, fluid %.2f (sort %.2f density %.2f collide %.2f prepare %.2f sizes %.2f)\n",
+				printf( "ASLEEP %.1f s: %d particles, %.3f asleep, awake rms %.4f, step %.2f ms, fluid %.2f (sort %.2f density %.2f collide %.2f prepare %.2f sizes %.2f sleep %.2f measure %.2f)\n",
 						(double)( i + 1 ) / 60.0, particles.count, particles.count > 0 ? (double)asleep / particles.count : 0.0, awake > 0 ? sqrt( speed2 / awake ) : 0.0,
-						(double)stepTime, (double)p.total, (double)p.sort, (double)p.density, (double)p.collide, (double)p.prepare, (double)p.sizes );
+						(double)stepTime, (double)p.total, (double)p.sort, (double)p.density, (double)p.collide, (double)p.prepare, (double)p.sizes, (double)p.sleep,
+						(double)p.measure );
 			}
 
 			// LAB_CALM: every half second, the liquid's mean and peak speed and the mean height of its particles, to see

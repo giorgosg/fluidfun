@@ -107,35 +107,82 @@ static inline bool Takes( const b2fFluid* f, int i, int part, const b2fBox* near
 	return inside == ( part == b2f_nearBulk );
 }
 
+// The cell a particle reads depth from, with the three after it along x and y, and how far it is across them. Clamped
+// to the outer cells' centres before the weights are taken, so a particle in the outer half cell reads the edge cell
+// alone.
+static inline void ReadCell( b2Pos p, b2fCoord originX, b2fCoord originY, float cell, int width, int height, int* cx, int* cy, float* fx,
+							 float* fy )
+{
+	float u = (float)( p.x - originX ) / cell - 0.5f, v = (float)( p.y - originY ) / cell - 0.5f;
+	u = u < 0.0f ? 0.0f : ( u > (float)( width - 1 ) ? (float)( width - 1 ) : u );
+	v = v < 0.0f ? 0.0f : ( v > (float)( height - 1 ) ? (float)( height - 1 ) : v );
+	int x = (int)u, y = (int)v;
+	x = x > width - 2 ? width - 2 : x;
+	y = y > height - 2 ? height - 2 : y;
+	*cx = x;
+	*cy = y;
+	if ( fx != NULL )
+	{
+		*fx = u - (float)x;
+		*fy = v - (float)y;
+	}
+}
+
+// Whether the size pass works out a particle's size: an awake one, or an asleep one in the shell of the last substep,
+// within reach of awake liquid, or every particle while spawns settle. The other asleep particles keep their sizes:
+// the liquid round them has been still since they fell asleep, apart from awake liquid out of their reach.
+static inline bool Evaluated( const b2fFluid* f, int i, bool settle )
+{
+	return settle || i < f->activeCount || f->inShell[i] != 0;
+}
+
 // Boxes count the particles of the liquids in counted, a bit per liquid, and give depths to those in measured, of the
-// particles in part. Returns false, measuring nothing, when part has no particles. While a spawn's sizes settle, before
+// particles in part. Returns false, measuring nothing, when part has no particles. Only the particles the pass sizes
+// (Evaluated) need depths: the boxes cover them and the reach of the largest box round them, and the depth of a cell
+// is worked out only where one of them reads it. While a spawn's sizes settle, before
 // it moves, its particles stand on the spawn lattice and count as liquid at rest, so it takes the sizes it keeps once
 // it has loosened or tightened to rest: counted by area, water would read over-full there and honey short.
 static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureDepth, float reach, const float* perMetre, bool wantFlow,
 						uint32_t counted, uint32_t measured, int part, const b2fBox* near, bool settle )
 {
 	b2fCoord minX = 0.0f, maxX = 0.0f, minY = 0.0f, maxY = 0.0f;
+	b2fBox sized = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float largest = 0.0f;
-	bool any = false;
+	bool any = false, anySized = false, all = true;
 	for ( int i = 0; i < f->count; ++i )
 	{
 		if ( Takes( f, i, part, near ) == false )
 		{
 			continue;
 		}
+		b2Pos p = f->pos[i];
 		if ( any == false )
 		{
-			minX = maxX = f->pos[i].x;
-			minY = maxY = f->pos[i].y;
+			minX = maxX = p.x;
+			minY = maxY = p.y;
 			any = true;
 		}
-		minX = minX < f->pos[i].x ? minX : f->pos[i].x;
-		maxX = maxX > f->pos[i].x ? maxX : f->pos[i].x;
-		minY = minY < f->pos[i].y ? minY : f->pos[i].y;
-		maxY = maxY > f->pos[i].y ? maxY : f->pos[i].y;
+		minX = minX < p.x ? minX : p.x;
+		maxX = maxX > p.x ? maxX : p.x;
+		minY = minY < p.y ? minY : p.y;
+		maxY = maxY > p.y ? maxY : p.y;
 		largest = largest > f->size[i] ? largest : f->size[i];
+		if ( Evaluated( f, i, settle ) == false )
+		{
+			all = false;
+			continue;
+		}
+		if ( anySized == false )
+		{
+			sized = ( b2fBox ){ p.x, p.y, p.x, p.y };
+			anySized = true;
+		}
+		sized.minX = sized.minX < p.x ? sized.minX : p.x;
+		sized.maxX = sized.maxX > p.x ? sized.maxX : p.x;
+		sized.minY = sized.minY < p.y ? sized.minY : p.y;
+		sized.maxY = sized.maxY > p.y ? sized.maxY : p.y;
 	}
-	if ( any == false )
+	if ( anySized == false )
 	{
 		return false;
 	}
@@ -146,6 +193,35 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	while ( extent / cell > 2048.0f )
 	{
 		cell *= 2.0f;
+	}
+
+	// With some particles not sized, the boxes cover those that are and all a box or the four cells they read can reach
+	// from them, within the bounds of all
+	if ( all == false )
+	{
+		float grow = reach + B2F_FLOW_BOX * b2fLatticeSize( largest );
+		cell = B2F_BOX_CELL * spacing;
+		while ( true )
+		{
+			float margin = grow + 3.0f * cell;
+			b2fCoord x0 = sized.minX - margin, y0 = sized.minY - margin, x1 = sized.maxX + margin, y1 = sized.maxY + margin;
+			x0 = x0 > minX ? x0 : minX;
+			y0 = y0 > minY ? y0 : minY;
+			x1 = x1 < maxX ? x1 : maxX;
+			y1 = y1 < maxY ? y1 : maxY;
+			extentX = (float)( x1 - x0 );
+			extentY = (float)( y1 - y0 );
+			extent = extentX > extentY ? extentX : extentY;
+			if ( extent / cell <= 2048.0f )
+			{
+				minX = x0;
+				minY = y0;
+				maxX = x1;
+				maxY = y1;
+				break;
+			}
+			cell *= 2.0f;
+		}
 	}
 
 	// At least two cells each way, since each particle reads the four cells around it: liquid in one row, such as an
@@ -167,6 +243,7 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		f->boxPressure = b2fGrowArray( f->boxPressure, old, capacity, sizeof( float ) );
 		f->boxDepth = b2fGrowArray( f->boxDepth, old, capacity, sizeof( float ) );
 		f->boxFlow = b2fGrowArray( f->boxFlow, old, capacity, sizeof( float ) );
+		f->boxNeeded = b2fGrowArray( f->boxNeeded, old, capacity, 1 );
 		f->boxCapacity = capacity;
 	}
 
@@ -190,7 +267,12 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 		{
 			continue;
 		}
-		int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
+		b2Pos p = f->pos[i];
+		if ( all == false && ( p.x < minX || p.x > maxX || p.y < minY || p.y > maxY ) )
+		{
+			continue;
+		}
+		int cx = (int)( (float)( p.x - originX ) / cell ), cy = (int)( (float)( p.y - originY ) / cell );
 		int c = ( cy + 1 ) * stride + cx + 1;
 		int l = f->liquid[i];
 		bool spawned = settle && ( f->coarsenLiquids >> l & 1u ) != 0 && f->id[i] >= f->coarsenFrom[l];
@@ -217,7 +299,12 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 			{
 				continue;
 			}
-			int cx = (int)( (float)( f->pos[i].x - originX ) / cell ), cy = (int)( (float)( f->pos[i].y - originY ) / cell );
+			b2Pos p = f->pos[i];
+			if ( all == false && ( p.x < minX || p.x > maxX || p.y < minY || p.y > maxY ) )
+			{
+				continue;
+			}
+			int cx = (int)( (float)( p.x - originX ) / cell ), cy = (int)( (float)( p.y - originY ) / cell );
 			int c = ( cy + 1 ) * stride + cx + 1;
 			unsigned char seen = f->boxLiquid[c];
 			f->boxLiquid[c] = seen == 0xFF || seen == f->liquid[i] ? f->liquid[i] : 0xFE;
@@ -252,6 +339,20 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	int flowSize = (int)( B2F_FLOW_BOX * b2fLatticeSize( largest ) / cell + 0.5f );
 	flowSize = flowSize < 1 ? 1 : flowSize;
 
+	// The cells the sized particles read, below
+	memset( f->boxNeeded, 0, (size_t)( width * height ) );
+	for ( int i = 0; i < f->count; ++i )
+	{
+		if ( ( measured >> f->liquid[i] & 1u ) == 0 || Takes( f, i, part, near ) == false || Evaluated( f, i, settle ) == false )
+		{
+			continue;
+		}
+		int cx, cy;
+		ReadCell( f->pos[i], originX, originY, cell, width, height, &cx, &cy, NULL, NULL );
+		int c = cy * width + cx;
+		f->boxNeeded[c] = f->boxNeeded[c + 1] = f->boxNeeded[c + width] = f->boxNeeded[c + width + 1] = 1;
+	}
+
 	// A cell's mass when full: a lattice at particleSpacing, which mass over packing makes liquid at rest
 	double fullMass = f->fineArea / ( 0.8660254 * fineSize * fineSize ) * cell * cell;
 	double full = f->def.adaptiveFullBox;
@@ -263,6 +364,10 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 			f->boxDepth[c] = 0.0f;
 			f->boxFlow[c] = 0.0f;
 			f->boxPressure[c] = 0.0f;
+			if ( f->boxNeeded[c] == 0 )
+			{
+				continue;
+			}
 
 			// Particles read the four nearest cells, so nothing further from liquid than that is ever asked
 			int ax = x > 0 ? x - 1 : 0, ay = y > 0 ? y - 1 : 0, bx = x + 2 < width ? x + 2 : width, by = y + 2 < height ? y + 2 : height;
@@ -340,19 +445,13 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 	// Blended between cells, so a target does not step as a particle crosses one
 	for ( int i = 0; i < f->count; ++i )
 	{
-		if ( ( measured >> f->liquid[i] & 1u ) == 0 || Takes( f, i, part, near ) == false )
+		if ( ( measured >> f->liquid[i] & 1u ) == 0 || Takes( f, i, part, near ) == false || Evaluated( f, i, settle ) == false )
 		{
 			continue;
 		}
-		// Clamped to the outer cells' centres before the weights are taken, so a particle in the outer half cell reads
-		// the edge cell alone
-		float u = (float)( f->pos[i].x - originX ) / cell - 0.5f, v = (float)( f->pos[i].y - originY ) / cell - 0.5f;
-		u = u < 0.0f ? 0.0f : ( u > (float)( width - 1 ) ? (float)( width - 1 ) : u );
-		v = v < 0.0f ? 0.0f : ( v > (float)( height - 1 ) ? (float)( height - 1 ) : v );
-		int cx = (int)u, cy = (int)v;
-		cx = cx > width - 2 ? width - 2 : cx;
-		cy = cy > height - 2 ? height - 2 : cy;
-		float fx = u - (float)cx, fy = v - (float)cy;
+		int cx, cy;
+		float fx, fy;
+		ReadCell( f->pos[i], originX, originY, cell, width, height, &cx, &cy, &fx, &fy );
 		int c = cy * width + cx;
 		float a = ( 1.0f - fx ) * ( 1.0f - fy ), b = fx * ( 1.0f - fy ), e = ( 1.0f - fx ) * fy, d = fx * fy;
 		depth[i] = a * f->boxDepth[c] + b * f->boxDepth[c + 1] + e * f->boxDepth[c + width] + d * f->boxDepth[c + width + 1];
@@ -369,14 +468,14 @@ static bool BoxMeasure( b2fFluid* f, float* depth, float* flow, float* pressureD
 // the spread of everything outside the bulk takes.
 static void MeasureDepth( b2fFluid* f, float reach, const float* perMetre, bool wantFlow, uint32_t counted, uint32_t measured, bool settle )
 {
-	if ( f->gridBulkOnly == false )
+	if ( f->activeCount == 0 || f->grid.bulkOnly == false )
 	{
 		BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_allParticles, NULL, settle );
 		return;
 	}
 
-	float margin = (float)f->gridBorder * f->gridCell;
-	b2fBox near = { f->gridBulk.minX - margin, f->gridBulk.minY - margin, f->gridBulk.maxX + margin, f->gridBulk.maxY + margin };
+	float margin = (float)f->grid.border * f->grid.cell;
+	b2fBox near = { f->grid.bulk.minX - margin, f->grid.bulk.minY - margin, f->grid.bulk.maxX + margin, f->grid.bulk.maxY + margin };
 	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_nearBulk, &near, settle );
 	BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_awayFromBulk, &near, settle );
 }
@@ -469,12 +568,18 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	for ( int i = 0; i < n; ++i )
 	{
 		const b2fLiquidSizes* liquid = sizes + f->liquid[i];
-		if ( settle && ( ( f->coarsenLiquids >> f->liquid[i] & 1u ) == 0 || f->id[i] < f->coarsenFrom[f->liquid[i]] ) )
+		bool stays = settle ? ( f->coarsenLiquids >> f->liquid[i] & 1u ) == 0 || f->id[i] < f->coarsenFrom[f->liquid[i]] : Evaluated( f, i, false ) == false;
+		if ( stays )
 		{
 			float s = f->size[i] / fineSize;
 			f->adaptMass[i] = f->adaptTarget[i] = fineArea * s * s;
 			f->adaptUsed[i] = 0;
 			f->adaptClass[i] = b2f_good;
+			// Asleep out of reach of awake liquid, the flow round it is none, so its memory of speed fades
+			if ( settle == false && liquid->fastSpeed > 0.0f )
+			{
+				f->speedMemory[i] *= memoryDecay;
+			}
 			continue;
 		}
 
@@ -578,7 +683,7 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		}
 		// Particles have moved since the grid was sorted, by under one cell in the last substep, so search one more
 		int partners[B2F_MAX_PARTNERS], count = 0;
-		FOR_NEIGHBOURS_WITHIN( f, i, j, f->window[i] + 1 )
+		FOR_NEIGHBOURS_WITHIN( f, i, j, f->window[i] + 1, f->sleepWindow[i] < 0 ? -1 : f->sleepWindow[i] + 1 )
 		{
 			if ( j == i || f->adaptUsed[j] || count == B2F_MAX_PARTNERS || f->adaptClass[j] > b2f_small || f->liquid[j] != f->liquid[i] )
 			{
@@ -630,10 +735,10 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	}
 
 	// Particles take the sizes of their new masses, and those with none left are removed; the classes and targets go
-	// with the rest for the splits below. Asleep particles are sized as the rest are, so liquid that has settled has
-	// none to change, and one whose size changes wakes, with what it splits into. Keeping asleep particles out of the
-	// pass instead left an awake particle beside sleeping ones with only one neighbour to trade mass with, and the two
-	// passed it back and forth every step, each moving 4 cm and back at 1.5 m/s.
+	// with the rest for the splits below. Asleep particles of the shell, within reach of awake ones, are sized as the
+	// rest are, so liquid that has settled has none to change, and one whose size changes wakes, with what it splits
+	// into. Keeping them out of the pass instead left an awake particle beside sleeping ones with only one neighbour to
+	// trade mass with, and the two passed it back and forth every step, each moving 4 cm and back at 1.5 m/s.
 	for ( int i = 0; i < n; ++i )
 	{
 		f->marked[i] = f->adaptMass[i] <= 0.0f ? 1 : 0;
@@ -775,6 +880,9 @@ static void SettleMerged( b2fFluid* f )
 		return;
 	}
 
+	// Filed first, so the sorts below move only the awake particles
+	b2fSortParticles( f, NULL );
+
 	// Sorts move particles, so each keeps where it started, to take back its velocity from there
 	size_t floats = (size_t)n * sizeof( float ), ints = (size_t)n * sizeof( int );
 	float* startVx = b2Alloc( floats );
@@ -798,16 +906,16 @@ static void SettleMerged( b2fFluid* f )
 	for ( int iteration = 0; iteration < B2F_SETTLE_ITERATIONS; ++iteration )
 	{
 		b2fPredict( f, NULL );
-		b2fSortParticles( f, NULL );
+		b2fSortAwake( f, NULL );
 		for ( int i = 0; i < n; ++i )
 		{
-			scratch[i] = from[f->permutation[i]];
+			scratch[i] = i < f->activeCount ? from[f->permutation[i]] : from[i];
 		}
 		int* swap = from;
 		from = scratch;
 		scratch = swap;
 		b2fHoldBodies( f );
-		b2fFindContacts( f, NULL );
+		b2fFindContacts( f, NULL, false );
 		b2fRelaxDensity( f, NULL );
 		b2fCollideHeld( f );
 

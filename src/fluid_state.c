@@ -146,9 +146,12 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 	}
 	memset( f->bodyLiquidMass, 0, (size_t)needed * sizeof( float ) );
 
+	// The awake particles and the shell found contacts in the last substep; other asleep particles' were found earlier,
+	// and since then filing may have moved them, so a body with only those round it keeps the liquid it had
 	float fineSize = f->def.particleSpacing;
-	for ( int i = 0; i < f->count; ++i )
+	for ( int k = 0; k < f->activeCount + f->shellCount; ++k )
 	{
+		int i = k < f->activeCount ? k : f->shell[k - f->activeCount];
 		const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
 		int count = f->contactCount[i];
 		float ratio = f->size[i] / fineSize;
