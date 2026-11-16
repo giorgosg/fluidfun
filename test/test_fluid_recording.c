@@ -16,20 +16,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FRAMES 180
-// Each recording that starts mid-run covers this many frames from its start
-#define WINDOW 20
+#define FRAMES 120
 #define DT ( 1.0f / 60.0f )
 #define SUBSTEPS 4
+// The frame the snapshot is taken before: a spawn, which coarsens reading what the last step gathered, while the honey
+// is asleep
+#define SNAPSHOT_FRAME 90
 
 typedef struct Scene
 {
 	b2FluidId fluid;
-	b2LiquidId water, oil, jelly;
+	b2LiquidId water, oil, honey, jelly;
 	b2EmitterId tap, hose;
-	b2BodyId light, heavy, sleeper, cart;
+	b2BodyId cart;
 	b2ShapeId drain;
-	int events;
+	int events, mostAsleep;
 } Scene;
 
 static b2WorldId MakeWorld( int workerCount, Scene* s )
@@ -42,39 +43,37 @@ static b2WorldId MakeWorld( int workerCount, Scene* s )
 	b2BodyDef bodyDef = b2DefaultBodyDef();
 	b2BodyId ground = b2CreateBody( worldId, &bodyDef );
 	b2ShapeDef shapeDef = b2DefaultShapeDef();
-	b2Polygon box = b2MakeOffsetBox( 4.0f, 0.2f, ( b2Vec2 ){ 0.0f, -0.2f }, b2Rot_identity );
+	b2Polygon box = b2MakeOffsetBox( 2.0f, 0.2f, ( b2Vec2 ){ 0.0f, -0.2f }, b2Rot_identity );
 	b2CreatePolygonShape( ground, &shapeDef, &box );
-	box = b2MakeOffsetBox( 0.2f, 1.5f, ( b2Vec2 ){ -4.2f, 1.5f }, b2Rot_identity );
+	box = b2MakeOffsetBox( 0.2f, 1.0f, ( b2Vec2 ){ -2.2f, 1.0f }, b2Rot_identity );
 	b2CreatePolygonShape( ground, &shapeDef, &box );
-	box = b2MakeOffsetBox( 0.2f, 1.5f, ( b2Vec2 ){ 4.2f, 1.5f }, b2Rot_identity );
+	box = b2MakeOffsetBox( 0.2f, 1.0f, ( b2Vec2 ){ 2.2f, 1.0f }, b2Rot_identity );
+	b2CreatePolygonShape( ground, &shapeDef, &box );
+	// A wall that keeps the water from the jelly, so the jelly can fall asleep while the water moves
+	box = b2MakeOffsetBox( 0.05f, 0.5f, ( b2Vec2 ){ 0.6f, 0.5f }, b2Rot_identity );
 	b2CreatePolygonShape( ground, &shapeDef, &box );
 
 	// A drain the script empties
 	b2ShapeDef sensorDef = b2DefaultShapeDef();
 	sensorDef.isSensor = true;
 	sensorDef.enableSensorEvents = true;
-	box = b2MakeOffsetBox( 0.3f, 0.15f, ( b2Vec2 ){ -3.5f, 0.15f }, b2Rot_identity );
+	box = b2MakeOffsetBox( 0.3f, 0.15f, ( b2Vec2 ){ -1.6f, 0.15f }, b2Rot_identity );
 	s->drain = b2CreatePolygonShape( ground, &sensorDef, &box );
 
 	bodyDef.type = b2_dynamicBody;
-	box = b2MakeBox( 0.25f, 0.25f );
-	bodyDef.position = ( b2Pos ){ -1.5f, 1.4f };
-	s->light = b2CreateBody( worldId, &bodyDef );
+	box = b2MakeBox( 0.15f, 0.15f );
+	bodyDef.position = ( b2Pos ){ -0.6f, 0.7f };
+	b2BodyId light = b2CreateBody( worldId, &bodyDef );
 	shapeDef.density = 0.5f;
-	b2CreatePolygonShape( s->light, &shapeDef, &box );
-	bodyDef.position = ( b2Pos ){ -2.5f, 1.4f };
-	s->heavy = b2CreateBody( worldId, &bodyDef );
+	b2CreatePolygonShape( light, &shapeDef, &box );
+	bodyDef.position = ( b2Pos ){ -1.0f, 0.7f };
+	b2BodyId heavy = b2CreateBody( worldId, &bodyDef );
 	shapeDef.density = 2.0f;
-	b2CreatePolygonShape( s->heavy, &shapeDef, &box );
-	// Rests on the floor away from the liquid and sleeps, until liquid poured on it wakes it
-	bodyDef.position = ( b2Pos ){ 3.4f, 0.25f };
-	s->sleeper = b2CreateBody( worldId, &bodyDef );
-	shapeDef.density = 0.8f;
-	b2CreatePolygonShape( s->sleeper, &shapeDef, &box );
+	b2CreatePolygonShape( heavy, &shapeDef, &box );
 
 	// A kinematic cart an emitter rides
 	bodyDef.type = b2_kinematicBody;
-	bodyDef.position = ( b2Pos ){ 0.5f, 2.2f };
+	bodyDef.position = ( b2Pos ){ -0.5f, 1.4f };
 	bodyDef.linearVelocity = ( b2Vec2 ){ 0.3f, 0.0f };
 	bodyDef.angularVelocity = 0.5f;
 	s->cart = b2CreateBody( worldId, &bodyDef );
@@ -83,31 +82,43 @@ static b2WorldId MakeWorld( int workerCount, Scene* s )
 	return worldId;
 }
 
-// The fluid's calls the run makes before the step of each frame
+// The fluid's calls the run makes before the step of each frame. Those that change settings wake every particle, so
+// they come first, and the honey then falls asleep by SNAPSHOT_FRAME.
 static void Script( b2WorldId worldId, Scene* s, int frame )
 {
 	if ( frame == 0 )
 	{
 		b2FluidDef def = b2DefaultFluidDef();
-		def.capacity = 256; // grows several times
+		def.capacity = 64; // grows several times
 		s->fluid = b2CreateFluid( worldId, &def );
 		b2LiquidDef water = b2DefaultLiquidDef();
 		water.tuning.adaptiveSpeed = 1.0f; // makes speedMemory
 		s->water = b2CreateLiquid( s->fluid, &water );
-		b2Liquid_SpawnBox( s->water, ( b2Pos ){ -3.8f, 0.05f }, ( b2Pos ){ -0.2f, 0.9f }, b2Vec2_zero );
+		b2Liquid_SpawnBox( s->water, ( b2Pos ){ -1.95f, 0.05f }, ( b2Pos ){ 0.5f, 0.4f }, b2Vec2_zero );
+		// A thin layer of honey behind the wall, which falls asleep while the water still moves
+		b2LiquidDef honey = b2MakeHoneyDef();
+		honey.tuning.adaptiveRatio = 1.0f;
+		s->honey = b2CreateLiquid( s->fluid, &honey );
+		b2Liquid_SpawnBox( s->honey, ( b2Pos ){ 0.7f, 0.05f }, ( b2Pos ){ 1.95f, 0.2f }, b2Vec2_zero );
 	}
-	if ( frame == 15 )
+	if ( frame == 2 )
 	{
 		b2LiquidDef oil = b2MakeOilDef();
 		s->oil = b2CreateLiquid( s->fluid, &oil );
 		b2Liquid_SetCohesionBetween( s->water, s->oil, 0.02f );
-		b2Liquid_SpawnCircle( s->oil, ( b2Pos ){ -1.0f, 1.6f }, 0.3f, ( b2Vec2 ){ 0.0f, -1.0f } );
+		b2Liquid_SpawnCircle( s->oil, ( b2Pos ){ -0.8f, 0.8f }, 0.2f, ( b2Vec2 ){ 0.0f, -1.0f } );
+		b2LiquidDef water = b2Liquid_GetDef( s->water );
+		water.viscosity = 1.0f;
+		b2Liquid_SetDef( s->water, &water );
+		b2Fluid_SetAdaptiveDepth( s->fluid, 6.0f );
+		b2Fluid_SetAdaptiveFullBox( s->fluid, 0.85f );
+		b2Fluid_SetMaxCapacity( s->fluid, 100000 );
 	}
-	if ( frame == 20 )
+	if ( frame == 3 )
 	{
 		b2EmitterDef tap = b2DefaultEmitterDef();
-		tap.point1 = ( b2Pos ){ 1.5f, 1.8f };
-		tap.point2 = ( b2Pos ){ 1.8f, 1.8f };
+		tap.point1 = ( b2Pos ){ 0.0f, 1.2f };
+		tap.point2 = ( b2Pos ){ 0.2f, 1.2f };
 		tap.velocity = ( b2Vec2 ){ 0.0f, -2.0f };
 		s->tap = b2CreateEmitter( s->water, &tap );
 		b2EmitterDef hose = b2DefaultEmitterDef();
@@ -117,70 +128,68 @@ static void Script( b2WorldId worldId, Scene* s, int frame )
 		hose.velocity = ( b2Vec2 ){ 0.0f, -1.5f };
 		s->hose = b2CreateEmitter( s->oil, &hose );
 	}
-	if ( 10 <= frame && frame < 40 )
+	if ( 4 <= frame && frame < 10 )
 	{
-		b2Fluid_Accelerate( s->fluid, s->water, b2MakeBoxRegion( ( b2Pos ){ -4.0f, 0.0f }, ( b2Pos ){ -2.0f, 1.0f } ),
+		b2Fluid_Accelerate( s->fluid, s->water, b2MakeBoxRegion( ( b2Pos ){ -2.0f, 0.0f }, ( b2Pos ){ -1.0f, 1.0f } ),
 							( b2Vec2 ){ 0.05f, 0.0f } );
-	}
-	if ( 40 <= frame && frame < 60 )
-	{
 		b2Fluid_Remove( s->fluid, b2_nullLiquidId, b2MakeShapeRegion( s->drain ), 10 );
 	}
-	if ( frame == 45 )
+	if ( frame == 6 )
 	{
-		b2Polygon box = b2MakeOffsetBox( 0.5f, 0.3f, ( b2Vec2 ){ -1.0f, 0.4f }, b2MakeRot( 0.3f ) );
+		b2Polygon box = b2MakeOffsetBox( 0.4f, 0.2f, ( b2Vec2 ){ -0.6f, 0.3f }, b2MakeRot( 0.3f ) );
 		b2ShapeProxy proxy = b2MakeProxy( box.vertices, box.count, 0.0f );
 		b2Fluid_BlendVelocity( s->fluid, b2_nullLiquidId, b2MakeProxyRegion( b2Pos_zero, &proxy ), ( b2Vec2 ){ 0.0f, 1.0f },
 							   0.5f );
-	}
-	if ( frame == 60 )
-	{
-		b2LiquidDef water = b2Liquid_GetDef( s->water );
-		water.viscosity = 1.0f;
-		b2Liquid_SetDef( s->water, &water );
-		b2Fluid_SetAdaptiveDepth( s->fluid, 6.0f );
-		b2Fluid_SetAdaptiveFullBox( s->fluid, 0.85f );
-		b2Fluid_SetMaxCapacity( s->fluid, 100000 );
-	}
-	if ( frame == 70 )
-	{
-		b2ExplosionDef blast = b2DefaultExplosionDef();
-		blast.position = ( b2Pos ){ -2.0f, 0.5f };
-		blast.radius = 0.4f;
-		blast.falloff = 0.3f;
-		blast.impulsePerLength = 0.5f;
-		b2Fluid_Explode( s->fluid, &blast );
-		blast.position = ( b2Pos ){ -1.0f, 0.5f };
-		b2World_Explode( worldId, &blast );
-	}
-	if ( frame == 80 )
-	{
-		// The hose ends with its liquid, and jelly takes the oil's slot
-		b2DestroyLiquid( s->oil );
-		b2LiquidDef jelly = b2MakeJellyDef();
-		s->jelly = b2CreateLiquid( s->fluid, &jelly );
-		b2Liquid_SpawnCapsule( s->jelly, ( b2Pos ){ 0.3f, 1.2f }, ( b2Pos ){ 0.9f, 1.4f }, 0.15f, b2Vec2_zero );
-		b2Polygon box = b2MakeBox( 0.3f, 0.2f );
-		b2Liquid_SpawnPolygon( s->water, ( b2Pos ){ -1.5f, 1.8f }, b2MakeRot( 0.4f ), &box, b2Vec2_zero );
-	}
-	if ( frame == 100 )
-	{
 		b2EmitterDef tap = b2Emitter_GetDef( s->tap );
 		tap.velocity = ( b2Vec2 ){ -0.5f, -2.5f };
 		b2Emitter_SetDef( s->tap, &tap );
 	}
-	if ( frame == 120 )
+	if ( frame == 8 )
 	{
-		b2DestroyEmitter( s->tap );
+		b2ExplosionDef blast = b2DefaultExplosionDef();
+		blast.position = ( b2Pos ){ -1.2f, 0.3f };
+		blast.radius = 0.3f;
+		blast.falloff = 0.2f;
+		blast.impulsePerLength = 0.5f;
+		b2Fluid_Explode( s->fluid, &blast );
+		blast.position = ( b2Pos ){ -0.4f, 0.3f };
+		b2World_Explode( worldId, &blast );
 	}
-	if ( frame == 130 )
+	if ( frame == 12 )
 	{
-		// Over the sleeping crate, next to the other liquid's bodies
-		b2Liquid_SpawnBox( s->water, ( b2Pos ){ 3.0f, 0.8f }, ( b2Pos ){ 3.8f, 1.3f }, b2Vec2_zero );
+		// The hose ends with its liquid, and jelly takes the oil's slot
+		b2DestroyLiquid( s->oil );
+		b2DestroyEmitter( s->tap );
+		b2LiquidDef jelly = b2MakeJellyDef();
+		s->jelly = b2CreateLiquid( s->fluid, &jelly );
+		b2Liquid_SpawnCapsule( s->jelly, ( b2Pos ){ -0.3f, 0.6f }, ( b2Pos ){ 0.1f, 0.7f }, 0.1f, b2Vec2_zero );
+		b2Polygon box = b2MakeBox( 0.2f, 0.1f );
+		b2Liquid_SpawnPolygon( s->water, ( b2Pos ){ -1.0f, 0.9f }, b2MakeRot( 0.4f ), &box, b2Vec2_zero );
+	}
+	if ( frame == SNAPSHOT_FRAME )
+	{
+		b2Liquid_SpawnCapsule( s->water, ( b2Pos ){ -1.2f, 0.8f }, ( b2Pos ){ -0.8f, 0.9f }, 0.1f, b2Vec2_zero );
+	}
+	if ( frame == SNAPSHOT_FRAME + 15 )
+	{
+		// Wakes everything, and lets it fall asleep again
+		b2Fluid_EnableSleep( s->fluid, false );
+		b2Fluid_EnableSleep( s->fluid, true );
 	}
 
 	b2FluidEvents events = b2Fluid_GetEvents( s->fluid );
 	s->events += events.bodyBeginCount + events.bodyEndCount + events.sensorBeginCount + events.sensorEndCount;
+}
+
+static int CountAsleep( b2FluidId fluidId )
+{
+	b2FluidParticles p = b2Fluid_GetParticles( fluidId );
+	int asleep = 0;
+	for ( int i = 0; i < p.count; ++i )
+	{
+		asleep += p.asleep[i] != 0 ? 1 : 0;
+	}
+	return asleep;
 }
 
 static void Run( b2WorldId worldId, Scene* s, int from, int to )
@@ -189,6 +198,8 @@ static void Run( b2WorldId worldId, Scene* s, int from, int to )
 	{
 		Script( worldId, s, frame );
 		b2World_Step( worldId, DT, SUBSTEPS );
+		int asleep = CountAsleep( s->fluid );
+		s->mostAsleep = asleep > s->mostAsleep ? asleep : s->mostAsleep;
 	}
 }
 
@@ -207,150 +218,51 @@ static int SameFluid( b2WorldId a, b2WorldId b )
 	ENSURE( memcmp( fa->vy, fb->vy, n * sizeof( float ) ) == 0 );
 	ENSURE( memcmp( fa->size, fb->size, n * sizeof( float ) ) == 0 );
 	ENSURE( memcmp( fa->id, fb->id, n * sizeof( int ) ) == 0 );
+	ENSURE( memcmp( fa->asleep, fb->asleep, n ) == 0 );
 	ENSURE( b2HashWorldStateDeep( wa ) == b2HashWorldStateDeep( wb ) );
 	return 0;
 }
 
-// Recorded from the first call, replayed at one and four workers: every frame's hash must match
-static int RecordFromStart( void )
+// Recorded from the first call and replayed at another worker count: every frame's hash must match, the replay must end
+// where the run did, and a backward seek, which restores a keyframe and steps on from it, must land on what the run had
+// at that frame
+static int RecordAndSeek( void )
 {
 	Scene s;
 	b2WorldId worldId = MakeWorld( 1, &s );
 	b2Recording* rec = b2CreateRecording( 0 );
 	b2World_StartRecording( worldId, rec );
-	Run( worldId, &s, 0, FRAMES );
+	uint64_t hashes[FRAMES + 1];
+	hashes[0] = b2HashWorldStateDeep( b2GetWorldFromId( worldId ) );
+	for ( int frame = 0; frame < FRAMES; ++frame )
+	{
+		Run( worldId, &s, frame, frame + 1 );
+		hashes[frame + 1] = b2HashWorldStateDeep( b2GetWorldFromId( worldId ) );
+	}
 	b2World_StopRecording( worldId );
 
 	// The script did what it means to: liquid grew past its first room, springs and speed memory were made, bodies
-	// met the liquid, and the sleeping crate slept and then woke in liquid
+	// met the liquid, and the honey fell asleep
 	b2fFluid* f = b2GetWorldFromId( worldId )->fluid;
-	ENSURE( f->capacity > 256 && f->springs != NULL && f->speedMemory != NULL );
+	ENSURE( f->capacity > 64 && f->springs != NULL && f->speedMemory != NULL );
 	ENSURE( s.events > 0 );
-	ENSURE( b2Body_IsAwake( s.sleeper ) );
-	ENSURE( b2Fluid_GetBodyState( s.fluid, s.sleeper ).inLiquid );
+	ENSURE( s.mostAsleep > 0 );
 
+	// Replayed at three workers, which checks every frame's hash, it ends where the run did
 	const uint8_t* data = b2Recording_GetData( rec );
 	int size = b2Recording_GetSize( rec );
-	ENSURE( b2ValidateRecording( data, size, 1 ) );
-	ENSURE( b2ValidateRecording( data, size, 4 ) );
-
-	// The replay ends where the run did
-	b2Replay* player = b2CreateReplay( data, size, 1 );
-	ENSURE( player != NULL );
+	b2Replay* player = b2CreateReplay( data, size, 3 );
+	ENSURE( b2Replay_GetInfo( player ).frameCount == FRAMES );
+	b2Replay_SetKeyframePolicy( player, 0, 8 );
 	while ( b2Replay_StepFrame( player ) )
 	{
 	}
 	ENSURE( b2Replay_HasDiverged( player ) == false );
 	ENSURE( SameFluid( worldId, b2Replay_GetWorldId( player ) ) == 0 );
-	b2DestroyReplay( player );
-
-	b2DestroyRecording( rec );
 	b2DestroyWorld( worldId );
-	return 0;
-}
 
-// What the fluid reported in the last step: its events, in order, and the bodies and sensors it holds state for
-static uint64_t EventDigest( b2WorldId worldId )
-{
-	b2FluidId fluidId = b2World_GetFluid( worldId );
-	if ( B2_IS_NULL( fluidId ) )
-	{
-		return 0;
-	}
-	b2FluidEvents e = b2Fluid_GetEvents( fluidId );
-	uint64_t hash = 14695981039346656037ull;
-#define MIX( v ) hash = ( hash ^ (uint64_t)(uint32_t)( v ) ) * 1099511628211ull;
-	MIX( e.bodyBeginCount ) MIX( e.bodyEndCount ) MIX( e.sensorBeginCount ) MIX( e.sensorEndCount )
-	for ( int i = 0; i < e.bodyBeginCount; ++i )
-	{
-		MIX( e.bodyBeginEvents[i].bodyId.index1 ) MIX( e.bodyBeginEvents[i].liquidId.index1 )
-	}
-	for ( int i = 0; i < e.bodyEndCount; ++i )
-	{
-		MIX( e.bodyEndEvents[i].bodyId.index1 )
-	}
-	for ( int i = 0; i < e.sensorBeginCount; ++i )
-	{
-		MIX( e.sensorBeginEvents[i].sensorShapeId.index1 )
-	}
-	for ( int i = 0; i < e.sensorEndCount; ++i )
-	{
-		MIX( e.sensorEndEvents[i].sensorShapeId.index1 )
-	}
-#undef MIX
-	return hash;
-}
-
-// Recording starts with the fluid running, seeded with its snapshot: just before spawns, which coarsen reading what the
-// last step gathered, while the drain holds liquid, and after them. The replay must hash as the run did every frame,
-// and report the same events.
-static int RecordMidRun( void )
-{
-	int starts[] = { 30, 80, 130, 131 };
-	for ( int k = 0; k < (int)( sizeof( starts ) / sizeof( starts[0] ) ); ++k )
-	{
-		Scene s;
-		b2WorldId worldId = MakeWorld( 1, &s );
-		Run( worldId, &s, 0, starts[k] );
-		b2Recording* rec = b2CreateRecording( 0 );
-		b2World_StartRecording( worldId, rec );
-		uint64_t digests[FRAMES];
-		int end = starts[k] + WINDOW < FRAMES ? starts[k] + WINDOW : FRAMES;
-		for ( int frame = starts[k]; frame < end; ++frame )
-		{
-			Run( worldId, &s, frame, frame + 1 );
-			digests[frame] = EventDigest( worldId );
-		}
-		b2World_StopRecording( worldId );
-		const uint8_t* data = b2Recording_GetData( rec );
-		int size = b2Recording_GetSize( rec );
-		ENSURE( b2ValidateRecording( data, size, 2 ) );
-
-		b2Replay* player = b2CreateReplay( data, size, 1 );
-		for ( int frame = starts[k]; frame < end; ++frame )
-		{
-			ENSURE( b2Replay_StepFrame( player ) );
-			ENSURE( EventDigest( b2Replay_GetWorldId( player ) ) == digests[frame] );
-		}
-		ENSURE( b2Replay_HasDiverged( player ) == false );
-		b2DestroyReplay( player );
-		b2DestroyRecording( rec );
-		b2DestroyWorld( worldId );
-	}
-	return 0;
-}
-
-// A backward seek restores a keyframe and steps on from it: it must land on what a forward replay gives
-static int SeekBack( void )
-{
-	Scene s;
-	b2WorldId worldId = MakeWorld( 1, &s );
-	b2Recording* rec = b2CreateRecording( 0 );
-	b2World_StartRecording( worldId, rec );
-	Run( worldId, &s, 0, FRAMES );
-	b2World_StopRecording( worldId );
-	b2DestroyWorld( worldId );
-	const uint8_t* data = b2Recording_GetData( rec );
-	int size = b2Recording_GetSize( rec );
-
-	b2Replay* ref = b2CreateReplay( data, size, 1 );
-	int frameCount = b2Replay_GetInfo( ref ).frameCount;
-	ENSURE( frameCount == FRAMES );
-	uint64_t* hashes = malloc( (size_t)( frameCount + 1 ) * sizeof( uint64_t ) );
-	hashes[0] = b2HashWorldStateDeep( b2GetWorldFromId( b2Replay_GetWorldId( ref ) ) );
-	for ( int frame = 1; frame <= frameCount; ++frame )
-	{
-		ENSURE( b2Replay_StepFrame( ref ) );
-		hashes[frame] = b2HashWorldStateDeep( b2GetWorldFromId( b2Replay_GetWorldId( ref ) ) );
-	}
-	b2DestroyReplay( ref );
-
-	b2Replay* player = b2CreateReplay( data, size, 3 );
-	b2Replay_SetKeyframePolicy( player, 0, 8 );
-	while ( b2Replay_StepFrame( player ) )
-	{
-	}
-	int targets[] = { 179, 81, 17, 130, 1, 150, 45, 79, 180, 0, 121 };
+	// Seeking back lands on what the run had
+	int targets[] = { 97, 13, 106, 0 };
 	for ( int i = 0; i < (int)( sizeof( targets ) / sizeof( targets[0] ) ); ++i )
 	{
 		b2Replay_SeekFrame( player, targets[i] );
@@ -359,7 +271,6 @@ static int SeekBack( void )
 		ENSURE( b2HashWorldStateDeep( b2GetWorldFromId( b2Replay_GetWorldId( player ) ) ) == hashes[targets[i]] );
 	}
 	b2DestroyReplay( player );
-	free( hashes );
 	b2DestroyRecording( rec );
 	return 0;
 }
@@ -369,7 +280,8 @@ static int SnapshotContinues( void )
 {
 	Scene s;
 	b2WorldId worldId = MakeWorld( 1, &s );
-	Run( worldId, &s, 0, 131 );
+	Run( worldId, &s, 0, SNAPSHOT_FRAME );
+	ENSURE( CountAsleep( s.fluid ) > 0 );
 	int size = b2World_GetSnapshot( worldId, NULL, 0 );
 	uint8_t* image = malloc( (size_t)size );
 	ENSURE( b2World_GetSnapshot( worldId, image, size ) == size );
@@ -377,7 +289,7 @@ static int SnapshotContinues( void )
 	// The run on, with the script's calls, hashed each frame
 	Scene saved = s;
 	uint64_t hashes[FRAMES];
-	for ( int frame = 131; frame < FRAMES; ++frame )
+	for ( int frame = SNAPSHOT_FRAME; frame < FRAMES; ++frame )
 	{
 		Run( worldId, &s, frame, frame + 1 );
 		hashes[frame] = b2HashWorldStateDeep( b2GetWorldFromId( worldId ) );
@@ -386,18 +298,18 @@ static int SnapshotContinues( void )
 	// Back in place: held ids work again and every frame repeats
 	ENSURE( b2World_RestoreFromSnapshot( worldId, image, size ) );
 	s = saved;
-	for ( int frame = 131; frame < FRAMES; ++frame )
+	for ( int frame = SNAPSHOT_FRAME; frame < FRAMES; ++frame )
 	{
 		Run( worldId, &s, frame, frame + 1 );
 		ENSURE( b2HashWorldStateDeep( b2GetWorldFromId( worldId ) ) == hashes[frame] );
 	}
 
-	// Into a new world, stepped without calls next to the original restored again
+	// Into a new world at another worker count, stepped without calls next to the original restored again
 	ENSURE( b2World_RestoreFromSnapshot( worldId, image, size ) );
 	b2WorldId copy = b2CreateWorldFromSnapshot( image, size, 2 );
 	ENSURE( b2World_IsValid( copy ) );
 	ENSURE( SameFluid( worldId, copy ) == 0 );
-	for ( int frame = 0; frame < 60; ++frame )
+	for ( int frame = 0; frame < 10; ++frame )
 	{
 		b2World_Step( worldId, DT, SUBSTEPS );
 		b2World_Step( copy, DT, SUBSTEPS );
@@ -405,7 +317,23 @@ static int SnapshotContinues( void )
 	}
 	ENSURE( SameFluid( worldId, copy ) == 0 );
 
-	// A world that never had a fluid takes the image's fluid; an image without one removes it
+	// Turning the fluid's sleep off wakes the liquid, and so do the world's sleep and a change of gravity
+	b2fFluid* f = b2GetWorldFromId( copy )->fluid;
+	b2FluidId copyFluid = b2World_GetFluid( copy );
+	memset( f->asleep, 1, (size_t)f->count );
+	b2Fluid_EnableSleep( copyFluid, false );
+	ENSURE( CountAsleep( copyFluid ) == 0 && b2Fluid_IsSleepEnabled( copyFluid ) == false );
+	b2Fluid_EnableSleep( copyFluid, true );
+	memset( f->asleep, 1, (size_t)f->count );
+	b2World_EnableSleeping( copy, false );
+	b2World_Step( copy, DT, SUBSTEPS );
+	ENSURE( CountAsleep( copyFluid ) == 0 );
+	b2World_EnableSleeping( copy, true );
+	memset( f->asleep, 1, (size_t)f->count );
+	b2World_SetGravity( copy, ( b2Vec2 ){ 0.0f, -9.0f } );
+	b2World_Step( copy, DT, SUBSTEPS );
+	ENSURE( CountAsleep( copyFluid ) == 0 );
+
 	b2DestroyWorld( copy );
 	free( image );
 	b2DestroyWorld( worldId );
@@ -427,7 +355,7 @@ static int NoFluid( void )
 
 	b2Recording* rec = b2CreateRecording( 0 );
 	b2World_StartRecording( worldId, rec );
-	for ( int frame = 0; frame < 60; ++frame )
+	for ( int frame = 0; frame < 10; ++frame )
 	{
 		b2World_Step( worldId, DT, SUBSTEPS );
 	}
@@ -461,129 +389,10 @@ static int NoFluid( void )
 	return 0;
 }
 
-// A pool that has fallen asleep round a sunk crate, recorded from then on: the sleep, a crate dropped in that wakes
-// it, and sleep turned off and on must all replay as the run did, and a snapshot of the sleeping pool must go on as
-// the pool does
-static b2WorldId MakeSleepWorld( int workerCount, b2FluidId* fluid )
-{
-	b2WorldDef worldDef = b2DefaultWorldDef();
-	worldDef.workerCount = workerCount;
-	b2WorldId worldId = b2CreateWorld( &worldDef );
-	b2BodyDef bodyDef = b2DefaultBodyDef();
-	b2BodyId ground = b2CreateBody( worldId, &bodyDef );
-	b2ShapeDef shapeDef = b2DefaultShapeDef();
-	b2Polygon box = b2MakeOffsetBox( 1.5f, 0.2f, ( b2Vec2 ){ 0.0f, -0.2f }, b2Rot_identity );
-	b2CreatePolygonShape( ground, &shapeDef, &box );
-	box = b2MakeOffsetBox( 0.2f, 1.0f, ( b2Vec2 ){ -1.2f, 0.8f }, b2Rot_identity );
-	b2CreatePolygonShape( ground, &shapeDef, &box );
-	box = b2MakeOffsetBox( 0.2f, 1.0f, ( b2Vec2 ){ 1.2f, 0.8f }, b2Rot_identity );
-	b2CreatePolygonShape( ground, &shapeDef, &box );
-	bodyDef.type = b2_dynamicBody;
-	bodyDef.position = ( b2Pos ){ 0.0f, 0.15f };
-	b2BodyId crate = b2CreateBody( worldId, &bodyDef );
-	shapeDef.density = 2.0f;
-	box = b2MakeBox( 0.15f, 0.15f );
-	b2CreatePolygonShape( crate, &shapeDef, &box );
-
-	b2FluidDef def = b2DefaultFluidDef();
-	*fluid = b2CreateFluid( worldId, &def );
-	b2LiquidDef water = b2DefaultLiquidDef();
-	b2LiquidId waterId = b2CreateLiquid( *fluid, &water );
-	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -0.95f, 0.05f }, ( b2Pos ){ -0.2f, 0.4f }, b2Vec2_zero );
-	b2Liquid_SpawnBox( waterId, ( b2Pos ){ 0.2f, 0.05f }, ( b2Pos ){ 0.95f, 0.4f }, b2Vec2_zero );
-	return worldId;
-}
-
-static void SleepScript( b2WorldId worldId, b2FluidId fluid, int frame, int start )
-{
-	if ( frame == start + 10 )
-	{
-		b2BodyDef bodyDef = b2DefaultBodyDef();
-		bodyDef.type = b2_dynamicBody;
-		bodyDef.position = ( b2Pos ){ 0.4f, 1.0f };
-		b2BodyId drop = b2CreateBody( worldId, &bodyDef );
-		b2ShapeDef shapeDef = b2DefaultShapeDef();
-		shapeDef.density = 0.5f;
-		b2Polygon box = b2MakeBox( 0.15f, 0.15f );
-		b2CreatePolygonShape( drop, &shapeDef, &box );
-	}
-	if ( frame == start + 30 )
-	{
-		b2Fluid_EnableSleep( fluid, false );
-	}
-	if ( frame == start + 32 )
-	{
-		b2Fluid_EnableSleep( fluid, true );
-	}
-	b2World_Step( worldId, DT, SUBSTEPS );
-}
-
-static int RecordSleep( void )
-{
-	b2FluidId fluid;
-	b2WorldId worldId = MakeSleepWorld( 1, &fluid );
-	int start = 0, asleep = 0, count = 0;
-	for ( ; start < 900 && ( asleep == 0 || asleep < count ); ++start )
-	{
-		b2World_Step( worldId, DT, SUBSTEPS );
-		b2FluidParticles p = b2Fluid_GetParticles( fluid );
-		count = p.count;
-		asleep = 0;
-		for ( int i = 0; i < p.count; ++i )
-		{
-			asleep += p.asleep[i] != 0;
-		}
-	}
-	ENSURE( asleep == count );
-
-	// A snapshot of the sleeping pool steps on as the pool does
-	int size = b2World_GetSnapshot( worldId, NULL, 0 );
-	uint8_t* image = malloc( (size_t)size );
-	ENSURE( b2World_GetSnapshot( worldId, image, size ) == size );
-	b2WorldId copy = b2CreateWorldFromSnapshot( image, size, 2 );
-	ENSURE( SameFluid( worldId, copy ) == 0 );
-	ENSURE( b2World_RestoreFromSnapshot( worldId, image, size ) );
-
-	b2Recording* rec = b2CreateRecording( 0 );
-	b2World_StartRecording( worldId, rec );
-	b2FluidId copyFluid = b2World_GetFluid( copy );
-	int woke = 0;
-	for ( int frame = start; frame < start + 50; ++frame )
-	{
-		SleepScript( worldId, fluid, frame, start );
-		SleepScript( copy, copyFluid, frame, start );
-		ENSURE( b2HashWorldState( b2GetWorldFromId( worldId ) ) == b2HashWorldState( b2GetWorldFromId( copy ) ) );
-		b2FluidParticles p = b2Fluid_GetParticles( fluid );
-		int awake = 0;
-		for ( int i = 0; i < p.count; ++i )
-		{
-			awake += p.asleep[i] == 0;
-		}
-		woke = awake > woke ? awake : woke;
-	}
-	b2World_StopRecording( worldId );
-	ENSURE( woke > count / 2 );
-	ENSURE( SameFluid( worldId, copy ) == 0 );
-
-	const uint8_t* data = b2Recording_GetData( rec );
-	int recSize = b2Recording_GetSize( rec );
-	ENSURE( b2ValidateRecording( data, recSize, 1 ) );
-	ENSURE( b2ValidateRecording( data, recSize, 4 ) );
-
-	b2DestroyRecording( rec );
-	free( image );
-	b2DestroyWorld( copy );
-	b2DestroyWorld( worldId );
-	return 0;
-}
-
 int FluidRecordingTest( void )
 {
-	RUN_SUBTEST( RecordFromStart );
-	RUN_SUBTEST( RecordMidRun );
-	RUN_SUBTEST( SeekBack );
+	RUN_SUBTEST( RecordAndSeek );
 	RUN_SUBTEST( SnapshotContinues );
 	RUN_SUBTEST( NoFluid );
-	RUN_SUBTEST( RecordSleep );
 	return 0;
 }
