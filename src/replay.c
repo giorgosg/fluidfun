@@ -688,6 +688,7 @@ b2LiquidDef b2RecR_LIQUIDDEF( b2RecReader* rdr )
 	def.springStiffness = b2RecR_F32( rdr );
 	def.plasticity = b2RecR_F32( rdr );
 	def.yieldRatio = b2RecR_F32( rdr );
+	def.formSpringsAfterSpawn = b2RecR_BOOL( rdr );
 	def.categoryBits = b2RecR_U64( rdr );
 	def.maskBits = b2RecR_U64( rdr );
 	b2LiquidTuning* t = &def.tuning;

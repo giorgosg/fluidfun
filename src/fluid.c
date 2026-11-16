@@ -24,6 +24,7 @@ b2LiquidDef b2DefaultLiquidDef( void )
 	def.springStiffness = 0.0f;
 	def.plasticity = 0.5f;
 	def.yieldRatio = 0.1f;
+	def.formSpringsAfterSpawn = true;
 	def.tuning.adaptiveRatio = 10.0f;
 	def.tuning.adaptiveSpeed = 0.0f;
 	def.tuning.adaptiveDepthLimit = false;
@@ -77,11 +78,19 @@ b2LiquidDef b2MakeJellyDef( void )
 	b2LiquidDef def = b2DefaultLiquidDef();
 	def.springStiffness = 10000.0f;
 	def.plasticity = 0.0f;
+	// Springs only from the spawn, so it pulls back to the shape it spawned with: forming new springs while a crate
+	// squeezed it left a dent 0.17 m deep (findings section 58)
+	def.formSpringsAfterSpawn = false;
+	// Uniform sizes: a particle that splits starts with no springs and forms them where it is, so splits while it is
+	// squeezed would record the squeeze again
+	def.tuning.adaptiveRatio = 1.0f;
 	return def;
 }
 
 b2LiquidDef b2MakeDoughDef( void )
 {
+	// Forms springs after spawn, as the default does: without, springs that stretch to the interaction radius go for good, and in 30 s
+	// half the dough's were gone and it spread like a liquid (findings section 58)
 	b2LiquidDef def = b2DefaultLiquidDef();
 	def.springStiffness = 10000.0f;
 	def.plasticity = 1.0f;

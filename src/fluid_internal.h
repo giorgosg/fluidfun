@@ -170,6 +170,9 @@ typedef struct b2fSprings
 	int id[B2F_SPRINGS_PER_PARTICLE];
 	float rest[B2F_SPRINGS_PER_PARTICLE];
 	int count;
+	// Set at the end of the particle's first substep. In a liquid without b2LiquidDef::formSpringsAfterSpawn, only
+	// particles not yet formed make springs, to any neighbour, and formed ones take springs only from those.
+	bool formed;
 } b2fSprings;
 
 // Where a particle id is this substep, for finding spring partners
@@ -596,6 +599,7 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 	if ( f->springs != NULL )
 	{
 		f->springs[i].count = 0;
+		f->springs[i].formed = false;
 	}
 }
 

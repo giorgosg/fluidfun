@@ -385,6 +385,7 @@ void LabSceneSettings( LabSceneType type, LabDef* def )
 			// the springs best; the dough copies it.
 			def->liquid.springStiffness = 10000.0f;
 			def->liquid.plasticity = 0.0f;
+			def->liquid.formSpringsAfterSpawn = false;
 			def->liquid.tuning.adaptiveRatio = 1.0f;
 			// Friction 0.7 for both, against water's 0.1, at which they slid across the floor like soap: two lumps of
 			// dough a crate split off glided apart at 3.5 cm/s for over a minute, until a wall or the jelly stopped
@@ -1089,6 +1090,7 @@ static b2FluidId CreateJelly( b2WorldId worldId, LabScene* scene, const LabDef* 
 	dough.springStiffness = 10000.0f;
 	dough.plasticity = 1.0f;
 	dough.yieldRatio = 0.1f;
+	dough.formSpringsAfterSpawn = true;
 	b2LiquidId doughLiquid = b2CreateLiquid( fluid, &dough );
 	scene->liquids[1] = doughLiquid;
 
