@@ -741,9 +741,10 @@ void b2fGatherShapes( b2fFluid* f )
 }
 
 // A sleeping body cannot feel the liquid, so it would never lift off. The particles still find it, as a wall, and a
-// body the liquid reached during the step wakes now, after it, with the bodies it rests on or against. It held still
-// for that one step. Awake bodies with liquid in reach did not fall asleep (RecordReactions), so these are bodies
-// that slept before the liquid came; one the liquid never reaches may sleep, however near the liquid it is.
+// body that liquid not yet still reached during the step wakes now, after it, with the bodies it rests on or against.
+// It held still for that one step. Awake bodies with such liquid in reach did not fall asleep (RecordReactions), so
+// these are bodies that slept before the liquid came, or slept in still liquid that has since been stirred; one the
+// liquid never reaches may sleep, however near the liquid it is, and so may one in still liquid.
 void b2fWakeReached( b2fFluid* f )
 {
 	for ( int i = 0; i < f->bodyCount; ++i )
@@ -876,6 +877,8 @@ static void ContactTask( int start, int end, int worker, void* context )
 			b2Pos point;
 		} found[2 * B2F_CONTACTS_PER_PARTICLE];
 		int foundCount = 0;
+		// Near an awake body, a particle may not sleep (MarkHeld)
+		unsigned char wake = f->holdMarked && f->cellHold[f->cell[i]] == f->holdSerial ? B2F_WAKE_HELD : 0;
 		int bin = BinOf( bins, x, y );
 		for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd && foundCount < 2 * B2F_CONTACTS_PER_PARTICLE; ++k )
 		{
@@ -952,6 +955,25 @@ static void ContactTask( int start, int end, int worker, void* context )
 		f->contactCount[i] = count;
 		f->wallDensity[i] = density;
 		f->wallNearDensity[i] = nearDensity;
+
+		// A particle touching an awake body, or near one, may not sleep, and one asleep wakes, since the body can
+		// move into it. One asleep against a shape is in the shell from now on, so it wakes if the shape goes
+		// (fluid_sleep.c).
+		for ( int c = 0; c < count; ++c )
+		{
+			wake = f->bodies[contacts[c].bodyIndex].awake ? B2F_WAKE_HELD : wake;
+		}
+		f->wake[i] = wake;
+		if ( f->asleep[i] != 0 && wake != 0 )
+		{
+			// Its sleep time runs on, and calm, which held its density, starts from rest
+			f->asleep[i] = 0;
+			f->calm[i] = b2Vec2_zero;
+		}
+		else if ( f->asleep[i] != 0 )
+		{
+			f->asleep[i] |= count > 0 ? B2F_ASLEEP_SHAPE : 0u;
+		}
 	}
 }
 
@@ -1001,6 +1023,13 @@ static void CollideTask( int start, int end, int worker, void* context )
 		int last = (int)( (int64_t)f->count * ( chunk + 1 ) / B2F_CHUNK_COUNT );
 		for ( int i = first; i < last; ++i )
 		{
+			// Asleep, a particle touches no awake body and holds still against the rest
+			if ( f->asleep[i] != 0 )
+			{
+				continue;
+			}
+			bool unsettled = f->sleepTime[i] < B2_TIME_TO_SLEEP;
+
 			// The particle's mass goes with its area. What a patch needs of the liquid around its body is the density
 			// its buoyancy goes by, and how high the liquid stands on the body, against gravity, which is also the share
 			// under that the caller reads.
@@ -1024,6 +1053,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 					reaction->x += impulseX;
 					reaction->y += impulseY;
 					reaction->angular += rx * impulseY - ry * impulseX;
+					reaction->unsettled += unsettled ? 1.0f : 0.0f;
 					float share = ContactShare( contacts, f->contactCount[i], c );
 					if ( share > 0.0f )
 					{
@@ -1059,9 +1089,10 @@ static void CollideTask( int start, int end, int worker, void* context )
 						reaction->inertia += lump * ( rx * rx + ry * ry );
 					}
 				}
-				else if ( body->adheres == false )
+				else if ( body->adheres == false && unsettled )
 				{
-					// A sleeping body feels nothing, but the liquid within its reach wakes it next step
+					// A sleeping body feels nothing, but liquid within its reach that has not been still for
+					// B2_TIME_TO_SLEEP wakes it after the step. Still liquid, awake or asleep, lets it sleep on.
 					reactions[contacts[c].bodyIndex].wetMass += m;
 				}
 			}
@@ -1351,7 +1382,8 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 	{
 		b2fBody* body = f->bodies + i;
 		const b2fReaction* total = totals + i;
-		body->reached = body->reached || total->wetMass > 0.0f;
+		// Liquid that has not been still: a sleeping body gets wetMass only from such liquid
+		body->reached = body->reached || ( body->awake ? total->unsettled > 0.0f : total->wetMass > 0.0f );
 		if ( body->awake == false )
 		{
 			continue;
@@ -1365,12 +1397,15 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 			continue;
 		}
 
-		// Liquid in reach keeps a body moved by forces from sleeping. Box2D adds the step's time to sleepTime after
-		// the substeps, and puts an island to sleep only once each of its bodies has been slow for B2_TIME_TO_SLEEP,
-		// so the body and its island stay awake until that long after the liquid last reached it. A body floating
-		// in still liquid moves slower than the sleep threshold, but the liquid holds it up only while it is awake;
-		// asleep it is a wall that feels nothing. Without this it slept for a step and was woken about once a second.
-		if ( body->adheres == false )
+		// Liquid in reach that has not been still for B2_TIME_TO_SLEEP keeps a body moved by forces from sleeping.
+		// Box2D adds the step's time to sleepTime after the substeps, and puts an island to sleep only once each of
+		// its bodies has been slow for B2_TIME_TO_SLEEP, so the body and its island stay awake until that long after
+		// such liquid last reached it. A body floating in moving liquid can move slower than the sleep threshold, but
+		// the liquid holds it up only while it is awake; asleep it is a wall that feels nothing. Without this it
+		// slept for a step and was woken about once a second. Once the liquid round it is still, Box2D's own
+		// threshold and timer decide, the liquid falls asleep round the sleeping body (fluid_sleep.c), and the two
+		// sleep together until moving liquid reaches the body or the body wakes, which wakes the liquid it touches.
+		if ( body->adheres == false && total->unsettled > 0.0f )
 		{
 			b2Array_Get( f->world->bodies, body->id.index1 - 1 )->sleepTime = 0.0f;
 		}
@@ -1445,6 +1480,10 @@ static void ShareTask( int start, int end, int worker, void* context )
 	float h = f->h;
 	for ( int i = start; i < end; ++i )
 	{
+		if ( f->asleep[i] != 0 )
+		{
+			continue;
+		}
 		float added = f->liquids[f->liquid[i]].def.tuning.addedMass;
 
 		const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
@@ -1560,12 +1599,65 @@ static void SetShapeBounds( b2fFluid* f )
 	}
 }
 
+// Marks the grid cells near each awake body that forces or a motion move: those within its shapes' bounds, grown by
+// half the larger side of those bounds. Liquid there stays awake while the body is. Holding only the liquid touching a
+// body left a crate floating in a gap of awake liquid a few particles wide between it and sleeping liquid, as stiff
+// as a narrow tank, where it rocked without end, as it does in a real tank narrower than about twice its width.
+static void MarkHeld( b2fFluid* f )
+{
+	f->holdMarked = false;
+	if ( f->sleepOn == false )
+	{
+		return;
+	}
+
+	int width = f->gridWidth, height = f->gridHeight, cells = width * height;
+	float inverse = 1.0f / f->gridCell;
+	for ( int i = 0; i < f->shapeCount; ++i )
+	{
+		const b2fShape* s = f->shapes + i;
+		if ( f->bodies[s->bodyIndex].awake == false )
+		{
+			continue;
+		}
+		if ( f->holdMarked == false )
+		{
+			if ( cells > f->cellHoldCapacity )
+			{
+				f->cellHold = b2fGrowArray( f->cellHold, f->cellHoldCapacity, 2 * cells, sizeof( int ) );
+				memset( f->cellHold + f->cellHoldCapacity, 0, (size_t)( 2 * cells - f->cellHoldCapacity ) * sizeof( int ) );
+				f->cellHoldCapacity = 2 * cells;
+			}
+			f->holdSerial += 1;
+			f->holdMarked = true;
+		}
+
+		float grow = 0.5f * (float)( s->maxX - s->minX > s->maxY - s->minY ? s->maxX - s->minX : s->maxY - s->minY );
+		float x0 = (float)( s->minX - f->gridX ) * inverse - grow * inverse, x1 = (float)( s->maxX - f->gridX ) * inverse + grow * inverse;
+		float y0 = (float)( s->minY - f->gridY ) * inverse - grow * inverse, y1 = (float)( s->maxY - f->gridY ) * inverse + grow * inverse;
+		if ( x1 < 0.0f || y1 < 0.0f || x0 >= (float)width || y0 >= (float)height )
+		{
+			continue;
+		}
+		int cx0 = x0 > 0.0f ? (int)x0 : 0, cy0 = y0 > 0.0f ? (int)y0 : 0;
+		int cx1 = x1 < (float)( width - 1 ) ? (int)x1 : width - 1, cy1 = y1 < (float)( height - 1 ) ? (int)y1 : height - 1;
+		for ( int y = cy0; y <= cy1; ++y )
+		{
+			for ( int x = cx0; x <= cx1; ++x )
+			{
+				f->cellHold[y * width + x] = f->holdSerial;
+			}
+		}
+	}
+}
+
 void b2fFindContacts( b2fFluid* f, b2SubStepContext* context )
 {
 	int n = f->count;
 	if ( f->shapeCount > 0 )
 	{
 		BinShapes( f );
+		MarkHeld( f );
 		b2SubStep_ParallelFor( context, ContactTask, n, 512, f );
 	}
 	else
@@ -1573,6 +1665,7 @@ void b2fFindContacts( b2fFluid* f, b2SubStepContext* context )
 		memset( f->contactCount, 0, (size_t)n * sizeof( int ) );
 		memset( f->wallDensity, 0, (size_t)n * sizeof( float ) );
 		memset( f->wallNearDensity, 0, (size_t)n * sizeof( float ) );
+		memset( f->wake, 0, (size_t)n );
 	}
 }
 
@@ -1616,6 +1709,7 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 			t->wetNormalX += r->wetNormalX;
 			t->wetNormalY += r->wetNormalY;
 			t->wetTop = r->wetTop > t->wetTop ? r->wetTop : t->wetTop;
+			t->unsettled += r->unsettled;
 		}
 	}
 

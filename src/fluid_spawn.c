@@ -22,6 +22,7 @@ static bool AddParticle( b2fFluid* f, int liquid, b2fCoord x, b2fCoord y, float 
 		return false;
 	}
 	int i = f->count++;
+	f->gridStale = true;
 	b2fClearParticle( f, i );
 	f->pos[i].x = x;
 	f->pos[i].y = y;
@@ -96,6 +97,13 @@ static bool InsideSpawnShape( const b2fSpawnShape* s, b2Vec2 p )
 	}                                                                                                                          \
 	while ( 0 )
 
+// New liquid wakes what is asleep within the coarsest reach of where it goes; the new particles themselves start awake
+static void WakeAround( b2fFluid* f, b2Pos center, float halfWidth, float halfHeight )
+{
+	float w = halfWidth + 2.0f * f->maxRadius, h = halfHeight + 2.0f * f->maxRadius;
+	b2fWakeBox( f, center.x - w, center.y - h, center.x + w, center.y + h );
+}
+
 static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 velocity )
 {
 	b2fFluid* f;
@@ -122,10 +130,15 @@ static int SpawnLattice( b2LiquidId liquidId, const b2fSpawnShape* s, b2Vec2 vel
 			b2Pos world = b2OffsetPos( s->center, p );
 			if ( AddParticle( f, liquid, world.x, world.y, f->def.particleSpacing, velocity ) == false )
 			{
+				WakeAround( f, s->center, s->halfWidth, s->halfHeight );
 				return added;
 			}
 			added += 1;
 		}
+	}
+	if ( added > 0 )
+	{
+		WakeAround( f, s->center, s->halfWidth, s->halfHeight );
 	}
 	return added;
 }
@@ -388,6 +401,8 @@ void b2fStepEmitters( b2fFluid* f, float timeStep )
 			b2Vec2 ahead = b2MulSV( emitter->travel / speed, v );
 			float shift = emitter->rows & 1 ? 0.75f : 0.25f;
 			emitter->rows += 1;
+			b2Pos middle = b2OffsetPos( point1, b2MulAdd( ahead, 0.5f, mouth ) );
+			WakeAround( f, middle, 0.5f * b2AbsFloat( mouth.x ), 0.5f * b2AbsFloat( mouth.y ) );
 			for ( int k = 0; k < count; ++k )
 			{
 				b2Pos p = b2OffsetPos( point1, b2MulAdd( ahead, ( (float)k + shift ) * step, mouth ) );

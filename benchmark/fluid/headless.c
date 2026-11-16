@@ -2,14 +2,16 @@
 // Runs the shared scene with no window. Prints timing and a hash of the final state, so that
 // runs can be compared across worker counts. Usage: fluid_headless [frames] [liquid scale]
 //
-// The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_CRATE_HALF, LAB_SUBSTEPS,
-// LAB_FLOOR (tiles of the tank's floor, below 0 a chain) with LAB_FLOOR_MIXED and LAB_FLOOR_SEGMENTS, LAB_LIQUID=width,height,
-// LAB_ONE (6 workers only), LAB_SECOND_LIQUID, LAB_CHECK (fail on differing hashes or leaks), and fluid settings, see
-// ApplySettings, LAB_CAPACITY among them. Probes print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE,
-// LAB_LIQUIDS, LAB_CALM, LAB_SINK, LAB_SLEEPS, LAB_STATE, LAB_HOLES and LAB_SEAMS (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP, LAB_FRAMES with
-// LAB_FRAME_EVERY, LAB_START (every so many frames), and LAB_DUMP=frame,path (every particle after that frame). LAB_POOL_SHAPE
-// spawns the Deep Pool's liquid as a circle (2) or a hexagon (3) instead of a box. LAB_HZ sets the step rate, 60 by default; frames count steps, and
-// the probes that print seconds assume 60 except LAB_START. LAB_WORLD_GRAVITY=x,y sets the world's gravity.
+// The environment picks the run: LAB_SCENE (number from scene.h), LAB_CONTROL, LAB_CRATES, LAB_CRATE_HALF,
+// LAB_SUBSTEPS, LAB_FLOOR (tiles of the tank's floor, below 0 a chain) with LAB_FLOOR_MIXED and LAB_FLOOR_SEGMENTS,
+// LAB_LIQUID=width,height, LAB_ONE (6 workers only), LAB_WORKERS (that many only), LAB_SECOND_LIQUID, LAB_CHECK (fail
+// on differing hashes or leaks), and fluid settings, see ApplySettings, LAB_CAPACITY and LAB_SLEEP among them. Probes
+// print extra lines: LAB_LEVEL, LAB_CHANGES, LAB_BODIES, LAB_EVENTS, LAB_TRACE, LAB_LIQUIDS, LAB_CALM, LAB_ASLEEP,
+// LAB_SINK, LAB_SLEEPS, LAB_STATE, LAB_HOLES and LAB_SEAMS (every so many frames), LAB_SQUEEZE, LAB_SQUEEZE_DUMP,
+// LAB_FRAMES with LAB_FRAME_EVERY, LAB_START (every so many frames), and LAB_DUMP=frame,path (every particle after
+// that frame). LAB_POOL_SHAPE spawns the Deep Pool's liquid as a circle (2) or a hexagon (3) instead of a box. LAB_HZ
+// sets the step rate, 60 by default; frames count steps, and the probes that print seconds assume 60 except LAB_START.
+// LAB_WORLD_GRAVITY=x,y sets the world's gravity.
 #include "scene.h"
 
 #include "box2d/math_functions.h"
@@ -200,6 +202,11 @@ static void ApplySettings( LabDef* def )
 	if ( getenv( "LAB_DEPTH_LIMIT" ) )
 	{
 		def->liquid.tuning.adaptiveDepthLimit = atoi( getenv( "LAB_DEPTH_LIMIT" ) ) != 0;
+	}
+	// LAB_SLEEP=0 keeps the liquid from falling asleep
+	if ( getenv( "LAB_SLEEP" ) )
+	{
+		def->fluid.enableSleep = atoi( getenv( "LAB_SLEEP" ) ) != 0;
 	}
 	// The room the fluid starts with, which it grows from as needed, to check that growing changes nothing
 	if ( getenv( "LAB_CAPACITY" ) )
@@ -477,10 +484,13 @@ int main( int argc, char** argv )
 	int failures = 0;
 
 	static const int workerCounts[] = { 1, 3, 6, 12 };
+	// LAB_WORKERS=n: one run at n workers
+	int onlyWorkers = getenv( "LAB_WORKERS" ) ? atoi( getenv( "LAB_WORKERS" ) ) : 0;
+	oneRun = oneRun || onlyWorkers > 0;
 	for ( size_t w = oneRun ? 2 : 0; w < sizeof( workerCounts ) / sizeof( workerCounts[0] ); ++w )
 	{
 		b2WorldDef worldDef = b2DefaultWorldDef();
-		worldDef.workerCount = workerCounts[w];
+		worldDef.workerCount = onlyWorkers > 0 ? onlyWorkers : workerCounts[w];
 		b2WorldId worldId = b2CreateWorld( &worldDef );
 
 		LabScene scene = LabDefaultScene( getenv( "LAB_SCENE" ) ? atoi( getenv( "LAB_SCENE" ) ) : lab_tank );
@@ -813,6 +823,29 @@ int main( int argc, char** argv )
 				snprintf( path, sizeof( path ), "%s/%04d.ppm", frameDir, i );
 				WriteFrame( path, fluid, &scene );
 			}
+			// LAB_ASLEEP=frames: every so many frames (30 for 0 or none), the share of particles asleep, the rms speed of
+			// the awake ones, and the step's time
+			int asleepEvery = getenv( "LAB_ASLEEP" ) && atoi( getenv( "LAB_ASLEEP" ) ) > 0 ? atoi( getenv( "LAB_ASLEEP" ) ) : 30;
+			if ( getenv( "LAB_ASLEEP" ) && i % asleepEvery == asleepEvery - 1 )
+			{
+				b2FluidParticles particles = b2Fluid_GetParticles( fluid );
+				int asleep = 0, awake = 0;
+				double speed2 = 0.0;
+				for ( int k = 0; k < particles.count; ++k )
+				{
+					if ( particles.asleep[k] )
+					{
+						asleep += 1;
+						continue;
+					}
+					awake += 1;
+					speed2 += (double)particles.velocitiesX[k] * particles.velocitiesX[k] + (double)particles.velocitiesY[k] * particles.velocitiesY[k];
+				}
+				printf( "ASLEEP %.1f s: %d particles, %.3f asleep, awake rms %.4f, step %.2f ms, fluid %.2f (sort %.2f density %.2f collide %.2f prepare %.2f sizes %.2f)\n",
+						(double)( i + 1 ) / 60.0, particles.count, particles.count > 0 ? (double)asleep / particles.count : 0.0, awake > 0 ? sqrt( speed2 / awake ) : 0.0,
+						(double)stepTime, (double)p.total, (double)p.sort, (double)p.density, (double)p.collide, (double)p.prepare, (double)p.sizes );
+			}
+
 			// LAB_CALM: every half second, the liquid's mean and peak speed and the mean height of its particles, to see
 			// how quickly liquid spawned at rest settles, and how far it sinks or swells while it does
 			if ( getenv( "LAB_CALM" ) && i % 30 == 0 )
@@ -1052,7 +1085,7 @@ int main( int argc, char** argv )
 
 		float f = (float)frames;
 		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f prepare %.2f sizes %.2f) top=%.2f hash=%016llx\n",
-				workerCounts[w], n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, sum.prepare / f, sum.sizes / f, top,
+				worldDef.workerCount, n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, sum.prepare / f, sum.sizes / f, top,
 				(unsigned long long)hash );
 		printf( "  leaked %d, measure %.3f ms/frame, capacity %d\n", scene.leaked, measureSum / f, b2Fluid_GetCapacity( fluid ) );
 		if ( w == ( oneRun ? 2u : 0u ) )

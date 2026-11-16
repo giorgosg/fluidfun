@@ -138,12 +138,16 @@ typedef struct b2FluidDef
 	/// and does not change how the liquid moves. The default of 4096 is about 2 MB, and a scene with more grows into
 	/// it once.
 	int capacity;
-	/// The most particles the fluid will grow to hold. Each particle of room takes 499 bytes with uniform sizes, 529
-	/// once some liquid has adaptive sizes, as the default liquid does, and 537 once one also has adaptiveSpeed;
-	/// springs add 280 to 296, and a build for large worlds 32 more. So the default of 1,000,000 is up to 0.54 GB, or
-	/// 0.83 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above this is kept as
+	/// The most particles the fluid will grow to hold. Each particle of room takes 519 bytes with uniform sizes, 549
+	/// once some liquid has adaptive sizes, as the default liquid does, and 557 once one also has adaptiveSpeed;
+	/// springs add 280 to 296, and a build for large worlds 32 more. So the default of 1,000,000 is up to 0.56 GB, or
+	/// 0.85 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above this is kept as
 	/// the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it.
 	int maxCapacity;
+	/// Let still liquid fall asleep, as bodies do: a particle slower than 3 cm/s for half a second holds still and
+	/// costs much less until something wakes it. Bodies in liquid that is asleep around them may sleep too. It also
+	/// needs the world's sleep, b2World_EnableSleeping. On by default.
+	bool enableSleep;
 
 	/// Used internally to detect a valid definition. DO NOT SET.
 	int internalValue;
@@ -212,6 +216,11 @@ B2_API void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth );
 B2_API float b2Fluid_GetAdaptiveDepth( b2FluidId fluidId );
 B2_API void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox );
 B2_API float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId );
+
+/// Whether still liquid may fall asleep, b2FluidDef::enableSleep. Turning it off wakes every particle. Particles sleep
+/// only while the world's sleep is on as well.
+B2_API void b2Fluid_EnableSleep( b2FluidId fluidId, bool flag );
+B2_API bool b2Fluid_IsSleepEnabled( b2FluidId fluidId );
 
 /// The most particles the fluid will grow to hold. It cannot go below the room the fluid already has, and a value
 /// below that keeps that room as the most.
@@ -434,6 +443,9 @@ typedef struct b2FluidParticles
 	/// emitters included. Scenes of about 5000 particles make fewer than 7000 in 10 seconds; an emitter giving 200
 	/// particles a second makes 2^31 in about 120 days.
 	const int* ids;
+	/// Nonzero for each particle that is asleep (b2FluidDef::enableSleep). An asleep particle holds still and reports
+	/// a velocity of zero; its density is the one it had when it last worked it out.
+	const unsigned char* asleep;
 	/// Kernel density of liquid at rest, which densities are compared with
 	float restDensity;
 } b2FluidParticles;

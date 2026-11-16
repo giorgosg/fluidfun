@@ -585,6 +585,15 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 				continue;
 			}
 
+			// A particle merging away goes into neighbours at least as heavy, not into a lighter one merging away
+			// too: two such with no other neighbour to take mass, among liquid at its size, otherwise passed the same
+			// mass back and forth every step, each jumping a few centimetres and back, for as long as it lasted
+			if ( cls == b2f_tooSmall && f->adaptClass[j] == b2f_tooSmall &&
+				 ( f->adaptMass[j] < f->adaptMass[i] || ( f->adaptMass[j] == f->adaptMass[i] && f->id[j] < f->id[i] ) ) )
+			{
+				continue;
+			}
+
 			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y );
 			if ( dx * dx + dy * dy < reach2 && f->adaptMass[j] + give / (float)( count + 1 ) < baseMass )
 			{
@@ -621,13 +630,20 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	}
 
 	// Particles take the sizes of their new masses, and those with none left are removed; the classes and targets go
-	// with the rest for the splits below
+	// with the rest for the splits below. Asleep particles are sized as the rest are, so liquid that has settled has
+	// none to change, and one whose size changes wakes, with what it splits into. Keeping asleep particles out of the
+	// pass instead left an awake particle beside sleeping ones with only one neighbour to trade mass with, and the two
+	// passed it back and forth every step, each moving 4 cm and back at 1.5 m/s.
 	for ( int i = 0; i < n; ++i )
 	{
 		f->marked[i] = f->adaptMass[i] <= 0.0f ? 1 : 0;
 		if ( f->marked[i] == 0 )
 		{
 			f->size[i] = fineSize * sqrtf( f->adaptMass[i] / fineArea );
+		}
+		if ( f->asleep[i] != 0 && f->adaptUsed[i] )
+		{
+			b2fWakeParticle( f, i );
 		}
 	}
 	int kept = n - b2fRemoveMarked( f );
@@ -687,10 +703,12 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		{
 			continue;
 		}
+		b2fWakeParticle( f, i );
 
 		for ( int c = 0; c < children; ++c )
 		{
 			int index = c == 0 ? i : f->count++;
+			f->gridStale = true;
 			if ( index != i )
 			{
 				b2fCopyParticle( f, index, i );
@@ -713,7 +731,8 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 bool b2fAdaptSizes( b2fFluid* f )
 {
 	// A step of no time ran no substeps, so there is no grid of this step's particles
-	if ( f->adaptive == false || f->stepSubSteps == 0 || f->stepTime <= 0.0f || f->h <= 0.0f || f->count == 0 )
+	// With every particle asleep no size can change
+	if ( f->adaptive == false || f->stepSubSteps == 0 || f->stepTime <= 0.0f || f->h <= 0.0f || f->count == 0 || f->asleepCount == f->count )
 	{
 		return false;
 	}

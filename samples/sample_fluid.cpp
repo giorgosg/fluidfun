@@ -62,8 +62,10 @@ public:
 		const float* vy = particles.velocitiesY;
 		const float* size = particles.sizes;
 		const unsigned char* liquid = particles.liquids;
+		const unsigned char* asleep = particles.asleep;
 
-		// Liquid 0 is blue, then amber and red. Speed lightens each toward white.
+		// Liquid 0 is blue, then amber and red. Speed lightens each toward white. With Show asleep, sleeping particles
+		// are drawn dark.
 		static const float tints[3][3] = { { 40.0f, 110.0f, 255.0f }, { 230.0f, 170.0f, 40.0f }, { 200.0f, 40.0f, 60.0f } };
 		for ( int i = 0; i < n; ++i )
 		{
@@ -77,6 +79,12 @@ public:
 			{
 				green = b2MinInt( 255, (int)( (float)green + 60.0f * scale ) );
 			}
+			if ( s_showAsleep && asleep[i] != 0 )
+			{
+				red = red * 2 / 5;
+				green = green * 2 / 5;
+				blue = blue * 2 / 5;
+			}
 			DrawPoint( m_context->draw, pos[i], m_pointSize * scale, b2HexColor( ( red << 16 ) | ( green << 8 ) | blue ) );
 		}
 	}
@@ -88,6 +96,18 @@ public:
 		ImGui::Text( "Fluid %.2f ms", p.total );
 		ImGui::Text( "prepare %.2f sort %.2f", p.prepare, p.sort );
 		ImGui::Text( "density %.2f collide %.2f sizes %.2f", p.density, p.collide, p.sizes );
+		b2FluidParticles particles = b2Fluid_GetParticles( m_fluid );
+		int asleep = 0;
+		for ( int i = 0; i < particles.count; ++i )
+		{
+			asleep += particles.asleep[i] != 0 ? 1 : 0;
+		}
+		ImGui::Text( "Asleep %d", asleep );
+		if ( ImGui::Checkbox( "Liquid sleeps", &m_def->fluid.enableSleep ) )
+		{
+			b2Fluid_EnableSleep( m_fluid, m_def->fluid.enableSleep );
+		}
+		ImGui::Checkbox( "Show asleep", &s_showAsleep );
 
 		bool changed = false;
 		changed |= ImGui::SliderFloat( "Stiffness", &m_def->liquid.tuning.stiffness, 0.0f, 0.2f, "%.3f" );
@@ -154,6 +174,7 @@ public:
 
 	static inline LabDef s_defs[lab_sceneCount];
 	static inline LabScene s_scenes[lab_sceneCount];
+	static inline bool s_showAsleep = false;
 
 	LabScene* m_scene;
 	LabDef* m_def;

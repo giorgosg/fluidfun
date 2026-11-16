@@ -206,6 +206,16 @@ static void UpdateBodies( b2fFluid* f )
 			continue;
 		}
 
+		// A body moved by forces that fell asleep in the liquid keeps what it last reported, in liquid or not, until
+		// it wakes: the liquid round it is still, and asleep it feels none of it
+		if ( r >= 0 && body->awake == false && body->adheres == false )
+		{
+			f->records[r].seen = true;
+			f->records[r].wet = f->records[r].state.inLiquid;
+			f->records[r].run = 0.0f;
+			continue;
+		}
+
 		r = r < 0 ? AddRecord( f, body->id ) : r;
 		b2fBodyRecord* record = f->records + r;
 		record->seen = true;
