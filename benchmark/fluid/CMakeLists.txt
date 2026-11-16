@@ -1,6 +1,7 @@
-# Liquid scenes, shared by the samples, the headless runner that tests them, and a comparison tool
+# Liquid scenes and the marble machine, shared by the samples, the headless runner that tests the scenes, and a
+# comparison tool
 
-add_library(fluid_scenes STATIC scene.c scene.h)
+add_library(fluid_scenes STATIC scene.c scene.h machine.c machine.h)
 target_include_directories(fluid_scenes PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(fluid_scenes PUBLIC box2d)
 set_target_properties(fluid_scenes PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES)

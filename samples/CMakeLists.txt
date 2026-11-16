@@ -157,6 +157,7 @@ set(BOX2D_SAMPLE_COMMON_FILES
     sample_determinism.cpp
     sample_events.cpp
     sample_fluid.cpp
+    sample_machine.cpp
     sample_geometry.cpp
     sample_issues.cpp
     sample_joints.cpp
