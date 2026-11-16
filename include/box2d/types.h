@@ -577,6 +577,23 @@ typedef struct b2Profile
 	float bullets;			   ///<
 	float sleepIslands;		   ///<
 	float sensors;			   ///<
+
+	/// fluidfun: the fluid's step, its parts below. It is part of step, and its substeps, which run inside the
+	/// solver's, are left out of solve, so solve is the bodies' solver alone. Zero without a fluid.
+	float fluid;
+	/// Before the substeps: coarsening spawns, emitters and gathering the shapes near the liquid
+	float fluidPrepare;
+	/// Sorting the particles into the grid, in every substep
+	float fluidSort;
+	/// Density relaxation, viscosity and springs
+	float fluidDensity;
+	/// Collision with shapes and the velocity update
+	float fluidCollide;
+	/// The passes that decide what sleeps and wakes: the shell of asleep liquid beside awake liquid, spring groups,
+	/// counting, and waking the bodies the liquid reached. Not the checks other passes make per particle.
+	float fluidSleep;
+	/// After the substeps, changing particle sizes
+	float fluidSizes;
 } b2Profile;
 
 /// Counters that give details of the simulation size.

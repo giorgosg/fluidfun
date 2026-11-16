@@ -878,10 +878,13 @@ b2FluidProfile b2Fluid_GetProfile( b2FluidId fluidId )
 void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 {
 	uint64_t ticks = b2GetTicks();
+	memset( &f->profile, 0, sizeof( f->profile ) );
 
 	// Spawned particles waiting for their sizes get them first, at this step's substep, and settle into place, which
 	// gathers the shapes itself, where they are now. Sleep comes first: a change of gravity wakes everything.
+	uint64_t sleepTicks = b2GetTicks();
 	b2fPrepareSleep( f, f->world->gravity );
+	f->profile.sleep += b2GetMilliseconds( sleepTicks );
 	f->worldGravity = f->world->gravity;
 	if ( f->coarsenLiquids != 0 && timeStep > 0.0f )
 	{
@@ -891,17 +894,19 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 	// What woke between steps wakes the rest of its spring group before the first substep predicts anything
 	if ( f->springy && ( f->sleepOn || f->springAsleep != 0 ) )
 	{
+		sleepTicks = b2GetTicks();
 		b2fBuildIdMap( f );
 		b2fSpringGroups( f, false );
 		b2fCountAsleep( f );
+		f->profile.sleep += b2GetMilliseconds( sleepTicks );
 	}
 	b2fGatherShapes( f );
 
 	f->stepTime = 0.0f;
 	f->stepSubSteps = 0;
-	memset( &f->profile, 0, sizeof( f->profile ) );
-	f->profile.prepare = b2GetMilliseconds( ticks );
-	f->profile.total = f->profile.prepare;
+	f->subStepTime = 0.0f;
+	f->profile.total = b2GetMilliseconds( ticks );
+	f->profile.prepare = f->profile.total - f->profile.sleep;
 }
 
 // Sizes change once the step is done, reading the grid, densities, shapes and bodies of its last substep, so nothing
@@ -911,6 +916,7 @@ void b2FinishFluid( b2fFluid* f )
 {
 	uint64_t start = b2GetTicks();
 	b2fWakeReached( f );
+	f->profile.sleep += b2GetMilliseconds( start );
 	b2fFinishStep( f );
 
 	uint64_t ticks = b2GetTicks();
@@ -920,7 +926,24 @@ void b2FinishFluid( b2fFluid* f )
 		f->profile.sizeChanges = f->sizeChanges;
 		f->profile.measure = f->measureTime;
 	}
-	f->profile.total += b2GetMilliseconds( start );
+
+	// The world's profile: the step timer stopped before this, and the substeps ran inside solve and its constraints
+	// (or in solve alone while no body is awake), so the end of the step goes into step and the substeps come out of
+	// those two, which leaves them to the bodies
+	float finish = b2GetMilliseconds( start );
+	float subSteps = f->subStepTime;
+	f->profile.total += finish;
+	b2Profile* p = &f->world->profile;
+	p->step += finish;
+	p->solve = p->solve > subSteps ? p->solve - subSteps : 0.0f;
+	p->constraints = p->constraints > subSteps ? p->constraints - subSteps : 0.0f;
+	p->fluid = f->profile.total;
+	p->fluidPrepare = f->profile.prepare;
+	p->fluidSort = f->profile.sort;
+	p->fluidDensity = f->profile.density;
+	p->fluidCollide = f->profile.collide;
+	p->fluidSleep = f->profile.sleep;
+	p->fluidSizes = f->profile.sizes;
 }
 
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFluid* f )
@@ -952,7 +975,9 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFl
 		}
 		if ( subStepIndex > 0 && awakeBody == false )
 		{
-			f->profile.total += b2GetMilliseconds( start );
+			float time = b2GetMilliseconds( start );
+			f->profile.total += time;
+			f->subStepTime += time;
 			return;
 		}
 	}
@@ -963,16 +988,21 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFl
 	}
 	f->profile.sort += b2GetMillisecondsAndReset( &ticks );
 
+	// The sleep passes inside density and collide (b2fFindShell, b2fSpringGroups) time themselves into sleep
+	float sleepBefore = f->profile.sleep;
 	b2fFindContacts( f, context );
 	if ( f->springy )
 	{
 		b2fRelaxSprings( f, context );
 	}
 	b2fRelaxDensity( f, context );
-	f->profile.density += b2GetMillisecondsAndReset( &ticks );
+	f->profile.density += b2GetMillisecondsAndReset( &ticks ) - ( f->profile.sleep - sleepBefore );
 
+	sleepBefore = f->profile.sleep;
 	b2fCollide( f, context );
 	b2fUpdateVelocities( f, context );
-	f->profile.collide += b2GetMillisecondsAndReset( &ticks );
-	f->profile.total += b2GetMilliseconds( start );
+	f->profile.collide += b2GetMillisecondsAndReset( &ticks ) - ( f->profile.sleep - sleepBefore );
+	float time = b2GetMilliseconds( start );
+	f->profile.total += time;
+	f->subStepTime += time;
 }

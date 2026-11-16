@@ -548,6 +548,8 @@ struct b2fFluid
 	int boxCapacity;
 
 	b2FluidProfile profile;
+	// This step's substeps, which ran inside the solver's, for the world's profile
+	float subStepTime;
 	float measureTime;
 
 	// What the liquid tells the caller after each step (fluid_state.c). Time and substeps the liquid ran this step.
