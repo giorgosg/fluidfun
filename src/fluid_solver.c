@@ -670,7 +670,9 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 	// groups before any spring is worked out
 	if ( f->sleepOn || f->springAsleep != 0 )
 	{
+		uint64_t ticks = b2GetTicks();
 		b2fSpringGroups( f, false );
+		f->profile.sleep += b2GetMilliseconds( ticks );
 	}
 	b2SubStep_ParallelFor( context, SpringTask, f->count, 512, f );
 	b2SubStep_ParallelFor( context, SpringApplyTask, f->count, 2048, f );
@@ -683,7 +685,9 @@ void b2fPredict( b2fFluid* f, b2SubStepContext* context )
 
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 {
+	uint64_t ticks = b2GetTicks();
 	b2fFindShell( f, context );
+	f->profile.sleep += b2GetMilliseconds( ticks );
 	b2SubStep_ParallelFor( context, DensityTask, f->count, 512, f );
 	b2SubStep_ParallelFor( context, AccumulateTask, f->count, 512, f );
 	b2SubStep_ParallelFor( context, ApplyTask, f->count, 2048, f );
@@ -692,6 +696,7 @@ void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 void b2fUpdateVelocities( b2fFluid* f, b2SubStepContext* context )
 {
 	b2SubStep_ParallelFor( context, VelocityTask, f->count, 2048, f );
+	uint64_t ticks = b2GetTicks();
 	// Groups whose particles are all ready fall asleep together, and those of which some woke in this substep wake
 	// together, before the next substep works out their springs
 	if ( f->springy && ( f->sleepOn || f->springAsleep != 0 ) )
@@ -702,4 +707,5 @@ void b2fUpdateVelocities( b2fFluid* f, b2SubStepContext* context )
 	{
 		b2fCountAsleep( f );
 	}
+	f->profile.sleep += b2GetMilliseconds( ticks );
 }

@@ -163,7 +163,8 @@ typedef struct b2FluidDef
 } b2FluidDef;
 
 /// Timing of the last step in milliseconds. Total is the fluid's whole step: prepare, the substeps, of which sort,
-/// density and collide are the parts, and the end of the step, of which sizes is the larger part.
+/// density and collide are the parts, sleep, and the end of the step, of which sizes is the larger part. The world's
+/// b2Profile has the same times, for the samples' Profile view.
 typedef struct b2FluidProfile
 {
 	/// Before the substeps: coarsening spawns, emitters and gathering the shapes near the liquid
@@ -172,6 +173,9 @@ typedef struct b2FluidProfile
 	/// Density relaxation and viscosity, which share a pass
 	float density;
 	float collide;
+	/// The sleep passes, taken out of the parts above: the shell, spring groups, counting the asleep and waking the
+	/// bodies the liquid reached. The checks other passes make for each asleep particle stay in those passes.
+	float sleep;
 	/// After the substeps, changing sizes
 	float sizes;
 	/// Part of sizes spent measuring depth, flow and distance to bodies

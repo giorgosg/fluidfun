@@ -636,6 +636,8 @@ static const ImU32 s_colorSolve = IM_COL32( 102, 204, 102, 255 );
 static const ImU32 s_colorSolveChild = IM_COL32( 150, 190, 150, 255 );
 static const ImU32 s_colorConstraintChild = IM_COL32( 110, 200, 190, 255 );
 static const ImU32 s_colorSensors = IM_COL32( 200, 120, 220, 255 );
+static const ImU32 s_colorFluid = IM_COL32( 70, 190, 235, 255 );
+static const ImU32 s_colorFluidChild = IM_COL32( 140, 195, 225, 255 );
 static const ImU32 s_colorOther = IM_COL32( 140, 140, 140, 255 );
 
 // Well apart from both row background shades so the track reads the same on every row
@@ -679,7 +681,9 @@ void Sample::DrawProfile()
 
 	const int count = static_cast<int>( m_profileWriteIndex - m_profileReadIndex );
 
-	constexpr int kRowCount = 22;
+	// The fluid's rows come last and show only once a fluid has stepped
+	constexpr int kBodyRowCount = 22;
+	constexpr int kRowCount = 29;
 	float histories[kRowCount][m_profileCapacity];
 	float totals[kRowCount] = {};
 	for ( int i = 0; i < count; ++i )
@@ -708,6 +712,13 @@ void Sample::DrawProfile()
 		histories[19][i] = p.sleepIslands;
 		histories[20][i] = p.bullets;
 		histories[21][i] = p.sensors;
+		histories[22][i] = p.fluid;
+		histories[23][i] = p.fluidPrepare;
+		histories[24][i] = p.fluidSort;
+		histories[25][i] = p.fluidDensity;
+		histories[26][i] = p.fluidCollide;
+		histories[27][i] = p.fluidSleep;
+		histories[28][i] = p.fluidSizes;
 		for ( int j = 0; j < kRowCount; ++j )
 		{
 			totals[j] += histories[j][i];
@@ -769,7 +780,12 @@ void Sample::DrawProfile()
 		{ "hit events", 1, s_colorSolveChild }, { "refit BVH", 1, s_colorSolveChild },
 		{ "sleep", 1, s_colorSolveChild },	 { "bullets", 1, s_colorSolveChild },
 		{ "sensors", 0, s_colorSensors },
+		{ "fluid", 0, s_colorFluid },		 { "prepare", 1, s_colorFluidChild },
+		{ "sort", 1, s_colorFluidChild },	 { "density", 1, s_colorFluidChild },
+		{ "collide", 1, s_colorFluidChild }, { "sleep", 1, s_colorFluidChild },
+		{ "sizes", 1, s_colorFluidChild },
 	};
+	const int rowCount = rowMax[22] > 0.0f ? kRowCount : kBodyRowCount;
 
 	float stepNow = b2MaxFloat( now[0], 0.001f );
 
@@ -786,7 +802,8 @@ void Sample::DrawProfile()
 		float collideT = now[2];
 		float solveT = now[3];
 		float sensorsT = now[21];
-		float otherT = b2MaxFloat( stepNow - pairsT - collideT - solveT - sensorsT, 0.0f );
+		float fluidT = now[22];
+		float otherT = b2MaxFloat( stepNow - pairsT - collideT - solveT - sensorsT - fluidT, 0.0f );
 
 		float availWidth = ImGui::GetContentRegionAvail().x;
 		float barHeight = 1.5f * fontSize;
@@ -798,6 +815,7 @@ void Sample::DrawProfile()
 		x = AddSegment( dl, availWidth, collideT, stepNow, s_colorCollide, x, cursor, barHeight );
 		x = AddSegment( dl, availWidth, solveT, stepNow, s_colorSolve, x, cursor, barHeight );
 		x = AddSegment( dl, availWidth, sensorsT, stepNow, s_colorSensors, x, cursor, barHeight );
+		x = AddSegment( dl, availWidth, fluidT, stepNow, s_colorFluid, x, cursor, barHeight );
 		x = AddSegment( dl, availWidth, otherT, stepNow, s_colorOther, x, cursor, barHeight );
 
 		ImGui::Dummy( ImVec2( availWidth, barHeight ) );
@@ -815,7 +833,7 @@ void Sample::DrawProfile()
 		ImGui::TableSetupColumn( "%", ImGuiTableColumnFlags_WidthFixed, PROFILE_BAR_WIDTH * fontSize );
 		ImGui::TableHeadersRow();
 
-		for ( int r = 0; r < kRowCount; ++r )
+		for ( int r = 0; r < rowCount; ++r )
 		{
 			const RowDef& d = rows[r];
 
@@ -909,6 +927,8 @@ void Sample::DrawMetrics()
 			float collideTimes[m_profileCapacity];
 			float solveTimes[m_profileCapacity];
 			float sensorsTimes[m_profileCapacity];
+			float fluidTimes[m_profileCapacity];
+			bool hasFluid = false;
 			int count = static_cast<int>( m_profileWriteIndex - m_profileReadIndex );
 			for ( int i = 0; i < count; ++i )
 			{
@@ -919,6 +939,8 @@ void Sample::DrawMetrics()
 				collideTimes[i] = m_profiles[index].collide;
 				solveTimes[i] = m_profiles[index].solve;
 				sensorsTimes[i] = m_profiles[index].sensors;
+				fluidTimes[i] = m_profiles[index].fluid;
+				hasFluid = hasFluid || fluidTimes[i] > 0.0f;
 				maxValue = b2MaxFloat( stepTimes[i], maxValue );
 			}
 
@@ -941,6 +963,11 @@ void Sample::DrawMetrics()
 				ImPlot::PlotLine( "solve", times, solveTimes, count );
 				ImPlot::SetNextLineStyle( ImGui::ColorConvertU32ToFloat4( s_colorSensors ) );
 				ImPlot::PlotLine( "sensors", times, sensorsTimes, count );
+				if ( hasFluid )
+				{
+					ImPlot::SetNextLineStyle( ImGui::ColorConvertU32ToFloat4( s_colorFluid ) );
+					ImPlot::PlotLine( "fluid", times, fluidTimes, count );
+				}
 				ImPlot::EndPlot();
 			}
 

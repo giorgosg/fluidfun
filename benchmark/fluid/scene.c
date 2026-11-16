@@ -357,6 +357,16 @@ LabScene LabDefaultScene( LabSceneType type )
 			s.controlMax = 8.0f;
 			break;
 
+		case lab_tanks:
+			s.name = "Far Tanks";
+			s.viewCenter = (b2Vec2){ 0.0f, 0.0f };
+			s.viewHalfWidth = 120.0f;
+			s.controlLabel = "Gap";
+			s.control = 40.0f;
+			s.controlMin = 1.0f;
+			s.controlMax = 2000.0f;
+			break;
+
 		case lab_tiles:
 			s.name = "Tile Floor";
 			s.viewCenter = (b2Vec2){ 0.0f, 3.5f };
@@ -1196,6 +1206,73 @@ static b2FluidId CreateSprinkler( b2WorldId worldId, LabScene* scene, const LabD
 	return fluid;
 }
 
+// An open tank of the given inside width and wall height, its floor's top at (x, y)
+static b2BodyId AddOpenTank( LabScene* scene, b2WorldId worldId, float x, float y, float width, float height )
+{
+	b2BodyId tank = AddBody( scene, worldId, b2_staticBody, x, y );
+	float w = 0.5f * width, t = 0.5f;
+	AddBox( tank, 0.0f, -t, w + 2.0f * t, t, 0.0f, 0.0f );
+	AddBox( tank, -w - t, 0.5f * height, t, 0.5f * height, 0.0f, 0.0f );
+	AddBox( tank, w + t, 0.5f * height, t, 0.5f * height, 0.0f, 0.0f );
+	return tank;
+}
+
+// Five tanks of different shapes, the control's gap apart and at different heights, none below the first, which the
+// leak check would remove liquid under, so the liquid is several pools
+// far apart with none much bigger than the rest. Four settle and fall asleep; the first is stirred by a paddle that
+// never stops, so some liquid is always awake. For the cost of asleep liquid beside awake liquid, and of a grid over
+// pools far apart (directions D8).
+static b2FluidId CreateTanks( b2WorldId worldId, LabScene* scene, const LabDef* def )
+{
+	typedef struct TankPlan
+	{
+		float width, wall, liquidWidth, liquidHeight, rise;
+	} TankPlan;
+	// Stirred, wide and shallow, a narrow column, a dam break, and one with crates
+	static const TankPlan plans[] = {
+		{ 12.0f, 9.0f, 12.0f, 4.0f, 0.0f },
+		{ 20.0f, 3.0f, 20.0f, 1.5f, 0.6f },
+		{ 5.0f, 10.0f, 5.0f, 8.0f, 0.3f },
+		{ 12.0f, 11.0f, 6.0f, 6.0f, 1.0f },
+		{ 10.0f, 5.0f, 10.0f, 3.0f, 0.8f },
+	};
+	int count = (int)( sizeof( plans ) / sizeof( plans[0] ) );
+	float gap = scene->control, total = gap * (float)( count - 1 );
+	for ( int i = 0; i < count; ++i )
+	{
+		total += plans[i].width;
+	}
+
+	b2FluidId fluid = CreateFluid( worldId, scene, def );
+	float margin = def->fluid.particleSpacing, left = -0.5f * total;
+	for ( int i = 0; i < count; ++i )
+	{
+		const TankPlan* p = plans + i;
+		float x = left + 0.5f * p->width, y = p->rise * gap;
+		AddOpenTank( scene, worldId, x, y, p->width, p->wall );
+		float w = 0.5f * p->width;
+		b2Liquid_SpawnBox( scene->liquids[0], b2ToPos( (b2Vec2){ x - w + margin, y + margin } ),
+						   b2ToPos( (b2Vec2){ x - w + p->liquidWidth - margin, y + p->liquidHeight } ), b2Vec2_zero );
+		if ( i == 0 )
+		{
+			// Two crossed blades, turning for good
+			b2BodyId paddle = AddBody( scene, worldId, b2_kinematicBody, x, y + 0.5f * p->liquidHeight );
+			AddBox( paddle, 0.0f, 0.0f, 2.5f, 0.15f, 0.0f, 0.0f );
+			AddBox( paddle, 0.0f, 0.0f, 0.15f, 1.5f, 0.0f, 0.0f );
+			b2Body_SetAngularVelocity( paddle, 1.0f );
+			scene->driven = paddle;
+		}
+		else if ( i == 4 )
+		{
+			AddCrate( scene, worldId, x - 2.5f, y + 4.0f, 0.5f, 0.4f );
+			AddCrate( scene, worldId, x, y + 4.0f, 0.5f, 0.8f );
+			AddCrate( scene, worldId, x + 2.5f, y + 4.0f, 0.5f, 2.0f );
+		}
+		left += p->width + gap;
+	}
+	return fluid;
+}
+
 b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def )
 {
 	scene->bodyCount = 0;
@@ -1270,6 +1347,9 @@ b2FluidId LabCreateScene( b2WorldId worldId, LabScene* scene, const LabDef* def 
 			break;
 		case lab_tiles:
 			fluid = CreateTiles( worldId, scene, def );
+			break;
+		case lab_tanks:
+			fluid = CreateTanks( worldId, scene, def );
 			break;
 		default:
 			fluid = CreateTank( worldId, scene, def );

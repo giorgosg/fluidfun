@@ -95,7 +95,8 @@ public:
 		b2FluidProfile p = b2Fluid_GetProfile( m_fluid );
 		ImGui::Text( "Fluid %.2f ms", p.total );
 		ImGui::Text( "prepare %.2f sort %.2f", p.prepare, p.sort );
-		ImGui::Text( "density %.2f collide %.2f sizes %.2f", p.density, p.collide, p.sizes );
+		ImGui::Text( "density %.2f collide %.2f", p.density, p.collide );
+		ImGui::Text( "sleep %.2f sizes %.2f", p.sleep, p.sizes );
 		b2FluidParticles particles = b2Fluid_GetParticles( m_fluid );
 		int asleep = 0;
 		for ( int i = 0; i < particles.count; ++i )
@@ -158,7 +159,8 @@ public:
 											 wide ? ImGuiSliderFlags_Logarithmic : 0 );
 
 			// The hole and the ball are built into the scene
-			rebuild |= moved && ( m_scene->type == lab_hole || m_scene->type == lab_tap || m_scene->type == lab_space || m_scene->type == lab_splash || m_scene->type == lab_drain || m_scene->type == lab_pool );
+			rebuild |= moved && ( m_scene->type == lab_hole || m_scene->type == lab_tap || m_scene->type == lab_space || m_scene->type == lab_splash || m_scene->type == lab_drain || m_scene->type == lab_pool ||
+						 m_scene->type == lab_tanks );
 		}
 		if ( rebuild )
 		{
@@ -207,3 +209,4 @@ static int sampleJelly = RegisterSample( "Fluid", "Jelly And Dough", SampleFluid
 static int sampleBasin = RegisterSample( "Fluid", "Overflowing Basin", SampleFluid::Create<lab_basin> );
 static int sampleSprinkler = RegisterSample( "Fluid", "Sprinkler", SampleFluid::Create<lab_sprinkler> );
 static int sampleTiles = RegisterSample( "Fluid", "Tile Floor", SampleFluid::Create<lab_tiles> );
+static int sampleTanks = RegisterSample( "Fluid Tests", "Far Tanks", SampleFluid::Create<lab_tanks> );
