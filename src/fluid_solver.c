@@ -83,6 +83,12 @@ static void AddSprings( b2fFluid* f, int i )
 		sp->count = 0;
 		return;
 	}
+	// Asleep in the shell, its springs stay as they fell asleep; none forms between an asleep and an awake particle,
+	// which would join an awake group to an asleep one
+	if ( f->asleep[i] != 0 )
+	{
+		return;
+	}
 
 	int kept = 0;
 	for ( int s = 0; s < sp->count; ++s )
@@ -103,7 +109,7 @@ static void AddSprings( b2fFluid* f, int i )
 	for ( int p = 0; p < n && sp->count < B2F_SPRINGS_PER_PARTICLE; ++p )
 	{
 		int j = pairs[p].j, id = f->id[j];
-		if ( f->liquid[j] != f->liquid[i] )
+		if ( f->liquid[j] != f->liquid[i] || f->asleep[j] != 0 )
 		{
 			continue;
 		}
@@ -482,7 +488,8 @@ static void VelocityTask( int start, int end, int worker, void* context )
 	b2fFluid* f = context;
 	float h = f->h, inv = 1.0f / h, limit = 0.5f * f->radius, limit2 = limit * limit;
 	float sleep2 = B2F_SLEEP_SPEED * B2F_SLEEP_SPEED, smooth = h < B2F_CALM_TIME ? h / B2F_CALM_TIME : 1.0f;
-	uint32_t sleeps = f->sleepOn ? f->liquidSleeps : 0u;
+	uint32_t springLiquids = f->springLiquids;
+	bool sleepOn = f->sleepOn;
 	for ( int i = start; i < end; ++i )
 	{
 		if ( f->asleep[i] != 0 )
@@ -508,8 +515,8 @@ static void VelocityTask( int start, int end, int worker, void* context )
 		f->vy[i] = dy * inv;
 
 		// Slow for B2_TIME_TO_SLEEP, by its velocity smoothed over B2F_CALM_TIME, and touching no awake body, it falls
-		// asleep where it is
-		if ( ( sleeps >> f->liquid[i] & 1u ) == 0 )
+		// asleep where it is, or with springs, once all its group is ready too (b2fSpringGroups)
+		if ( sleepOn == false )
 		{
 			f->sleepTime[i] = 0.0f;
 			continue;
@@ -519,7 +526,12 @@ static void VelocityTask( int start, int end, int worker, void* context )
 		calm.y += smooth * ( f->vy[i] - calm.y );
 		f->calm[i] = calm;
 		f->sleepTime[i] = b2LengthSquared( calm ) < sleep2 ? f->sleepTime[i] + h : 0.0f;
-		if ( f->sleepTime[i] >= B2_TIME_TO_SLEEP && ( f->wake[i] & B2F_WAKE_HELD ) == 0 )
+		bool ready = f->sleepTime[i] >= B2_TIME_TO_SLEEP && ( f->wake[i] & B2F_WAKE_HELD ) == 0;
+		if ( ready && ( springLiquids >> f->liquid[i] & 1u ) != 0 )
+		{
+			f->wake[i] |= B2F_WAKE_CALM;
+		}
+		else if ( ready )
 		{
 			f->asleep[i] = (unsigned char)( B2F_ASLEEP | B2F_ASLEEP_NEW | ( f->contactCount[i] > 0 ? B2F_ASLEEP_SHAPE : 0u ) );
 			f->vx[i] = 0.0f;
@@ -537,29 +549,9 @@ static void VelocityTask( int start, int end, int worker, void* context )
 // reaches h is marked gone, as is one whose partner has gone, holds no spring back, or is now another liquid.
 // Both ends read the same positions and rest length, so they work a spring out the same way.
 //
-// Each spring finds its partner by id in a table of where each id is this substep. The slot is the high bits of the id
-// times 2^32 over the golden ratio (Fibonacci hashing). Ids only grow, so after spawns, splits and drains the live
-// ids can span many table sizes: the id itself, or the low bits of the product, would put ids that differ by a
-// multiple of the table size in the same slot, and a block of such ids would make one long run to probe through.
-static inline unsigned int IdSlot( const b2fFluid* f, int id )
-{
-	return ( (unsigned int)id * 2654435761u ) >> f->idMapShift;
-}
-
-static inline int FindParticle( const b2fFluid* f, int id )
-{
-	unsigned int slot = IdSlot( f, id );
-	while ( f->idMap[slot].id != -1 )
-	{
-		if ( f->idMap[slot].id == id )
-		{
-			return f->idMap[slot].index;
-		}
-		slot = ( slot + 1 ) & (unsigned int)f->idMapMask;
-	}
-	return -1;
-}
-
+// A spring with both ends asleep is skipped: neither moves, so neither its pull nor its rest length would change.
+// Particles joined by springs fall asleep and wake together (b2fSpringGroups), so the ends of a spring are never one
+// asleep and one awake, which would work the spring from one side only and let the two copies part.
 static void SpringTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
@@ -571,7 +563,7 @@ static void SpringTask( int start, int end, int worker, void* context )
 		float moveX = 0.0f, moveY = 0.0f;
 		b2fSprings* sp = f->springs + i;
 		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
-		if ( def->springStiffness > 0.0f )
+		if ( def->springStiffness > 0.0f && f->asleep[i] == 0 )
 		{
 			b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 			float si = f->size[i], wi = fine * fine / ( si * si );
@@ -579,11 +571,13 @@ static void SpringTask( int start, int end, int worker, void* context )
 			for ( int s = 0; s < sp->count; ++s )
 			{
 				float L = sp->rest[s];
-				int j = L >= 0.0f ? FindParticle( f, sp->id[s] ) : -1;
+				int j = L >= 0.0f ? b2fFindParticle( f, sp->id[s] ) : -1;
 				// Only the first substep of a step checks the partner holds the spring too, which costs as much as
 				// the rest. A spring held at one end comes from a partner with no free slot, and lasts one step.
-				bool mutual = j >= 0 && f->liquid[j] == f->liquid[i] && check == false;
-				if ( j >= 0 && f->liquid[j] == f->liquid[i] && check )
+				// The partner asleep with this end awake can only be a spring it does not hold, which goes, since
+				// those it holds would have woken it
+				bool mutual = j >= 0 && f->liquid[j] == f->liquid[i] && f->asleep[j] == 0 && check == false;
+				if ( j >= 0 && f->liquid[j] == f->liquid[i] && f->asleep[j] == 0 && check )
 				{
 					const b2fSprings* other = f->springs + j;
 					for ( int t = 0; t < other->count && mutual == false; ++t )
@@ -639,9 +633,9 @@ static void SpringApplyTask( int start, int end, int worker, void* context )
 	}
 }
 
-void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
+// Where each id is now, in a table at least twice the particle count, filled in index order
+void b2fBuildIdMap( b2fFluid* f )
 {
-	// Where each id is now, in a table at least twice the particle count, filled in index order
 	int slots = 2, bits = 1;
 	while ( slots < 2 * f->count )
 	{
@@ -653,14 +647,24 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 	memset( f->idMap, 0xFF, (size_t)slots * sizeof( b2fIdSlot ) );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		unsigned int slot = IdSlot( f, f->id[i] );
+		unsigned int slot = b2fIdHash( f, f->id[i] );
 		while ( f->idMap[slot].id != -1 )
 		{
 			slot = ( slot + 1 ) & (unsigned int)f->idMapMask;
 		}
 		f->idMap[slot] = ( b2fIdSlot ){ f->id[i], i };
 	}
+}
 
+void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
+{
+	b2fBuildIdMap( f );
+	// Particles that woke since the last substep, touching an awake body in the contact pass among them, wake their
+	// groups before any spring is worked out
+	if ( f->sleepOn || f->springAsleep != 0 )
+	{
+		b2fSpringGroups( f, false );
+	}
 	b2SubStep_ParallelFor( context, SpringTask, f->count, 512, f );
 	b2SubStep_ParallelFor( context, SpringApplyTask, f->count, 2048, f );
 }
@@ -681,6 +685,12 @@ void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 void b2fUpdateVelocities( b2fFluid* f, b2SubStepContext* context )
 {
 	b2SubStep_ParallelFor( context, VelocityTask, f->count, 2048, f );
+	// Groups whose particles are all ready fall asleep together, and those of which some woke in this substep wake
+	// together, before the next substep works out their springs
+	if ( f->springy && ( f->sleepOn || f->springAsleep != 0 ) )
+	{
+		b2fSpringGroups( f, true );
+	}
 	if ( f->sleepOn || f->asleepCount > 0 )
 	{
 		b2fCountAsleep( f );

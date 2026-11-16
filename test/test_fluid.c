@@ -2587,6 +2587,133 @@ static int FluidSleep( void )
 	return 0;
 }
 
+// A jelly block falls asleep as one, a crate dropped on it wakes all of it in the same substep, and the two copies of
+// every spring stay equal throughout, the same at 1 and 3 workers (fluidfun PR 40)
+typedef struct SpringSleepRun
+{
+	int asleepAt, wokeAt;
+	bool together, copiesEqual, heldStill;
+	uint64_t hash;
+} SpringSleepRun;
+
+// Whether the jelly is all asleep or all awake, and whether both ends of each spring hold the same rest length and are
+// both asleep or both awake
+static void CheckSprings( const b2fFluid* f, SpringSleepRun* run, int* asleep )
+{
+	*asleep = 0;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		*asleep += f->asleep[i] != 0 ? 1 : 0;
+		const b2fSprings* sp = f->springs + i;
+		for ( int s = 0; s < sp->count; ++s )
+		{
+			for ( int j = 0; j < f->count; ++j )
+			{
+				if ( f->id[j] != sp->id[s] )
+				{
+					continue;
+				}
+				run->together = run->together && ( f->asleep[i] != 0 ) == ( f->asleep[j] != 0 );
+				const b2fSprings* other = f->springs + j;
+				for ( int t = 0; t < other->count; ++t )
+				{
+					bool same = other->id[t] != f->id[i] || other->rest[t] == sp->rest[s];
+					run->copiesEqual = run->copiesEqual && same;
+				}
+			}
+		}
+	}
+	run->together = run->together && ( *asleep == 0 || *asleep == f->count );
+}
+
+static SpringSleepRun RunSpringSleep( int workerCount )
+{
+	SpringSleepRun run = { -1, -1, true, true, false, 14695981039346656037ull };
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.workerCount = workerCount;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon box = b2MakeOffsetBox( 1.5f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef jelly = b2MakeJellyDef();
+	jelly.tuning.adaptiveRatio = 1.0f;
+	b2LiquidId jellyId = b2CreateLiquid( fluidId, &jelly );
+	b2Liquid_SpawnBox( jellyId, ( b2Pos ){ -0.5f, 0.05f }, ( b2Pos ){ 0.5f, 0.45f }, b2Vec2_zero );
+	const b2fFluid* f = b2GetWorldFromId( worldId )->fluid;
+
+	b2Pos* held = NULL;
+	int asleep = 0;
+	for ( int frame = 0; frame < 900 && run.asleepAt < 0; ++frame )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		CheckSprings( f, &run, &asleep );
+		run.asleepAt = asleep == f->count ? frame : -1;
+	}
+	if ( run.asleepAt >= 0 )
+	{
+		held = malloc( (size_t)f->count * sizeof( b2Pos ) );
+		memcpy( held, f->pos, (size_t)f->count * sizeof( b2Pos ) );
+		for ( int frame = 0; frame < 30; ++frame )
+		{
+			b2World_Step( worldId, 1.0f / 60.0f, 4 );
+			CheckSprings( f, &run, &asleep );
+		}
+		run.heldStill = asleep == f->count && memcmp( held, f->pos, (size_t)f->count * sizeof( b2Pos ) ) == 0;
+		free( held );
+	}
+
+	// A crate let go above the block, stepped one substep at a time so every substep's end is seen
+	float top = -FLT_MAX;
+	for ( int i = 0; i < f->count; ++i )
+	{
+		top = b2MaxFloat( top, (float)f->pos[i].y );
+	}
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ 0.1f, top + 1.0f };
+	b2BodyId crateId = b2CreateBody( worldId, &bodyDef );
+	shapeDef.density = 2.0f;
+	box = b2MakeBox( 0.1f, 0.1f );
+	b2CreatePolygonShape( crateId, &shapeDef, &box );
+	for ( int subStep = 0; subStep < 240; ++subStep )
+	{
+		b2World_Step( worldId, 1.0f / 240.0f, 1 );
+		CheckSprings( f, &run, &asleep );
+		if ( run.wokeAt < 0 && asleep == 0 )
+		{
+			run.wokeAt = subStep;
+		}
+	}
+
+	for ( int i = 0; i < f->count; ++i )
+	{
+		const unsigned char* bytes = (const unsigned char*)( f->pos + i );
+		for ( size_t k = 0; k < sizeof( b2Pos ); ++k )
+		{
+			run.hash = ( run.hash ^ bytes[k] ) * 1099511628211ull;
+		}
+		run.hash = ( run.hash ^ f->asleep[i] ) * 1099511628211ull;
+	}
+	b2DestroyWorld( worldId );
+	return run;
+}
+
+static int FluidSpringSleep( void )
+{
+	SpringSleepRun one = RunSpringSleep( 1 );
+	ENSURE( one.asleepAt > 0 && one.heldStill );
+	ENSURE( one.wokeAt > 20 && one.wokeAt < 200 );
+	ENSURE( one.together && one.copiesEqual );
+
+	SpringSleepRun three = RunSpringSleep( 3 );
+	ENSURE( three.asleepAt == one.asleepAt && three.wokeAt == one.wokeAt && three.hash == one.hash );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -2610,5 +2737,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidEmitterOnBody );
 	RUN_SUBTEST( FluidLengthUnits );
 	RUN_SUBTEST( FluidSleep );
+	RUN_SUBTEST( FluidSpringSleep );
 	return 0;
 }

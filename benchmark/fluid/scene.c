@@ -386,6 +386,10 @@ void LabSceneSettings( LabSceneType type, LabDef* def )
 			def->liquid.springStiffness = 10000.0f;
 			def->liquid.plasticity = 0.0f;
 			def->liquid.tuning.adaptiveRatio = 1.0f;
+			// Friction 0.7 for both, against water's 0.1, at which they slid across the floor like soap: two lumps of
+			// dough a crate split off glided apart at 3.5 cm/s for over a minute, until a wall or the jelly stopped
+			// them (findings section 57). At 1 the jelly bounced about the tank.
+			def->liquid.friction = 0.7f;
 			break;
 
 		case lab_slime:
