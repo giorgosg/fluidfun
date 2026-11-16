@@ -12,7 +12,9 @@ extern "C" {
 // A marble run through a large world. It is a row of sections, each of which takes a marble rolling in at its entry
 // and sends one rolling out of its exit, by whatever it shows on the way: some with liquids, some with plain bodies.
 // Sections butt together, turn back under each other, and each can be built alone with a ramp and a marble in front
-// of it, to try it by itself. The machine also says where to look: a view that follows whatever is acting.
+// of it, to try it by itself. Everything that switches is a sensor shape: Box2D's own for marbles, and the fluid's
+// count of liquid in a sensor where liquid is what is waited for. The machine also says where to look: a view that
+// follows whatever is acting.
 
 typedef enum MachineLiquid
 {
@@ -33,16 +35,19 @@ typedef enum MachineSectionType
 	section_sluice,
 	// Dominoes that grow, the last of which knocks a marble on
 	section_dominoes,
-	// The marble drops into a paddle boat, which crosses a lake and knocks a flap over onto a marble
+	// The marble drops into a paddle boat, which crosses a lake and pushes a marble off the far shore
 	section_ferry,
-	// Ramps back and forth down to the row below, which runs the other way
-	section_turn,
+	// A ball of jelly rolls down ramps to the row below, which runs the other way
+	section_jellyBall,
 	// A Newton's cradle
 	section_cradle,
-	// Trapdoors drop a block of dough and a block of jelly; the jelly lands on a seesaw that throws a marble
+	// A knife cuts a block of dough in two, which fall into two buckets; with both full, a block of jelly drops on a
+	// seesaw that throws a marble
 	section_jelly,
 	// Honey fills a bucket on a balance, which lifts a tooth out of a marble's way
 	section_honey,
+	// The marble falls through pegs and spinners to the row below, which runs the other way
+	section_pegs,
 	// Mercury fills a shaft and a stone ball floats up it
 	section_mercury,
 	// The stone ball sinks through oil and water onto a detonator
@@ -81,8 +86,10 @@ typedef struct MachineSection
 	// How far it has got, and for how long it has been there
 	int phase;
 	float clock;
-	// What it moves or watches
+	// What it moves, and the sensors it watches: the one at its entry, which makes it the active section, and its own
 	b2BodyId parts[MACHINE_SECTION_PARTS];
+	b2ShapeId entry;
+	b2ShapeId sensors[4];
 	b2JointId joint;
 	// The marble it sends on
 	b2BodyId marble;

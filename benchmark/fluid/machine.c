@@ -8,7 +8,7 @@
 
 // Static planks and walls are this thick, so that fast liquid does not cross them in a substep
 #define MACHINE_THICKNESS 0.3f
-// A socket is a pit a marble drops into and stays in, which is how a marble switches something on
+// A socket is a pit a marble drops into and stays in, with a sensor in it, which is how a marble switches something on
 #define MACHINE_SOCKET_WIDTH 0.9f
 #define MACHINE_SOCKET_DEPTH 0.65f
 // Relative to water
@@ -25,6 +25,11 @@ MachineDef DefaultMachineDef( void )
 	def.liquids[machine_mercury] = b2MakeMercuryDef();
 	def.liquids[machine_jelly] = b2MakeJellyDef();
 	def.liquids[machine_dough] = b2MakeDoughDef();
+	// Water with no pull of its own or toward walls, and thinner, so that it falls through the sluice's grate instead of
+	// creeping along it to the dominoes
+	def.liquids[machine_water].cohesion = 0.0f;
+	def.liquids[machine_water].adhesion = 0.0f;
+	def.liquids[machine_water].viscosity = 0.2f;
 	// As the Jelly And Dough scene has them: at water's friction they slide about like soap
 	def.liquids[machine_jelly].friction = 0.7f;
 	def.liquids[machine_dough].friction = 0.7f;
@@ -41,8 +46,15 @@ MachineDef DefaultMachineDef( void )
 
 const char* MachineSectionName( MachineSectionType type )
 {
-	static const char* names[] = { "Start", "Sluice And Wheel", "Dominoes", "Ferry", "Turn", "Cradle", "Jelly Catapult", "Honey Balance", "Mercury Lift", "Finale" };
+	static const char* names[] = { "Start",			 "Sluice And Wheel", "Dominoes",  "Ferry",		  "Jelly Ball", "Cradle",
+								   "Dough And Jelly", "Honey Balance",	   "Peg Board", "Mercury Lift", "Finale" };
 	return type < section_typeCount ? names[type] : "Whole";
+}
+
+// Sections that take the marble down to the row below, which runs the other way
+static bool Reverses( MachineSectionType type )
+{
+	return type == section_jellyBall || type == section_pegs;
 }
 
 // Section coordinates to the world's and back. A section going left is the mirror image of one going right.
@@ -63,16 +75,6 @@ static b2Vec2 BodyLocal( const MachineSection* s, b2BodyId body )
 		return (b2Vec2){ -1000.0f, -1000.0f };
 	}
 	return Local( s, b2ToVec2( b2Body_GetPosition( body ) ) );
-}
-
-static float Mix( float a, float b, float t )
-{
-	return a + t * ( b - a );
-}
-
-static bool Inside( b2Vec2 p, float x0, float y0, float x1, float y1 )
-{
-	return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
 }
 
 static void Grow( Machine* m, b2Vec2 p )
@@ -113,6 +115,51 @@ static void Floor( Machine* m, const MachineSection* s, float x0, float y0, floa
 	GroundBox( m, center, 0.5f * b2Length( d ), 0.5f * MACHINE_THICKNESS, b2Atan2( d.y, d.x ) );
 }
 
+static void Peg( Machine* m, const MachineSection* s, float x, float y, float radius )
+{
+	b2Circle circle = { At( s, x, y ), radius };
+	b2ShapeDef def = b2DefaultShapeDef();
+	def.material.restitution = 0.3f;
+	b2CreateCircleShape( m->ground, &def, &circle );
+}
+
+// A sensor box between two corners, fixed in the world. It sees marbles, whose shapes have sensor events on, and
+// the fluid counts the liquid in it.
+static b2ShapeId Sensor( Machine* m, const MachineSection* s, float x0, float y0, float x1, float y1 )
+{
+	b2Vec2 a = At( s, x0, y0 ), b = At( s, x1, y1 );
+	b2Polygon box = b2MakeOffsetBox( 0.5f * b2AbsFloat( b.x - a.x ), 0.5f * b2AbsFloat( b.y - a.y ), b2Lerp( a, b, 0.5f ), b2Rot_identity );
+	b2ShapeDef def = b2DefaultShapeDef();
+	def.isSensor = true;
+	def.enableSensorEvents = true;
+	return b2CreatePolygonShape( m->ground, &def, &box );
+}
+
+// Whether a sensor held the body at the end of the last step
+static bool Holds( b2ShapeId sensor, b2BodyId body )
+{
+	if ( b2Body_IsValid( body ) == false )
+	{
+		return false;
+	}
+	b2ShapeId visitors[16];
+	int count = b2Shape_GetSensorData( sensor, visitors, 16 );
+	for ( int i = 0; i < count; ++i )
+	{
+		if ( b2Shape_IsValid( visitors[i] ) && B2_ID_EQUALS( b2Shape_GetBody( visitors[i] ), body ) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// How much liquid a sensor held after the last step, as area at rest
+static float LiquidIn( const Machine* m, b2ShapeId sensor )
+{
+	return b2Fluid_GetSensorArea( m->fluid, sensor );
+}
+
 // A sloping floor of bars with gaps a marble rolls over and liquid falls through, solid for its last stretch
 static void Bars( Machine* m, const MachineSection* s, float x0, float y0, float x1, float y1 )
 {
@@ -120,24 +167,20 @@ static void Bars( Machine* m, const MachineSection* s, float x0, float y0, float
 	float x = x0;
 	while ( x1 - x > 1.2f )
 	{
-		Floor( m, s, x, y0 + slope * ( x - x0 ), x + 0.3f, y0 + slope * ( x + 0.3f - x0 ) );
+		Floor( m, s, x, y0 + slope * ( x - x0 ), x + 0.25f, y0 + slope * ( x + 0.25f - x0 ) );
 		x += 0.6f;
 	}
 	Floor( m, s, x, y0 + slope * ( x - x0 ), x1, y1 );
 }
 
-// The floor a marble rolls in on, ending in a socket whose near edge is at x. The caller builds the socket's far
-// wall.
-static void Socket( Machine* m, const MachineSection* s, float x )
+// The floor a marble rolls in on, ending in a socket whose near edge is at x, and the sensor in the socket. The caller
+// builds the socket's far wall.
+static b2ShapeId Socket( Machine* m, const MachineSection* s, float x )
 {
 	Floor( m, s, 0.0f, 0.0f, x, 0.0f );
 	Wall( m, s, x - 0.3f, -MACHINE_SOCKET_DEPTH - 0.3f, x + MACHINE_SOCKET_WIDTH, -MACHINE_SOCKET_DEPTH );
 	Wall( m, s, x - 0.3f, -MACHINE_SOCKET_DEPTH, x, -0.3f );
-}
-
-static bool InSocket( const Machine* m, const MachineSection* s, float x )
-{
-	return Inside( BodyLocal( s, m->baton ), x, -MACHINE_SOCKET_DEPTH, x + MACHINE_SOCKET_WIDTH, -0.05f );
+	return Sensor( m, s, x + 0.1f, -MACHINE_SOCKET_DEPTH, x + MACHINE_SOCKET_WIDTH - 0.1f, -0.2f );
 }
 
 static b2BodyId Body( Machine* m, const MachineSection* s, b2BodyType type, float x, float y, float angle )
@@ -155,7 +198,8 @@ static b2BodyId Body( Machine* m, const MachineSection* s, b2BodyType type, floa
 }
 
 // A box on a body, in the body's frame as the section sees it
-static b2ShapeId BoxOn( b2BodyId body, const MachineSection* s, float x, float y, float halfWidth, float halfHeight, float angle, float density )
+static b2ShapeId BoxOn( b2BodyId body, const MachineSection* s, float x, float y, float halfWidth, float halfHeight, float angle,
+						float density )
 {
 	b2Polygon box = b2MakeOffsetBox( halfWidth, halfHeight, (b2Vec2){ s->direction * x, y }, b2MakeRot( s->direction * angle ) );
 	b2ShapeDef def = b2DefaultShapeDef();
@@ -163,6 +207,18 @@ static b2ShapeId BoxOn( b2BodyId body, const MachineSection* s, float x, float y
 	return b2CreatePolygonShape( body, &def, &box );
 }
 
+// A sensor box that rides a body
+static b2ShapeId SensorOn( b2BodyId body, const MachineSection* s, float x, float y, float halfWidth, float halfHeight )
+{
+	b2Polygon box = b2MakeOffsetBox( halfWidth, halfHeight, (b2Vec2){ s->direction * x, y }, b2Rot_identity );
+	b2ShapeDef def = b2DefaultShapeDef();
+	def.density = 0.0f;
+	def.isSensor = true;
+	def.enableSensorEvents = true;
+	return b2CreatePolygonShape( body, &def, &box );
+}
+
+// Balls are what sensors look for
 static b2BodyId Ball( Machine* m, const MachineSection* s, float x, float y, float radius, float density, float restitution )
 {
 	b2BodyId body = Body( m, s, b2_dynamicBody, x, y, 0.0f );
@@ -170,6 +226,7 @@ static b2BodyId Ball( Machine* m, const MachineSection* s, float x, float y, flo
 	b2ShapeDef def = b2DefaultShapeDef();
 	def.density = density;
 	def.material.restitution = restitution;
+	def.enableSensorEvents = true;
 	b2CreateCircleShape( body, &def, &circle );
 	return body;
 }
@@ -231,9 +288,12 @@ static bool SlideTo( const MachineSection* s, b2BodyId body, float x, float y, f
 	return false;
 }
 
-static float Speed( b2BodyId body )
+// Swings a kinematic trapdoor down about its hinge, which is the body's origin, until it hangs straight down. Spin is
+// +1 for a door that opens clockwise when the section goes right.
+static void SwingOpen( const MachineSection* s, b2BodyId door, float spin )
 {
-	return b2Body_IsValid( body ) ? b2Length( b2Body_GetLinearVelocity( body ) ) : 0.0f;
+	bool open = b2AbsFloat( b2Rot_GetAngle( b2Body_GetRotation( door ) ) ) > 0.5f * B2_PI;
+	b2Body_SetAngularVelocity( door, open ? 0.0f : -spin * s->direction * 4.0f );
 }
 
 static void Advance( MachineSection* s )
@@ -257,11 +317,15 @@ static void Look( Machine* m, const MachineSection* s, float x, float y, float s
 	m->focusHalfHeight = scale * m->def.viewHalfHeight;
 }
 
-// Looks a little ahead of a body, and a little below it, where what comes next is waiting
+// Looks a little ahead of a point, and a little below it, where what comes next is waiting
+static void FollowPoint( Machine* m, const MachineSection* s, b2Vec2 p, float scale )
+{
+	Look( m, s, p.x + 0.35f * m->def.viewHalfHeight, p.y - 0.15f * m->def.viewHalfHeight, scale );
+}
+
 static void Follow( Machine* m, const MachineSection* s, b2BodyId body, float scale )
 {
-	b2Vec2 p = BodyLocal( s, body );
-	Look( m, s, p.x + 0.35f * m->def.viewHalfHeight, p.y - 0.15f * m->def.viewHalfHeight, scale );
+	FollowPoint( m, s, BodyLocal( s, body ), scale );
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -302,13 +366,13 @@ static void StepStart( Machine* m, MachineSection* s, bool active, float timeSte
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Sluice and wheel: the marble drops into a socket, which lifts the gate of a reservoir. The water runs down a spout,
-// off a baffle and over a wheel into a sump, where a marble waits on the bottom. The sump holds less than the
+// off a baffle and over a wheel into a sump, where a marble waits in a chimney. The sump holds less than the
 // reservoir, so the marble floats up and out over its low wall. The water drains through the bars of the way out.
 
 static void CreateSluice( Machine* m, MachineSection* s )
 {
 	float spacing = m->def.fluid.particleSpacing;
-	Socket( m, s, 2.2f );
+	s->sensors[0] = Socket( m, s, 2.2f );
 
 	// Reservoir, with the gate in its right wall
 	Wall( m, s, 3.1f, -0.95f, 3.5f, 7.4f );
@@ -325,30 +389,38 @@ static void CreateSluice( Machine* m, MachineSection* s )
 	s->parts[1] = Wheel( m, s, 11.6f, 0.0f, 2.0f, 8, 0.3f );
 	s->joint = Hinge( m, s, s->parts[1], false, 0.0f, 0.0f, 2.0f );
 
-	// Sump
+	// Sump, with a sensor on its floor that tells the view to turn from the wheel to the marble once water is there
 	Wall( m, s, 9.0f, -4.9f, 15.4f, -4.6f );
 	Wall( m, s, 9.0f, -4.6f, 9.4f, 2.5f );
 	Wall( m, s, 15.0f, -6.3f, 15.4f, -2.9f );
 	Wall( m, s, 15.0f, -1.6f, 15.4f, 5.0f );
+	s->sensors[1] = Sensor( m, s, 9.4f, -4.6f, 13.9f, -3.8f );
 
 	// The marble waits in a chimney beside the low wall, open at the foot by less than a marble. All the water that
 	// leaves the sump comes up through it, so it carries the marble out. In an open sump the marble drifted under
-	// the wheel and stayed there.
-	Wall( m, s, 13.95f, -4.2f, 14.15f, -1.6f );
+	// the wheel and stayed there. The chimney has a roof, so the wheel's spray cannot fly out over the low wall: it
+	// carried water on to the dominoes before the sump had filled.
+	Wall( m, s, 13.95f, -4.2f, 14.15f, -1.0f );
+	Wall( m, s, 13.95f, -1.0f, 15.0f, -0.7f );
 	s->marble = Marble( m, s, 14.57f, -4.6f + m->def.marbleRadius );
+	s->sensors[2] = Sensor( m, s, 15.45f, -3.9f, 17.0f, -1.6f );
 
-	// The way out, over a tank that catches what the sump spills
-	Bars( m, s, 15.4f, -2.9f, 19.5f, -3.7f );
-	Wall( m, s, 15.4f, -6.3f, 19.5f, -6.0f );
-	Wall( m, s, 19.1f, -6.0f, 19.5f, -4.1f );
-	// A curtain over the end of the bars, for spray
-	Wall( m, s, 19.2f, -2.7f, 19.5f, 0.5f );
-	s->exit = At( s, 19.5f, -3.7f );
+	// The way out, a grate over a tank that catches what the sump spills. The grate starts below the sump's lip, so
+	// that the water falls on it and through it, and steep, so that the marble, which no longer rides the flow,
+	// reaches the dominoes fast enough to tip the first: level with the lip, the flow shot along the grate over its gaps and
+	// on to the dominoes. The sump keeps about half the reservoir, and the tank holds the rest.
+	Bars( m, s, 15.4f, -3.5f, 19.5f, -4.9f );
+	Wall( m, s, 15.0f, -9.3f, 15.4f, -6.3f );
+	Wall( m, s, 15.0f, -9.3f, 19.5f, -9.0f );
+	Wall( m, s, 19.1f, -9.0f, 19.5f, -5.3f );
+	// A curtain over the end of the grate, for spray
+	Wall( m, s, 19.2f, -3.9f, 19.5f, 0.5f );
+	s->exit = At( s, 19.5f, -4.9f );
 }
 
 static void StepSluice( Machine* m, MachineSection* s, bool active, float timeStep )
 {
-	if ( s->phase == 0 && InSocket( m, s, 2.2f ) )
+	if ( s->phase == 0 && Holds( s->sensors[0], m->baton ) )
 	{
 		Advance( s );
 	}
@@ -356,7 +428,11 @@ static void StepSluice( Machine* m, MachineSection* s, bool active, float timeSt
 	{
 		Advance( s );
 	}
-	else if ( s->phase == 2 && BodyLocal( s, s->marble ).x > 15.2f )
+	else if ( s->phase == 2 && LiquidIn( m, s->sensors[1] ) > 1.0f )
+	{
+		Advance( s );
+	}
+	else if ( s->phase == 3 && active && Holds( s->sensors[2], s->marble ) )
 	{
 		PassBaton( m, s );
 	}
@@ -366,25 +442,23 @@ static void StepSluice( Machine* m, MachineSection* s, bool active, float timeSt
 		return;
 	}
 
-	if ( s->phase == 0 )
+	if ( s->phase == 0 || s->phase == 4 )
 	{
 		Follow( m, s, m->baton, 1.0f );
 	}
 	else if ( s->phase < 3 )
 	{
-		// The wheel first, then the marble as the sump lifts it
-		b2Vec2 p = BodyLocal( s, s->marble );
-		float lifted = b2ClampFloat( ( p.y + 4.3f ) / 1.4f, 0.0f, 1.0f );
-		Look( m, s, Mix( 11.0f, p.x + 1.0f, lifted ), Mix( 0.3f, p.y, lifted ), Mix( 1.15f, 1.0f, lifted ) );
+		Look( m, s, 11.0f, 0.3f, 1.15f );
 	}
 	else
 	{
-		Follow( m, s, m->baton, 1.0f );
+		b2Vec2 p = BodyLocal( s, s->marble );
+		Look( m, s, p.x + 0.5f, p.y + 1.0f, 0.85f );
 	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Dominoes, each bigger than the one before, and a marble under the last
+// Dominoes, each bigger than the one before, and a marble on a post beside the last
 
 #define MACHINE_DOMINOES 8
 
@@ -399,10 +473,11 @@ static void CreateDominoes( Machine* m, MachineSection* s )
 		BoxOn( domino, s, 0.0f, 0.0f, height / 12.0f, 0.5f * height, 0.0f, 0.4f );
 		if ( i == MACHINE_DOMINOES - 1 )
 		{
-			// On a post beside the last one, which strikes it sideways early in its fall. On the floor the domino
-			// came down on top of the marble and pinned it.
+			// The last strikes the marble sideways early in its fall. On the floor the domino came down on top of the
+			// marble and pinned it.
 			Wall( m, s, x + 0.55f, 0.0f, x + 0.95f, 0.75f * height );
 			s->marble = Marble( m, s, x + 0.72f, 0.75f * height + m->def.marbleRadius );
+			s->sensors[0] = Sensor( m, s, x + 1.1f, -0.6f, x + 4.5f, 0.75f * height );
 		}
 		x += 0.55f * height;
 		height *= 1.22f;
@@ -413,7 +488,7 @@ static void CreateDominoes( Machine* m, MachineSection* s )
 static void StepDominoes( Machine* m, MachineSection* s, bool active, float timeStep )
 {
 	(void)timeStep;
-	if ( s->phase == 0 && active && Speed( s->marble ) > 0.5f )
+	if ( s->phase == 0 && active && Holds( s->sensors[0], s->marble ) )
 	{
 		PassBaton( m, s );
 	}
@@ -434,8 +509,8 @@ static void StepDominoes( Machine* m, MachineSection* s, bool active, float time
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Ferry: the marble falls through a hole in the dock into a boat, whose paddle wheel starts. The boat crosses the
-// lake and its bowsprit pushes over a flap on the far shore, which falls on a marble.
+// Ferry: the marble falls through a hole in the dock into a boat. A sensor on the deck starts the paddle wheel, the
+// boat crosses the lake, and its bowsprit pushes a marble off the far shore.
 
 #define MACHINE_FERRY_SPEED 4.0f
 
@@ -453,12 +528,15 @@ static void CreateFerry( Machine* m, MachineSection* s )
 	Wall( m, s, 20.0f, -4.5f, 20.4f, -2.2f );
 	Spawn( m, s, machine_water, 0.4f + spacing, -4.5f + spacing, 20.0f - spacing, -2.5f );
 
-	// Boat: a floor, two sides and a bowsprit
+	// Boat: a floor, two sides and a bowsprit low enough to meet a marble on the shore square on. The boat floats
+	// with its origin near -2.2 with a marble aboard, and its keel stays below the shore, so it stops against the
+	// shore wall with the bowsprit over the shore.
 	b2BodyId hull = Body( m, s, b2_dynamicBody, 4.4f, -2.3f, 0.0f );
 	BoxOn( hull, s, 0.0f, -0.25f, 1.7f, 0.15f, 0.0f, 0.3f );
 	BoxOn( hull, s, -1.6f, 0.25f, 0.1f, 0.4f, 0.0f, 0.3f );
 	BoxOn( hull, s, 1.6f, 0.25f, 0.1f, 0.4f, 0.0f, 0.3f );
-	BoxOn( hull, s, 2.7f, 0.65f, 1.0f, 0.06f, 0.0f, 0.1f );
+	BoxOn( hull, s, 2.6f, 0.3f, 0.9f, 0.06f, 0.0f, 0.1f );
+	s->sensors[0] = SensorOn( hull, s, 0.0f, 0.25f, 1.45f, 0.35f );
 	s->parts[0] = hull;
 
 	// The blade tips must clear the stern: joined bodies do not collide, and blades that overlap the hull crush water
@@ -474,33 +552,25 @@ static void CreateFerry( Machine* m, MachineSection* s )
 	s->joint = b2CreateRevoluteJoint( m->worldId, &joint );
 	s->parts[1] = wheel;
 
-	// Far shore: a flap hinged at its foot, and a marble on a post that the flap knocks off
+	// Far shore, with the marble the bowsprit pushes on to the slope
 	Floor( m, s, 20.4f, -2.2f, 21.8f, -2.2f );
 	Floor( m, s, 21.8f, -2.2f, 24.0f, -2.8f );
-	b2BodyId flap = Body( m, s, b2_dynamicBody, 20.8f, -2.2f, 0.0f );
-	BoxOn( flap, s, 0.0f, 0.6f, 0.08f, 0.6f, 0.0f, 0.5f );
-	Hinge( m, s, flap, true, -1.5f, 0.05f, 0.3f );
-	s->parts[2] = flap;
-	Wall( m, s, 21.05f, -2.2f, 21.45f, -1.6f );
-	s->marble = Marble( m, s, 21.25f, -1.6f + m->def.marbleRadius );
+	s->marble = Marble( m, s, 21.0f, -2.2f + m->def.marbleRadius );
+	s->sensors[1] = Sensor( m, s, 22.4f, -3.0f, 24.0f, -1.6f );
 	s->exit = At( s, 24.0f, -2.8f );
 }
 
 static void StepFerry( Machine* m, MachineSection* s, bool active, float timeStep )
 {
 	(void)timeStep;
-	if ( s->phase == 0 && b2Body_IsValid( m->baton ) )
+	if ( s->phase == 0 && Holds( s->sensors[0], m->baton ) )
 	{
-		b2Vec2 p = b2Body_GetLocalPoint( s->parts[0], b2Body_GetPosition( m->baton ) );
-		if ( Inside( p, -1.5f, -0.3f, 1.5f, 0.7f ) )
-		{
-			// Clockwise for a boat going right, so that the blades push the water back
-			b2RevoluteJoint_SetTargetMotorSpeed( s->joint, -s->direction * MACHINE_FERRY_SPEED );
-			b2Body_SetAwake( s->parts[0], true );
-			Advance( s );
-		}
+		// Clockwise for a boat going right, so that the blades push the water back
+		b2RevoluteJoint_SetTargetMotorSpeed( s->joint, -s->direction * MACHINE_FERRY_SPEED );
+		b2Body_SetAwake( s->parts[0], true );
+		Advance( s );
 	}
-	else if ( s->phase == 1 && ( Speed( s->marble ) > 0.5f || BodyLocal( s, s->marble ).x > 21.8f ) )
+	else if ( s->phase == 1 && active && Holds( s->sensors[1], s->marble ) )
 	{
 		b2RevoluteJoint_SetTargetMotorSpeed( s->joint, 0.0f );
 		PassBaton( m, s );
@@ -523,157 +593,189 @@ static void StepFerry( Machine* m, MachineSection* s, bool active, float timeSte
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Turn: ramps back and forth down to the next row, which runs the other way. The count of ramps is even.
+// Jelly ball: the marble's socket lifts a gate in front of a ball of jelly, which rolls and bounces down four ramps to
+// the row below. A fluid sensor at the foot sees it arrive and drops the gate in front of the next marble, which rolls
+// on under a bar the ball is too big to pass.
 
-#define MACHINE_TURN_PITCH 2.4f
+#define MACHINE_JELLY_RADIUS 0.55f
 
-static void CreateTurn( Machine* m, MachineSection* s )
+static void CreateJellyBall( Machine* m, MachineSection* s )
 {
-	int ramps = s->count;
-	float last = -MACHINE_TURN_PITCH * (float)( ramps - 1 );
-	for ( int i = 0; i < ramps; ++i )
-	{
-		float y = -MACHINE_TURN_PITCH * (float)i;
-		if ( i % 2 == 0 )
-		{
-			Floor( m, s, i == 0 ? 0.0f : 0.6f, y, 5.6f, y - 1.0f );
-		}
-		else if ( i == ramps - 1 )
-		{
-			Floor( m, s, 6.6f, y, 0.0f, y - 1.2f );
-		}
-		else
-		{
-			Floor( m, s, 6.6f, y, 1.6f, y - 1.0f );
-		}
-	}
-	Wall( m, s, 6.6f, last - 0.3f, 7.0f, 1.2f );
-	Wall( m, s, 0.2f, last + 0.7f, 0.6f, -0.3f );
-	s->exit = At( s, 0.0f, last - 1.2f );
+	s->sensors[0] = Socket( m, s, 2.0f );
+	Wall( m, s, 2.9f, -0.95f, 3.2f, 0.6f );
+
+	// Ramps, each falling 1.6, with gaps at their ends wider than the ball
+	Floor( m, s, 3.2f, -0.3f, 9.6f, -1.9f );
+	Floor( m, s, 10.9f, -3.4f, 2.2f, -5.0f );
+	Floor( m, s, 0.8f, -6.8f, 9.6f, -8.4f );
+	Floor( m, s, 10.9f, -9.9f, 0.0f, -11.5f );
+	Wall( m, s, 10.9f, -10.2f, 11.3f, 0.6f );
+	Wall( m, s, 0.4f, -6.8f, 0.8f, -3.8f );
+
+	// The ball, held by a gate
+	float slope = 1.6f / 6.4f;
+	float x = 4.2f, y = -0.3f - slope * ( x - 3.2f ) + MACHINE_JELLY_RADIUS + 0.1f;
+	b2Liquid_SpawnCircle( m->liquids[machine_jelly], b2ToPos( At( s, x, y ) ), MACHINE_JELLY_RADIUS, b2Vec2_zero );
+	s->parts[0] = Body( m, s, b2_kinematicBody, x + MACHINE_JELLY_RADIUS + 0.25f, y - 0.1f, 0.0f );
+	BoxOn( s->parts[0], s, 0.0f, 0.0f, 0.1f, 0.6f, 0.0f, 0.0f );
+
+	// The next marble on the last ramp, behind a gate on its downhill side, and the bar
+	float last = 1.6f / 10.9f;
+	float mx = 3.4f, my = -9.9f - last * ( 10.9f - mx );
+	s->marble = Marble( m, s, mx, my + m->def.marbleRadius + 0.02f );
+	s->parts[1] = Body( m, s, b2_kinematicBody, mx - m->def.marbleRadius - 0.12f, my + 0.4f, 0.0f );
+	BoxOn( s->parts[1], s, 0.0f, 0.0f, 0.08f, 0.4f, 0.0f, 0.0f );
+	s->sensors[1] = Sensor( m, s, 4.2f, my - 0.2f, 7.5f, my + 1.6f );
+	float barY = -9.9f - last * ( 10.9f - 1.4f ) + 0.75f;
+	Wall( m, s, 1.2f, barY, 1.6f, barY + 0.25f );
+	s->exit = At( s, 0.0f, -11.5f );
 }
 
-static void StepTurn( Machine* m, MachineSection* s, bool active, float timeStep )
+// The middle of the jelly in this section, or false if there is none
+static bool JellyCenter( const Machine* m, const MachineSection* s, b2Vec2* center )
 {
-	(void)timeStep;
-	if ( active )
+	b2FluidParticles p = b2Fluid_GetParticles( m->fluid );
+	int jelly = b2Liquid_GetIndex( m->liquids[machine_jelly] );
+	b2Vec2 sum = b2Vec2_zero;
+	int count = 0;
+	for ( int i = 0; i < p.count; ++i )
 	{
-		// Straight down the middle of the ramps, and well below, to show the row the marble is coming to
-		b2Vec2 p = BodyLocal( s, m->baton );
-		Look( m, s, 0.5f * ( p.x + 3.3f ), p.y - 0.3f * m->def.viewHalfHeight, 1.0f );
+		if ( p.liquids[i] != jelly )
+		{
+			continue;
+		}
+		b2Vec2 q = Local( s, b2ToVec2( p.positions[i] ) );
+		if ( q.x > -1.0f && q.x < 12.0f && q.y > -13.0f && q.y < 2.0f )
+		{
+			sum = b2Add( sum, q );
+			count += 1;
+		}
 	}
+	if ( count == 0 )
+	{
+		return false;
+	}
+	*center = b2MulSV( 1.0f / (float)count, sum );
+	return true;
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Cradle: five balls on rods. The marble strikes the first and the last strikes the marble beside it.
-
-#define MACHINE_CRADLE_BALLS 5
-
-static void CreateCradle( Machine* m, MachineSection* s )
+static void StepJellyBall( Machine* m, MachineSection* s, bool active, float timeStep )
 {
-	Floor( m, s, 0.0f, 0.0f, 7.2f, 0.0f );
-	Floor( m, s, 7.2f, 0.0f, 10.0f, -0.5f );
-	Wall( m, s, 2.4f, 4.45f, 6.8f, 4.7f );
-	float radius = 0.4f, rod = 4.0f;
-	for ( int i = 0; i < MACHINE_CRADLE_BALLS; ++i )
+	if ( s->phase == 0 && Holds( s->sensors[0], m->baton ) )
 	{
-		// The body's origin is the pivot
-		b2BodyId ball = Body( m, s, b2_dynamicBody, 3.0f + 2.0f * radius * (float)i, 0.45f + rod, 0.0f );
-		b2Circle circle = { { 0.0f, -rod }, radius };
-		b2ShapeDef def = b2DefaultShapeDef();
-		def.material.restitution = 1.0f;
-		def.material.friction = 0.0f;
-		b2CreateCircleShape( ball, &def, &circle );
-
-		// The rod is only there to be seen
-		b2Polygon box = b2MakeOffsetBox( 0.03f, 0.5f * rod, (b2Vec2){ 0.0f, -0.5f * rod }, b2Rot_identity );
-		def.density = 0.01f;
-		def.filter.maskBits = 0;
-		b2CreatePolygonShape( ball, &def, &box );
-		Hinge( m, s, ball, false, 0.0f, 0.0f, 0.0f );
+		Advance( s );
 	}
-	float end = 3.0f + 2.0f * radius * (float)( MACHINE_CRADLE_BALLS - 1 ) + radius;
-	s->marble = Marble( m, s, end + m->def.marbleRadius + 0.02f, m->def.marbleRadius );
-	s->exit = At( s, 10.0f, -0.5f );
-}
-
-static void StepCradle( Machine* m, MachineSection* s, bool active, float timeStep )
-{
-	(void)timeStep;
-	if ( s->phase == 0 && active && Speed( s->marble ) > 0.3f )
+	else if ( s->phase == 1 )
+	{
+		b2Vec2 p = BodyLocal( s, s->parts[0] );
+		if ( SlideTo( s, s->parts[0], p.x, 1.8f, 2.0f, timeStep ) )
+		{
+			Advance( s );
+		}
+	}
+	else if ( s->phase == 2 && active && LiquidIn( m, s->sensors[1] ) > 0.15f )
 	{
 		PassBaton( m, s );
 	}
+	else if ( s->phase == 3 )
+	{
+		b2Vec2 p = BodyLocal( s, s->parts[1] );
+		SlideTo( s, s->parts[1], p.x, -12.5f, 2.0f, timeStep );
+	}
 
-	if ( active )
+	if ( active == false )
+	{
+		return;
+	}
+
+	b2Vec2 center;
+	if ( ( s->phase == 1 || s->phase == 2 ) && JellyCenter( m, s, &center ) )
+	{
+		// Straight down the middle of the ramps, and below the ball, to show the ramp it is coming to
+		Look( m, s, 0.5f * ( center.x + 5.6f ), center.y - 0.25f * m->def.viewHalfHeight, 1.0f );
+	}
+	else
 	{
 		Follow( m, s, m->baton, 1.0f );
 	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Jelly catapult: the marble's socket swings two trapdoors open. A block of dough lands on the floor and stays as it
-// lands. A block of jelly lands on the high end of a seesaw, whose low end throws a marble.
+// Cradle: the marble drops into a socket, whose sensor pulls the pin holding the first of five balls back. It swings
+// down into the others, and the last swings out across a gap into the next marble. The balls are the marble's size
+// and mass, and hang at its height, so that each blow is centre to centre and passes all of its motion on.
 
-#define MACHINE_SEESAW_LOW -0.5f
-#define MACHINE_SEESAW_HIGH -0.12f
+#define MACHINE_CRADLE_BALLS 5
+#define MACHINE_CRADLE_ROD 3.0f
+#define MACHINE_CRADLE_PULL 0.9f
 
-static void CreateJelly( Machine* m, MachineSection* s )
+static void CreateCradle( Machine* m, MachineSection* s )
 {
-	float spacing = m->def.fluid.particleSpacing;
-	Socket( m, s, 2.0f );
-	Wall( m, s, 2.9f, -3.3f, 3.2f, 0.6f );
-	Wall( m, s, 2.9f, -3.3f, 11.15f, -3.0f );
-	Wall( m, s, 5.6f, -3.0f, 5.8f, -1.8f );
+	float r = m->def.marbleRadius, rod = MACHINE_CRADLE_ROD, x0 = 5.0f;
+	s->sensors[0] = Socket( m, s, 1.5f );
+	Wall( m, s, 2.4f, -0.95f, 2.7f, 0.6f );
+	Floor( m, s, 2.7f, 0.0f, 9.6f, 0.0f );
+	Floor( m, s, 9.6f, 0.0f, 12.5f, -0.5f );
 
-	// Trapdoors hinged at their near ends, which are the bodies' origins
-	s->parts[0] = Body( m, s, b2_kinematicBody, 3.4f, 3.0f, 0.0f );
-	BoxOn( s->parts[0], s, 1.0f, 0.0f, 1.0f, 0.08f, 0.0f, 0.0f );
-	Spawn( m, s, machine_dough, 3.7f, 3.08f + spacing, 5.1f, 4.5f );
-	s->parts[1] = Body( m, s, b2_kinematicBody, 6.1f, 3.0f, 0.0f );
-	BoxOn( s->parts[1], s, 1.1f, 0.0f, 1.1f, 0.08f, 0.0f, 0.0f );
-	Spawn( m, s, machine_jelly, 6.4f, 3.08f + spacing, 8.0f, 4.7f );
+	float pivotY = r + 0.03f + rod;
+	Wall( m, s, x0 - 0.6f, pivotY, x0 + 2.0f * r * (float)( MACHINE_CRADLE_BALLS - 1 ) + 0.6f, pivotY + 0.25f );
+	for ( int i = 0; i < MACHINE_CRADLE_BALLS; ++i )
+	{
+		// The body's origin is the pivot. The first starts pulled back.
+		b2BodyId ball = Body( m, s, b2_dynamicBody, x0 + 2.0f * r * (float)i, pivotY, i == 0 ? -MACHINE_CRADLE_PULL : 0.0f );
+		b2Circle circle = { { 0.0f, -rod }, r };
+		b2ShapeDef def = b2DefaultShapeDef();
+		def.density = m->def.marbleDensity;
+		def.material.restitution = 1.0f;
+		def.material.friction = 0.0f;
+		b2CreateCircleShape( ball, &def, &circle );
 
-	// The seesaw stops short of level, so that its low end still slopes down and outward at the top of its throw
-	b2BodyId beam = Body( m, s, b2_dynamicBody, 8.6f, -1.5f, MACHINE_SEESAW_LOW );
-	BoxOn( beam, s, 0.0f, 0.0f, 2.6f, 0.1f, 0.0f, 1.0f );
-	Hinge( m, s, beam, true, MACHINE_SEESAW_LOW, MACHINE_SEESAW_HIGH, 0.0f );
-	s->parts[2] = beam;
+		// The rod is only there to be seen
+		b2Polygon box = b2MakeOffsetBox( 0.02f, 0.5f * rod, (b2Vec2){ 0.0f, -0.5f * rod }, b2Rot_identity );
+		def.density = 0.001f;
+		def.filter.maskBits = 0;
+		b2CreatePolygonShape( ball, &def, &box );
+		Hinge( m, s, ball, false, 0.0f, 0.0f, 0.0f );
+		if ( i == 0 )
+		{
+			s->parts[1] = ball;
+		}
+	}
 
-	// The marble rests on the low end against a wall the end rises above
-	Wall( m, s, 10.95f, -3.0f, 11.15f, -1.8f );
-	s->marble = Marble( m, s, 10.55f, -2.09f );
+	// The pin, just ahead of the held ball on its swing, and later pulled straight out from the pivot
+	float c = cosf( MACHINE_CRADLE_PULL ), sn = sinf( MACHINE_CRADLE_PULL );
+	b2Vec2 held = { x0 - rod * sn, pivotY - rod * c };
+	b2Vec2 pin = b2MulAdd( held, r + 0.07f, (b2Vec2){ c, -sn } );
+	s->parts[0] = Body( m, s, b2_kinematicBody, pin.x, pin.y, 0.0f );
+	BoxOn( s->parts[0], s, 0.0f, 0.0f, 0.06f, 0.06f, 0.0f, 0.0f );
 
-	// The way out, under a hood that turns a high throw back down
-	Floor( m, s, 11.15f, -1.8f, 15.0f, -2.5f );
-	Floor( m, s, 11.6f, 2.0f, 15.0f, -0.9f );
-	s->exit = At( s, 15.0f, -2.5f );
+	float end = x0 + 2.0f * r * (float)( MACHINE_CRADLE_BALLS - 1 ) + r;
+	s->marble = Marble( m, s, end + 0.5f + r, r );
+	s->sensors[1] = Sensor( m, s, end + 0.5f + 2.0f * r + 0.4f, -0.5f, 12.5f, 1.0f );
+	s->exit = At( s, 12.5f, -0.5f );
 }
 
-static void StepJelly( Machine* m, MachineSection* s, bool active, float timeStep )
+static void StepCradle( Machine* m, MachineSection* s, bool active, float timeStep )
 {
-	(void)timeStep;
-	if ( s->phase == 0 && InSocket( m, s, 2.0f ) )
+	if ( s->phase == 0 && Holds( s->sensors[0], m->baton ) )
 	{
-		b2Body_SetAngularVelocity( s->parts[0], -s->direction * 4.0f );
+		b2Body_SetAwake( s->parts[1], true );
 		Advance( s );
 	}
-	else if ( s->phase == 1 && s->clock > 0.8f )
+	else if ( s->phase == 1 )
 	{
-		b2Body_SetAngularVelocity( s->parts[1], -s->direction * 4.0f );
-		Advance( s );
+		float c = cosf( MACHINE_CRADLE_PULL ), sn = sinf( MACHINE_CRADLE_PULL );
+		b2Vec2 p = BodyLocal( s, s->parts[0] );
+		SlideTo( s, s->parts[0], p.x - 0.1f * sn, p.y - 0.1f * c, 3.0f, timeStep );
+		if ( s->clock > 0.3f )
+		{
+			b2Body_SetLinearVelocity( s->parts[0], b2Vec2_zero );
+			Advance( s );
+		}
 	}
-	else if ( s->phase == 2 && BodyLocal( s, s->marble ).x > 11.3f )
+	else if ( s->phase == 2 && active && Holds( s->sensors[1], s->marble ) )
 	{
 		PassBaton( m, s );
-	}
-
-	// A trapdoor stops once it hangs straight down
-	for ( int i = 0; i < 2; ++i )
-	{
-		if ( b2AbsFloat( b2Rot_GetAngle( b2Body_GetRotation( s->parts[i] ) ) ) > 0.5f * B2_PI && b2Body_GetAngularVelocity( s->parts[i] ) != 0.0f )
-		{
-			b2Body_SetAngularVelocity( s->parts[i], 0.0f );
-		}
 	}
 
 	if ( active == false )
@@ -684,6 +786,116 @@ static void StepJelly( Machine* m, MachineSection* s, bool active, float timeSte
 	if ( s->phase == 0 || s->phase == 3 )
 	{
 		Follow( m, s, m->baton, 1.0f );
+	}
+	else
+	{
+		Look( m, s, 6.5f, 1.8f, 0.7f );
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Dough and jelly: the marble's socket lowers a knife through a block of dough on a table, then the table's two
+// halves swing down and the two pieces fall into two buckets. Dough heals where it touches, so the knife stays down
+// until they have gone. A fluid sensor in each bucket waits for its piece; with both full, a trapdoor drops a block
+// of jelly on the high end of a seesaw, whose low end throws a marble.
+
+#define MACHINE_SEESAW_LOW -0.5f
+#define MACHINE_SEESAW_HIGH -0.12f
+
+static void CreateDough( Machine* m, MachineSection* s )
+{
+	float spacing = m->def.fluid.particleSpacing;
+	s->sensors[0] = Socket( m, s, 2.0f );
+	Wall( m, s, 2.9f, -3.3f, 3.2f, 0.6f );
+	Wall( m, s, 2.9f, -3.3f, 11.15f, -3.0f );
+
+	// Buckets, with a sensor in each
+	Wall( m, s, 4.3f, -3.0f, 4.5f, -1.6f );
+	Wall( m, s, 5.6f, -3.0f, 5.8f, -1.6f );
+	s->sensors[1] = Sensor( m, s, 3.2f, -3.0f, 4.3f, -1.6f );
+	s->sensors[2] = Sensor( m, s, 4.5f, -3.0f, 5.6f, -1.6f );
+
+	// The table: two kinematic doors hinged at their outer ends, which are the bodies' origins, between low walls
+	Wall( m, s, 3.1f, 2.9f, 3.3f, 4.2f );
+	Wall( m, s, 5.5f, 2.9f, 5.7f, 4.2f );
+	s->parts[0] = Body( m, s, b2_kinematicBody, 3.3f, 3.0f, 0.0f );
+	BoxOn( s->parts[0], s, 0.55f, 0.0f, 0.55f, 0.08f, 0.0f, 0.0f );
+	s->parts[1] = Body( m, s, b2_kinematicBody, 5.5f, 3.0f, 0.0f );
+	BoxOn( s->parts[1], s, -0.55f, 0.0f, 0.55f, 0.08f, 0.0f, 0.0f );
+	Spawn( m, s, machine_dough, 3.3f + spacing, 3.08f + spacing, 5.5f - spacing, 4.0f );
+
+	// The knife, above the dough
+	s->parts[2] = Body( m, s, b2_kinematicBody, 4.4f, 5.3f, 0.0f );
+	BoxOn( s->parts[2], s, 0.0f, 0.0f, 0.03f, 0.7f, 0.0f, 0.0f );
+
+	// The jelly's trapdoor
+	s->parts[3] = Body( m, s, b2_kinematicBody, 6.1f, 3.0f, 0.0f );
+	BoxOn( s->parts[3], s, 1.1f, 0.0f, 1.1f, 0.08f, 0.0f, 0.0f );
+	Spawn( m, s, machine_jelly, 6.4f, 3.08f + spacing, 8.0f, 4.7f );
+
+	// The seesaw stops short of level, so that its low end still slopes down and outward at the top of its throw
+	b2BodyId beam = Body( m, s, b2_dynamicBody, 8.6f, -1.5f, MACHINE_SEESAW_LOW );
+	BoxOn( beam, s, 0.0f, 0.0f, 2.6f, 0.1f, 0.0f, 1.0f );
+	Hinge( m, s, beam, true, MACHINE_SEESAW_LOW, MACHINE_SEESAW_HIGH, 0.0f );
+	s->parts[4] = beam;
+
+	// The marble rests on the low end against a wall the end rises above
+	Wall( m, s, 10.95f, -3.0f, 11.15f, -1.8f );
+	s->marble = Marble( m, s, 10.55f, -2.09f );
+	s->sensors[3] = Sensor( m, s, 11.4f, -2.6f, 15.0f, 0.0f );
+
+	// The way out, under a hood that turns a high throw back down
+	Floor( m, s, 11.15f, -1.8f, 15.0f, -2.5f );
+	Floor( m, s, 11.6f, 2.0f, 15.0f, -0.9f );
+	s->exit = At( s, 15.0f, -2.5f );
+}
+
+static void StepDough( Machine* m, MachineSection* s, bool active, float timeStep )
+{
+	if ( s->phase == 0 && Holds( s->sensors[0], m->baton ) )
+	{
+		Advance( s );
+	}
+	else if ( s->phase == 1 && SlideTo( s, s->parts[2], 4.4f, 3.08f + 0.7f, 0.6f, timeStep ) )
+	{
+		Advance( s );
+	}
+	else if ( s->phase == 2 )
+	{
+		SwingOpen( s, s->parts[0], 1.0f );
+		SwingOpen( s, s->parts[1], -1.0f );
+		if ( LiquidIn( m, s->sensors[1] ) > 0.3f && LiquidIn( m, s->sensors[2] ) > 0.3f )
+		{
+			Advance( s );
+		}
+	}
+	else if ( s->phase == 3 )
+	{
+		SwingOpen( s, s->parts[3], 1.0f );
+		SlideTo( s, s->parts[2], 4.4f, 5.3f, 1.0f, timeStep );
+		if ( active && Holds( s->sensors[3], s->marble ) )
+		{
+			PassBaton( m, s );
+		}
+	}
+	else if ( s->phase == 4 )
+	{
+		SwingOpen( s, s->parts[3], 1.0f );
+		SlideTo( s, s->parts[2], 4.4f, 5.3f, 1.0f, timeStep );
+	}
+
+	if ( active == false )
+	{
+		return;
+	}
+
+	if ( s->phase == 0 || s->phase == 4 )
+	{
+		Follow( m, s, m->baton, 1.0f );
+	}
+	else if ( s->phase < 3 )
+	{
+		Look( m, s, 4.6f, 1.0f, 0.75f );
 	}
 	else
 	{
@@ -700,7 +912,7 @@ static void StepJelly( Machine* m, MachineSection* s, bool active, float timeSte
 static void CreateHoney( Machine* m, MachineSection* s )
 {
 	float spacing = m->def.fluid.particleSpacing;
-	Socket( m, s, 2.0f );
+	s->sensors[0] = Socket( m, s, 2.0f );
 	Wall( m, s, 2.9f, -1.9f, 3.2f, 0.6f );
 	Wall( m, s, 2.9f, -1.9f, 8.5f, -1.6f );
 	Wall( m, s, 8.2f, -1.6f, 8.5f, -0.7f );
@@ -727,12 +939,13 @@ static void CreateHoney( Machine* m, MachineSection* s )
 	// The marble's slope runs under the tooth
 	Floor( m, s, 8.5f, -1.3f, 14.0f, -2.0f );
 	s->marble = Marble( m, s, 9.15f, -1.38f + m->def.marbleRadius );
+	s->sensors[1] = Sensor( m, s, 10.4f, -2.2f, 12.0f, -0.6f );
 	s->exit = At( s, 14.0f, -2.0f );
 }
 
 static void StepHoney( Machine* m, MachineSection* s, bool active, float timeStep )
 {
-	if ( s->phase == 0 && InSocket( m, s, 2.0f ) )
+	if ( s->phase == 0 && Holds( s->sensors[0], m->baton ) )
 	{
 		Advance( s );
 	}
@@ -740,7 +953,7 @@ static void StepHoney( Machine* m, MachineSection* s, bool active, float timeSte
 	{
 		Advance( s );
 	}
-	else if ( s->phase == 2 && BodyLocal( s, s->marble ).x > 10.3f )
+	else if ( s->phase == 2 && active && Holds( s->sensors[1], s->marble ) )
 	{
 		PassBaton( m, s );
 	}
@@ -761,6 +974,57 @@ static void StepHoney( Machine* m, MachineSection* s, bool active, float timeSte
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Peg board: the marble falls through staggered pegs and two free spinners into a ramp that takes it to the row
+// below, which runs the other way
+
+static void Spinner( Machine* m, const MachineSection* s, float x, float y )
+{
+	b2BodyId spinner = Body( m, s, b2_dynamicBody, x, y, 0.3f );
+	BoxOn( spinner, s, 0.0f, 0.0f, 0.65f, 0.05f, 0.0f, 0.5f );
+	BoxOn( spinner, s, 0.0f, 0.0f, 0.05f, 0.65f, 0.0f, 0.5f );
+	Hinge( m, s, spinner, false, 0.0f, 0.0f, 0.02f );
+}
+
+static void CreatePegs( Machine* m, MachineSection* s )
+{
+	Floor( m, s, 0.0f, 0.0f, 1.4f, 0.0f );
+	Wall( m, s, 1.3f, -8.3f, 1.6f, -0.3f );
+	Wall( m, s, 7.6f, -9.0f, 7.9f, 1.5f );
+
+	b2Vec2 spinners[2] = { { 3.4f, -3.6f }, { 5.7f, -5.6f } };
+	for ( int row = 0; row < 9; ++row )
+	{
+		float y = -1.4f - 0.8f * (float)row;
+		// Kept more than a marble clear of the walls: a peg closer than that wedged the marble against the wall
+		for ( float x = 1.6f + ( row % 2 == 0 ? 0.9f : 1.35f ); x < 6.8f; x += 0.9f )
+		{
+			bool clear = b2Distance( (b2Vec2){ x, y }, spinners[0] ) > 0.85f && b2Distance( (b2Vec2){ x, y }, spinners[1] ) > 0.85f;
+			if ( clear )
+			{
+				Peg( m, s, x, y, 0.1f );
+			}
+		}
+	}
+	Spinner( m, s, spinners[0].x, spinners[0].y );
+	Spinner( m, s, spinners[1].x, spinners[1].y );
+
+	// The ramp runs out under the near wall
+	Floor( m, s, 7.6f, -8.6f, 0.0f, -9.6f );
+	s->exit = At( s, 0.0f, -9.6f );
+}
+
+static void StepPegs( Machine* m, MachineSection* s, bool active, float timeStep )
+{
+	(void)timeStep;
+	if ( active )
+	{
+		// Over the board, low enough to show where the marble comes out
+		b2Vec2 p = BodyLocal( s, m->baton );
+		Look( m, s, 0.5f * ( p.x + 4.6f ), b2MinFloat( p.y, 0.0f ) - 0.2f * m->def.viewHalfHeight, 1.0f );
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Mercury lift: the marble's socket lifts the gate of a flask of mercury, which runs into a shaft with a stone ball
 // at the bottom. Stone floats high on mercury, so the ball rises with it and rolls out over the shaft's low wall. A
 // steel ball floated too, but so low that it stayed behind the wall once the mercury stopped running over it.
@@ -768,7 +1032,7 @@ static void StepHoney( Machine* m, MachineSection* s, bool active, float timeSte
 static void CreateMercury( Machine* m, MachineSection* s )
 {
 	float spacing = m->def.fluid.particleSpacing;
-	Socket( m, s, 2.0f );
+	s->sensors[0] = Socket( m, s, 2.0f );
 
 	// Flask
 	Wall( m, s, 2.9f, -0.95f, 3.6f, 0.6f );
@@ -789,6 +1053,7 @@ static void CreateMercury( Machine* m, MachineSection* s )
 	Wall( m, s, 9.2f, -0.2f, 9.6f, 3.8f );
 	Wall( m, s, 8.55f, -0.3f, 8.75f, 1.6f );
 	s->marble = Ball( m, s, 8.65f, -4.0f + m->def.marbleRadius, m->def.marbleRadius, MACHINE_STONE, 0.1f );
+	s->sensors[1] = Sensor( m, s, 9.65f, -1.8f, 11.0f, 0.0f );
 
 	Bars( m, s, 9.6f, -1.2f, 13.5f, -2.0f );
 	Wall( m, s, 9.6f, -3.8f, 13.5f, -3.5f );
@@ -800,7 +1065,7 @@ static void StepMercury( Machine* m, MachineSection* s, bool active, float timeS
 {
 	// The gate opens only a little: the ball rises slowly through the mercury, and the shaft has to be still running
 	// over when it gets to the top, for the flow to carry it out
-	if ( s->phase == 0 && InSocket( m, s, 2.0f ) )
+	if ( s->phase == 0 && Holds( s->sensors[0], m->baton ) )
 	{
 		Advance( s );
 	}
@@ -808,7 +1073,7 @@ static void StepMercury( Machine* m, MachineSection* s, bool active, float timeS
 	{
 		Advance( s );
 	}
-	else if ( s->phase == 2 && BodyLocal( s, s->marble ).x > 9.4f )
+	else if ( s->phase == 2 && active && Holds( s->sensors[1], s->marble ) )
 	{
 		PassBaton( m, s );
 	}
@@ -829,8 +1094,8 @@ static void StepMercury( Machine* m, MachineSection* s, bool active, float timeS
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Finale: a pool of oil over water with crates afloat between them. The stone ball sinks to the detonator on the
-// floor, and the pool goes up.
+// Finale: a pool of oil over water with crates afloat between them. The stone ball sinks, rolls down the pool's
+// sloping floor to the sensor at its foot, and the pool goes up.
 
 static void CreateFinale( Machine* m, MachineSection* s )
 {
@@ -839,14 +1104,18 @@ static void CreateFinale( Machine* m, MachineSection* s )
 	Wall( m, s, 2.6f, -6.0f, 3.0f, -0.3f );
 	Wall( m, s, 2.6f, -6.3f, 15.4f, -6.0f );
 	Wall( m, s, 15.0f, -6.0f, 15.4f, 1.0f );
-	Wall( m, s, 8.5f, -6.0f, 9.5f, -5.85f );
-	Spawn( m, s, machine_water, 3.0f + spacing, -6.0f + spacing, 15.0f - spacing, -3.6f );
-	Spawn( m, s, machine_oil, 3.0f + spacing, -3.6f + spacing, 15.0f - spacing, -2.4f );
+	// The floor slopes to the sensor, which covers the lower half of it. The ball rolls very slowly under the liquid:
+	// in the whole machine it took 80 s to roll 1.4 m, so a sensor only at the foot waited for minutes.
+	Floor( m, s, 3.0f, -3.8f, 8.6f, -6.0f );
+	Floor( m, s, 9.4f, -6.0f, 15.0f, -3.8f );
+	s->sensors[0] = Sensor( m, s, 6.0f, -6.0f, 12.0f, -4.6f );
+	Spawn( m, s, machine_water, 3.0f + spacing, -3.8f + spacing, 15.0f - spacing, -2.4f );
+	Spawn( m, s, machine_oil, 3.0f + spacing, -2.4f + spacing, 15.0f - spacing, -1.5f );
 
 	static const float densities[] = { 0.8f, 0.3f, 0.8f, 0.45f, 0.8f };
 	for ( int i = 0; i < 5; ++i )
 	{
-		b2BodyId crate = Body( m, s, b2_dynamicBody, 6.0f + 1.8f * (float)i, -1.7f, 0.0f );
+		b2BodyId crate = Body( m, s, b2_dynamicBody, 6.0f + 1.8f * (float)i, -1.1f, 0.0f );
 		BoxOn( crate, s, 0.0f, 0.0f, 0.4f, 0.4f, 0.0f, densities[i] );
 	}
 	s->exit = At( s, 15.4f, 0.0f );
@@ -856,7 +1125,7 @@ static void StepFinale( Machine* m, MachineSection* s, bool active, float timeSt
 {
 	(void)timeStep;
 	b2Vec2 p = BodyLocal( s, m->baton );
-	if ( s->phase == 0 && active && p.y < -5.3f )
+	if ( s->phase == 0 && active && Holds( s->sensors[0], m->baton ) )
 	{
 		b2ExplosionDef explosion = b2DefaultExplosionDef();
 		explosion.position = b2Body_GetPosition( m->baton );
@@ -902,27 +1171,32 @@ static void StepFinale( Machine* m, MachineSection* s, bool active, float timeSt
 typedef void CreateFcn( Machine* m, MachineSection* s );
 typedef void StepFcn( Machine* m, MachineSection* s, bool active, float timeStep );
 
-static CreateFcn* const createFcns[section_typeCount] = { CreateStart, CreateSluice, CreateDominoes, CreateFerry, CreateTurn,
-														  CreateCradle, CreateJelly, CreateHoney, CreateMercury, CreateFinale };
-static StepFcn* const stepFcns[section_typeCount] = { StepStart, StepSluice, StepDominoes, StepFerry, StepTurn,
-													  StepCradle, StepJelly, StepHoney, StepMercury, StepFinale };
+static CreateFcn* const createFcns[section_typeCount] = { CreateStart,	   CreateSluice, CreateDominoes, CreateFerry,	CreateJellyBall, CreateCradle,
+														  CreateDough,	   CreateHoney,	 CreatePegs,	 CreateMercury, CreateFinale };
+static StepFcn* const stepFcns[section_typeCount] = { StepStart,	 StepSluice, StepDominoes, StepFerry,	StepJellyBall, StepCradle,
+													  StepDough,	 StepHoney,	 StepPegs,	   StepMercury, StepFinale };
 
-static MachineSection* AddSection( Machine* m, MachineSectionType type, int count )
+static MachineSection* AddSection( Machine* m, MachineSectionType type )
 {
 	MachineSection* s = m->sections + m->sectionCount;
 	MachineSection* before = m->sectionCount > 0 ? s - 1 : NULL;
 	m->sectionCount += 1;
 	*s = (MachineSection){ 0 };
 	s->type = type;
-	s->count = count;
 	s->origin = before != NULL ? before->exit : b2Vec2_zero;
 	s->direction = before != NULL ? before->direction : 1.0f;
-	if ( before != NULL && before->type == section_turn )
+	if ( before != NULL && Reverses( before->type ) )
 	{
 		s->direction = -s->direction;
 	}
 	s->marble = b2_nullBodyId;
 	createFcns[type]( m, s );
+
+	// The marble arriving here makes this the active section
+	if ( before != NULL )
+	{
+		s->entry = Sensor( m, s, 0.0f, -0.8f, 1.2f, 1.5f );
+	}
 	return s;
 }
 
@@ -944,27 +1218,27 @@ void CreateMachine( Machine* machine, b2WorldId worldId, const MachineDef* def )
 		m->liquids[i] = b2CreateLiquid( m->fluid, def->liquids + i );
 	}
 
-	AddSection( m, section_start, 0 );
+	AddSection( m, section_start );
 	if ( def->only < section_typeCount )
 	{
 		// One section, and a tray to catch what it sends on
-		MachineSection* s = AddSection( m, def->only, 4 );
-		MachineSection tray = { .origin = s->exit, .direction = s->type == section_turn ? -s->direction : s->direction };
+		MachineSection* s = AddSection( m, def->only );
+		MachineSection tray = { .origin = s->exit, .direction = Reverses( s->type ) ? -s->direction : s->direction };
 		Floor( m, &tray, 0.0f, 0.0f, 4.0f, -0.2f );
 		Wall( m, &tray, 4.0f, -0.5f, 4.4f, 1.0f );
 	}
 	else
 	{
-		AddSection( m, section_sluice, 0 );
-		AddSection( m, section_dominoes, 0 );
-		AddSection( m, section_ferry, 0 );
-		AddSection( m, section_turn, 4 );
-		AddSection( m, section_cradle, 0 );
-		AddSection( m, section_jelly, 0 );
-		AddSection( m, section_honey, 0 );
-		AddSection( m, section_turn, 4 );
-		AddSection( m, section_mercury, 0 );
-		AddSection( m, section_finale, 0 );
+		AddSection( m, section_sluice );
+		AddSection( m, section_dominoes );
+		AddSection( m, section_ferry );
+		AddSection( m, section_jellyBall );
+		AddSection( m, section_cradle );
+		AddSection( m, section_jelly );
+		AddSection( m, section_honey );
+		AddSection( m, section_pegs );
+		AddSection( m, section_mercury );
+		AddSection( m, section_finale );
 	}
 
 	StepMachine( m, 0.0f );
@@ -977,14 +1251,9 @@ void StepMachine( Machine* machine, float timeStep )
 	Machine* m = machine;
 	m->time += timeStep;
 
-	// The marble has reached the next section once it is over the start of its floor
-	if ( m->active + 1 < m->sectionCount )
+	if ( m->active + 1 < m->sectionCount && Holds( m->sections[m->active + 1].entry, m->baton ) )
 	{
-		b2Vec2 p = BodyLocal( m->sections + m->active + 1, m->baton );
-		if ( Inside( p, -0.3f, -1.5f, 4.0f, 3.0f ) )
-		{
-			m->active += 1;
-		}
+		m->active += 1;
 	}
 
 	for ( int i = 0; i < m->sectionCount; ++i )
@@ -998,7 +1267,7 @@ void StepMachine( Machine* machine, float timeStep )
 	MachineSection* last = m->sections + m->sectionCount - 1;
 	if ( last->type != section_finale )
 	{
-		float direction = last->type == section_turn ? -last->direction : last->direction;
+		float direction = Reverses( last->type ) ? -last->direction : last->direction;
 		float past = direction * ( b2ToVec2( b2Body_GetPosition( m->baton ) ).x - last->exit.x );
 		m->finishedFor = past > 0.0f && m->active == m->sectionCount - 1 ? m->finishedFor + timeStep : 0.0f;
 		m->finished = m->finishedFor > 4.0f;
