@@ -83,7 +83,8 @@ typedef struct b2LiquidDef
 	/// up walls.
 	float adhesion;
 	/// Share of a particle's sliding speed along a shape lost in each substep it touches it, from 0, free slip, to
-	/// 1, no slip. It does not grow with how hard the particle is pressed.
+	/// 1, no slip. It does not grow with how hard the particle is pressed. Values above 0.98 are not supported: near no
+	/// slip, liquid with springs around a moving body can gain energy and throw the body about.
 	float friction;
 	/// Scale on the world's gravity for this liquid. Zero makes it weightless.
 	float gravityScale;
@@ -94,11 +95,19 @@ typedef struct b2LiquidDef
 	/// towards the interaction radius, and goes once it gets there.
 	float springStiffness;
 	/// How fast a spring's rest length follows its length once stretched or squeezed past the yield ratio, per second.
-	/// Zero keeps every spring's rest length, which makes an elastic solid; higher values let the liquid flow and
-	/// keep its new shape, as dough or clay does.
+	/// Zero keeps every spring's rest length; with formSpringsAfterSpawn off that makes an elastic solid, which pulls
+	/// back to its spawn shape. Higher values let the liquid flow and keep its new shape, as dough or clay does.
 	float plasticity;
 	/// Stretch or squeeze a spring takes, as a share of its rest length, before plasticity changes its rest length
 	float yieldRatio;
+	/// Whether springs form for as long as the liquid lives, between any two of its particles that come within the
+	/// interaction radius, at their distance then. With it on, a liquid keeps any change of shape that lasts long
+	/// enough for new springs to form, even with no plasticity, and heals where it was torn or cut. Without, a particle
+	/// forms springs only in the substep it is first moved in, to every neighbour of its liquid, and those neighbours
+	/// take springs only from particles new themselves: a body made of springs at its spawn, which a spawn touching it,
+	/// or the parts a particle splits into, join where they are. With no plasticity it then always pulls back to its
+	/// spawn shape, and a spring that goes is gone for good.
+	bool formSpringsAfterSpawn;
 
 	/// What this liquid is, as category bits, and what it collides with, as mask bits, as b2Filter has for shapes. A
 	/// shape and a liquid collide when each one's mask includes the other's category. A shape the liquid does not

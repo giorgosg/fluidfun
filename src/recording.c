@@ -559,6 +559,7 @@ void b2RecW_LIQUIDDEF( b2RecBuffer* buf, b2LiquidDef v )
 	b2RecW_F32( buf, v.springStiffness );
 	b2RecW_F32( buf, v.plasticity );
 	b2RecW_F32( buf, v.yieldRatio );
+	b2RecW_BOOL( buf, v.formSpringsAfterSpawn );
 	b2RecW_U64( buf, v.categoryBits );
 	b2RecW_U64( buf, v.maskBits );
 	const b2LiquidTuning* t = &v.tuning;

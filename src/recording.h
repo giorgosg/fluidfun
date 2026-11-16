@@ -55,7 +55,7 @@ typedef struct b2World b2World;
 // Box2D may give a format of its own. 'FF' and the fork's format number, which counts changes to the fluid's records
 // and snapshot section. A file with zero here was written by Box2D itself, has no fluid records, and loads as before;
 // any other value refuses to load. Box2D's own reader ignores the field, and skips the fluid's records as unknown.
-#define B2_REC_FORK_FLUIDFUN 0x46460002u
+#define B2_REC_FORK_FLUIDFUN 0x46460003u
 // The one opcode the fluid's records go out under, each with a subop from recording_fluid_ops.inl first
 #define B2_REC_OP_FLUID 0xFE
 

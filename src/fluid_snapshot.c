@@ -29,7 +29,7 @@
 #include "recording.h"
 
 #define B2F_SNAP_MAGIC 0x444C4646u // 'FFLD'
-#define B2F_SNAP_VERSION 2u
+#define B2F_SNAP_VERSION 3u
 
 // The structs written whole. A change to any of them changes this, and an image of another layout is refused.
 static uint32_t FluidLayoutHash( void )
@@ -130,8 +130,9 @@ void b2fSerializeFluid( const b2World* world, b2RecBuffer* buf )
 		for ( int i = 0; i < f->count; ++i )
 		{
 			const b2fSprings* s = f->springs + i;
-			uint8_t count = (uint8_t)s->count;
-			W( buf, &count, 1 );
+			// The top bit says whether the particle has formed its springs (b2LiquidDef::formSpringsAfterSpawn)
+			uint8_t count = (uint8_t)s->count, head = (uint8_t)( count | ( s->formed ? 0x80u : 0u ) );
+			W( buf, &head, 1 );
 			W( buf, s->id, (size_t)count * sizeof( int ) );
 			W( buf, s->rest, (size_t)count * sizeof( float ) );
 		}
@@ -333,6 +334,8 @@ bool b2fDeserializeFluid( b2World* world, const uint8_t* data, int size, int* cu
 			b2fSprings* s = f->springs + i;
 			uint8_t springs = 0;
 			R( r, &springs, 1 );
+			s->formed = ( springs & 0x80u ) != 0;
+			springs = (uint8_t)( springs & 0x7Fu );
 			if ( springs > B2F_SPRINGS_PER_PARTICLE )
 			{
 				r->ok = false;
@@ -468,6 +471,7 @@ uint64_t b2fHashFluid( const b2World* world, uint64_t hash, bool deep )
 		{
 			const b2fSprings* s = f->springs + i;
 			hash = MixBits( hash, &s->count, sizeof( int ) );
+			hash = MixBits( hash, &s->formed, sizeof( bool ) );
 			hash = MixBits( hash, s->id, (size_t)s->count * sizeof( int ) );
 			hash = MixBits( hash, s->rest, (size_t)s->count * sizeof( float ) );
 		}

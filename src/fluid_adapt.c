@@ -713,10 +713,12 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 			{
 				b2fCopyParticle( f, index, i );
 				f->id[index] = f->nextParticleId++;
-				// A new particle holds no springs. Its parent's partners hold theirs to the parent's id.
+				// A new particle holds no springs. Its parent's partners hold theirs to the parent's id. It forms its own
+				// in its first substep, in a liquid without formSpringsAfterSpawn too.
 				if ( f->springs != NULL )
 				{
 					f->springs[index].count = 0;
+					f->springs[index].formed = false;
 				}
 			}
 			bool centre = children > 4 && c == children - 1;

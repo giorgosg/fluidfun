@@ -106,10 +106,13 @@ static void AddSprings( b2fFluid* f, int i )
 	// which are more than it can hold springs to
 	int n = f->pairCount[i] >= 0 ? f->pairCount[i] : B2F_PAIRS_PER_PARTICLE;
 	const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+	// A liquid without formSpringsAfterSpawn forms springs only where one end is new. Both ends read the flags the
+	// last substep left, so they agree.
+	bool forming = f->liquids[f->liquid[i]].def.formSpringsAfterSpawn || sp->formed == false;
 	for ( int p = 0; p < n && sp->count < B2F_SPRINGS_PER_PARTICLE; ++p )
 	{
 		int j = pairs[p].j, id = f->id[j];
-		if ( f->liquid[j] != f->liquid[i] || f->asleep[j] != 0 )
+		if ( f->liquid[j] != f->liquid[i] || f->asleep[j] != 0 || ( forming == false && f->springs[j].formed ) )
 		{
 			continue;
 		}
@@ -513,6 +516,10 @@ static void VelocityTask( int start, int end, int worker, void* context )
 		}
 		f->vx[i] = dx * inv;
 		f->vy[i] = dy * inv;
+		if ( f->springs != NULL )
+		{
+			f->springs[i].formed = true;
+		}
 
 		// Slow for B2_TIME_TO_SLEEP, by its velocity smoothed over B2F_CALM_TIME, and touching no awake body, it falls
 		// asleep where it is, or with springs, once all its group is ready too (b2fSpringGroups)
