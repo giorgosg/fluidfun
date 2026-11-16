@@ -487,7 +487,7 @@ static void VelocityTask( int start, int end, int worker, void* context )
 	{
 		if ( f->asleep[i] != 0 )
 		{
-			f->asleep[i] &= (unsigned char)~B2F_ASLEEP_NEW;
+			f->asleep[i] = (unsigned char)( f->asleep[i] & ~B2F_ASLEEP_NEW );
 			if ( f->wake[i] & B2F_WAKE_NOW )
 			{
 				b2fWakeParticle( f, i );
