@@ -1758,7 +1758,7 @@ static int FluidMemory( void )
 	ENSURE( bodyBegins > 0 );
 	ENSURE( b2Fluid_GetSensorArea( fluidId, sensorId ) > 0.0f );
 
-	// Each particle of room takes about 820 bytes with springs, as b2FluidDef::maxCapacity says
+	// Each particle of room takes about 840 bytes with springs, as b2FluidDef::maxCapacity says
 	size_t withFluid = b2GetByteCount();
 	ENSURE( withFluid - worldOnly > (size_t)b2Fluid_GetCapacity( fluidId ) * 800 );
 
@@ -2434,6 +2434,159 @@ static int FluidLengthUnits( void )
 	return 0;
 }
 
+// Still liquid falls asleep, and a body resting in it with it; a crate dropped in wakes both, and the run is the same
+// at any worker count
+typedef struct SleepRun
+{
+	int asleepAt, crateAsleepAt, wokeAt, restWoke;
+	bool heldStill, zeroVelocity, settingsWake;
+	uint64_t hash;
+} SleepRun;
+
+static int CountAsleep( b2FluidId fluidId )
+{
+	b2FluidParticles p = b2Fluid_GetParticles( fluidId );
+	int asleep = 0;
+	for ( int i = 0; i < p.count; ++i )
+	{
+		asleep += p.asleep[i] != 0 ? 1 : 0;
+	}
+	return asleep;
+}
+
+static SleepRun RunSleep( int workerCount )
+{
+	SleepRun run = { -1, -1, -1, -1, false, true, false, 14695981039346656037ull };
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.workerCount = workerCount;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon box = b2MakeOffsetBox( 2.0f, 0.5f, ( b2Vec2 ){ 0.0f, -0.5f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+	box = b2MakeOffsetBox( 0.5f, 1.5f, ( b2Vec2 ){ -2.0f, 1.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+	box = b2MakeOffsetBox( 0.5f, 1.5f, ( b2Vec2 ){ 2.0f, 1.0f }, b2Rot_identity );
+	b2CreatePolygonShape( groundId, &shapeDef, &box );
+
+	// A heavy crate on the floor, under the liquid
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ 0.0f, 0.2f };
+	b2BodyId restId = b2CreateBody( worldId, &bodyDef );
+	shapeDef.density = 2.0f;
+	box = b2MakeBox( 0.2f, 0.2f );
+	b2CreatePolygonShape( restId, &shapeDef, &box );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	b2FluidId fluidId = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( fluidId, &water );
+	// Round the crate, which it would throw out of the tank if spawned inside it
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -1.45f, 0.05f }, ( b2Pos ){ -0.25f, 0.6f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ 0.25f, 0.05f }, ( b2Pos ){ 1.45f, 0.6f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -0.2f, 0.45f }, ( b2Pos ){ 0.2f, 0.6f }, b2Vec2_zero );
+
+	b2BodyId dropId = b2_nullBodyId;
+	b2Pos* held = NULL;
+	int heldCount = 0, frame = 0;
+	for ( ; frame < 900; ++frame )
+	{
+		b2World_Step( worldId, 1.0f / 60.0f, 4 );
+		int count = b2Fluid_GetParticleCount( fluidId ), asleep = CountAsleep( fluidId );
+		if ( run.asleepAt < 0 && asleep == count )
+		{
+			run.asleepAt = frame;
+		}
+		if ( run.crateAsleepAt < 0 && b2Body_IsAwake( restId ) == false )
+		{
+			run.crateAsleepAt = frame;
+		}
+
+		// Asleep, the liquid holds still at zero velocity
+		b2FluidParticles p = b2Fluid_GetParticles( fluidId );
+		for ( int i = 0; i < p.count; ++i )
+		{
+			run.zeroVelocity = run.zeroVelocity && ( p.asleep[i] == 0 || ( p.velocitiesX[i] == 0.0f && p.velocitiesY[i] == 0.0f ) );
+		}
+		if ( run.asleepAt >= 0 && frame == run.asleepAt + 1 )
+		{
+			heldCount = p.count;
+			held = malloc( (size_t)heldCount * sizeof( b2Pos ) );
+			memcpy( held, p.positions, (size_t)heldCount * sizeof( b2Pos ) );
+		}
+		if ( run.asleepAt >= 0 && frame == run.asleepAt + 31 )
+		{
+			run.heldStill = heldCount == p.count && memcmp( held, p.positions, (size_t)heldCount * sizeof( b2Pos ) ) == 0;
+
+			// A crate let go above the pool
+			bodyDef.position = ( b2Pos ){ 0.5f, 1.4f };
+			dropId = b2CreateBody( worldId, &bodyDef );
+			shapeDef.density = 0.5f;
+			b2CreatePolygonShape( dropId, &shapeDef, &box );
+		}
+		if ( B2_IS_NON_NULL( dropId ) && run.wokeAt < 0 && asleep < count / 2 )
+		{
+			run.wokeAt = frame;
+		}
+		if ( B2_IS_NON_NULL( dropId ) && run.restWoke < 0 && b2Body_IsAwake( restId ) )
+		{
+			run.restWoke = frame;
+		}
+		if ( run.wokeAt >= 0 && run.restWoke >= 0 && frame > run.wokeAt + 30 )
+		{
+			break;
+		}
+	}
+	free( held );
+
+	b2FluidParticles p = b2Fluid_GetParticles( fluidId );
+	for ( int i = 0; i < p.count; ++i )
+	{
+		const unsigned char* bytes = (const unsigned char*)( p.positions + i );
+		for ( size_t k = 0; k < sizeof( b2Pos ); ++k )
+		{
+			run.hash = ( run.hash ^ bytes[k] ) * 1099511628211ull;
+		}
+		run.hash = ( run.hash ^ p.asleep[i] ) * 1099511628211ull;
+	}
+
+	// Turning sleep off wakes the liquid, and so do the world's sleep and gravity
+	b2Fluid_EnableSleep( fluidId, false );
+	bool off = CountAsleep( fluidId ) == 0 && b2Fluid_IsSleepEnabled( fluidId ) == false;
+	b2Fluid_EnableSleep( fluidId, true );
+	run.settingsWake = off;
+	b2fFluid* f = b2GetWorldFromId( worldId )->fluid;
+	memset( f->asleep, 1, (size_t)f->count );
+	b2World_EnableSleeping( worldId, false );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	run.settingsWake = run.settingsWake && CountAsleep( fluidId ) == 0;
+	b2World_EnableSleeping( worldId, true );
+	memset( f->asleep, 1, (size_t)f->count );
+	b2World_SetGravity( worldId, ( b2Vec2 ){ 0.0f, -9.0f } );
+	b2World_Step( worldId, 1.0f / 60.0f, 4 );
+	run.settingsWake = run.settingsWake && CountAsleep( fluidId ) == 0;
+
+	b2DestroyWorld( worldId );
+	return run;
+}
+
+static int FluidSleep( void )
+{
+	SleepRun one = RunSleep( 1 );
+	ENSURE( one.asleepAt > 0 && one.asleepAt < 840 );
+	ENSURE( one.crateAsleepAt > 0 && one.crateAsleepAt <= one.asleepAt + 30 );
+	ENSURE( one.heldStill && one.zeroVelocity );
+	ENSURE( one.wokeAt > one.asleepAt + 31 && one.wokeAt < one.asleepAt + 120 );
+	ENSURE( one.restWoke > one.asleepAt + 31 && one.restWoke < one.asleepAt + 150 );
+	ENSURE( one.settingsWake );
+
+	SleepRun three = RunSleep( 3 );
+	ENSURE( three.asleepAt == one.asleepAt && three.wokeAt == one.wokeAt && three.restWoke == one.restWoke );
+	ENSURE( three.hash == one.hash );
+	return 0;
+}
+
 int FluidTest( void )
 {
 	RUN_SUBTEST( FluidLifetime );
@@ -2456,5 +2609,6 @@ int FluidTest( void )
 	RUN_SUBTEST( FluidRegions );
 	RUN_SUBTEST( FluidEmitterOnBody );
 	RUN_SUBTEST( FluidLengthUnits );
+	RUN_SUBTEST( FluidSleep );
 	return 0;
 }

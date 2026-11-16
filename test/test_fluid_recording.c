@@ -461,6 +461,122 @@ static int NoFluid( void )
 	return 0;
 }
 
+// A pool that has fallen asleep round a sunk crate, recorded from then on: the sleep, a crate dropped in that wakes
+// it, and sleep turned off and on must all replay as the run did, and a snapshot of the sleeping pool must go on as
+// the pool does
+static b2WorldId MakeSleepWorld( int workerCount, b2FluidId* fluid )
+{
+	b2WorldDef worldDef = b2DefaultWorldDef();
+	worldDef.workerCount = workerCount;
+	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2BodyDef bodyDef = b2DefaultBodyDef();
+	b2BodyId ground = b2CreateBody( worldId, &bodyDef );
+	b2ShapeDef shapeDef = b2DefaultShapeDef();
+	b2Polygon box = b2MakeOffsetBox( 1.5f, 0.2f, ( b2Vec2 ){ 0.0f, -0.2f }, b2Rot_identity );
+	b2CreatePolygonShape( ground, &shapeDef, &box );
+	box = b2MakeOffsetBox( 0.2f, 1.0f, ( b2Vec2 ){ -1.2f, 0.8f }, b2Rot_identity );
+	b2CreatePolygonShape( ground, &shapeDef, &box );
+	box = b2MakeOffsetBox( 0.2f, 1.0f, ( b2Vec2 ){ 1.2f, 0.8f }, b2Rot_identity );
+	b2CreatePolygonShape( ground, &shapeDef, &box );
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position = ( b2Pos ){ 0.0f, 0.15f };
+	b2BodyId crate = b2CreateBody( worldId, &bodyDef );
+	shapeDef.density = 2.0f;
+	box = b2MakeBox( 0.15f, 0.15f );
+	b2CreatePolygonShape( crate, &shapeDef, &box );
+
+	b2FluidDef def = b2DefaultFluidDef();
+	*fluid = b2CreateFluid( worldId, &def );
+	b2LiquidDef water = b2DefaultLiquidDef();
+	b2LiquidId waterId = b2CreateLiquid( *fluid, &water );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ -0.95f, 0.05f }, ( b2Pos ){ -0.2f, 0.4f }, b2Vec2_zero );
+	b2Liquid_SpawnBox( waterId, ( b2Pos ){ 0.2f, 0.05f }, ( b2Pos ){ 0.95f, 0.4f }, b2Vec2_zero );
+	return worldId;
+}
+
+static void SleepScript( b2WorldId worldId, b2FluidId fluid, int frame, int start )
+{
+	if ( frame == start + 10 )
+	{
+		b2BodyDef bodyDef = b2DefaultBodyDef();
+		bodyDef.type = b2_dynamicBody;
+		bodyDef.position = ( b2Pos ){ 0.4f, 1.0f };
+		b2BodyId drop = b2CreateBody( worldId, &bodyDef );
+		b2ShapeDef shapeDef = b2DefaultShapeDef();
+		shapeDef.density = 0.5f;
+		b2Polygon box = b2MakeBox( 0.15f, 0.15f );
+		b2CreatePolygonShape( drop, &shapeDef, &box );
+	}
+	if ( frame == start + 30 )
+	{
+		b2Fluid_EnableSleep( fluid, false );
+	}
+	if ( frame == start + 32 )
+	{
+		b2Fluid_EnableSleep( fluid, true );
+	}
+	b2World_Step( worldId, DT, SUBSTEPS );
+}
+
+static int RecordSleep( void )
+{
+	b2FluidId fluid;
+	b2WorldId worldId = MakeSleepWorld( 1, &fluid );
+	int start = 0, asleep = 0, count = 0;
+	for ( ; start < 900 && ( asleep == 0 || asleep < count ); ++start )
+	{
+		b2World_Step( worldId, DT, SUBSTEPS );
+		b2FluidParticles p = b2Fluid_GetParticles( fluid );
+		count = p.count;
+		asleep = 0;
+		for ( int i = 0; i < p.count; ++i )
+		{
+			asleep += p.asleep[i] != 0;
+		}
+	}
+	ENSURE( asleep == count );
+
+	// A snapshot of the sleeping pool steps on as the pool does
+	int size = b2World_GetSnapshot( worldId, NULL, 0 );
+	uint8_t* image = malloc( (size_t)size );
+	ENSURE( b2World_GetSnapshot( worldId, image, size ) == size );
+	b2WorldId copy = b2CreateWorldFromSnapshot( image, size, 2 );
+	ENSURE( SameFluid( worldId, copy ) == 0 );
+	ENSURE( b2World_RestoreFromSnapshot( worldId, image, size ) );
+
+	b2Recording* rec = b2CreateRecording( 0 );
+	b2World_StartRecording( worldId, rec );
+	b2FluidId copyFluid = b2World_GetFluid( copy );
+	int woke = 0;
+	for ( int frame = start; frame < start + 50; ++frame )
+	{
+		SleepScript( worldId, fluid, frame, start );
+		SleepScript( copy, copyFluid, frame, start );
+		ENSURE( b2HashWorldState( b2GetWorldFromId( worldId ) ) == b2HashWorldState( b2GetWorldFromId( copy ) ) );
+		b2FluidParticles p = b2Fluid_GetParticles( fluid );
+		int awake = 0;
+		for ( int i = 0; i < p.count; ++i )
+		{
+			awake += p.asleep[i] == 0;
+		}
+		woke = awake > woke ? awake : woke;
+	}
+	b2World_StopRecording( worldId );
+	ENSURE( woke > count / 2 );
+	ENSURE( SameFluid( worldId, copy ) == 0 );
+
+	const uint8_t* data = b2Recording_GetData( rec );
+	int recSize = b2Recording_GetSize( rec );
+	ENSURE( b2ValidateRecording( data, recSize, 1 ) );
+	ENSURE( b2ValidateRecording( data, recSize, 4 ) );
+
+	b2DestroyRecording( rec );
+	free( image );
+	b2DestroyWorld( copy );
+	b2DestroyWorld( worldId );
+	return 0;
+}
+
 int FluidRecordingTest( void )
 {
 	RUN_SUBTEST( RecordFromStart );
@@ -468,5 +584,6 @@ int FluidRecordingTest( void )
 	RUN_SUBTEST( SeekBack );
 	RUN_SUBTEST( SnapshotContinues );
 	RUN_SUBTEST( NoFluid );
+	RUN_SUBTEST( RecordSleep );
 	return 0;
 }
