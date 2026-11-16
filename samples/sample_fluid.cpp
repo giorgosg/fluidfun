@@ -159,7 +159,8 @@ public:
 											 wide ? ImGuiSliderFlags_Logarithmic : 0 );
 
 			// The hole and the ball are built into the scene
-			rebuild |= moved && ( m_scene->type == lab_hole || m_scene->type == lab_tap || m_scene->type == lab_space || m_scene->type == lab_splash || m_scene->type == lab_drain || m_scene->type == lab_pool );
+			rebuild |= moved && ( m_scene->type == lab_hole || m_scene->type == lab_tap || m_scene->type == lab_space || m_scene->type == lab_splash || m_scene->type == lab_drain || m_scene->type == lab_pool ||
+						 m_scene->type == lab_tanks );
 		}
 		if ( rebuild )
 		{
@@ -208,3 +209,4 @@ static int sampleJelly = RegisterSample( "Fluid", "Jelly And Dough", SampleFluid
 static int sampleBasin = RegisterSample( "Fluid", "Overflowing Basin", SampleFluid::Create<lab_basin> );
 static int sampleSprinkler = RegisterSample( "Fluid", "Sprinkler", SampleFluid::Create<lab_sprinkler> );
 static int sampleTiles = RegisterSample( "Fluid", "Tile Floor", SampleFluid::Create<lab_tiles> );
+static int sampleTanks = RegisterSample( "Fluid Tests", "Far Tanks", SampleFluid::Create<lab_tanks> );

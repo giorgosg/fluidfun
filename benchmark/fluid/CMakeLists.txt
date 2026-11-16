@@ -24,7 +24,7 @@ if (BOX2D_COMPILE_WARNING_AS_ERROR)
 	set_target_properties(fluid_scenes fluid_headless fluid_compare PROPERTIES COMPILE_WARNING_AS_ERROR ON)
 endif()
 
-# Every scene runs at 1, 3, 6 and 12 workers: the final state must hash the same, and no liquid may leak.
+# Every scene runs at 1, 3, 6 and 12 workers, apart from Far Tanks (lab_tanks, last), a benchmark too large for CI: the final state must hash the same, and no liquid may leak.
 # Testing is enabled here only, since Box2D's own unit test target is named test, which CTest reserves.
 # Run with: ctest --test-dir build/benchmark/fluid
 enable_testing()
