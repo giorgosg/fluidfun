@@ -672,6 +672,7 @@ b2FluidDef b2RecR_FLUIDDEF( b2RecReader* rdr )
 	def.adaptiveFullBox = b2RecR_F32( rdr );
 	def.capacity = b2RecR_I32( rdr );
 	def.maxCapacity = b2RecR_I32( rdr );
+	def.enableSleep = b2RecR_BOOL( rdr );
 	return def;
 }
 
@@ -2187,6 +2188,15 @@ static void b2RecDispatch_FluidSetMaxCapacity( const b2RecArgs_FluidSetMaxCapaci
 	if ( b2RecFluidOk( rdr, id ) )
 	{
 		b2Fluid_SetMaxCapacity( id, a->maxCapacity );
+	}
+}
+
+static void b2RecDispatch_FluidEnableSleep( const b2RecArgs_FluidEnableSleep* a, b2RecReader* rdr )
+{
+	b2FluidId id = b2RecMakeFluidId( rdr, a->fluid );
+	if ( b2RecFluidOk( rdr, id ) )
+	{
+		b2Fluid_EnableSleep( id, a->flag );
 	}
 }
 

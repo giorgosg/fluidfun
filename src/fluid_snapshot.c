@@ -8,9 +8,10 @@
 //   rebuilt from it by b2fMakeFluid, as b2CreateFluid builds them.
 // - Liquids and emitters, whole, and the cohesion between liquids; the pair table, liquidSees, liveLiquids,
 //   liquidsFiltered, adaptive and springy rebuilt by b2fUpdateLiquids from them.
-// - Each particle's position, velocity, size, density, id and liquid, its speedMemory and springs where those arrays
-//   have been made, in the fluid's order, which the next sort keeps within a cell. prev is set at the start of every
-//   substep before anything reads it, so it is not written.
+// - Each particle's position, velocity, size, density, id and liquid, its sleep time, smoothed velocity (or density
+//   to wake by) and whether it is asleep, its speedMemory and springs where those arrays have been made, in the
+//   fluid's order, which the next sort keeps within a cell. prev is set at the start of every substep before anything
+//   reads it, so it is not written.
 // - maxRadius, which the last sort of a step set from sizes that the size pass has changed since, and which the next
 //   step's gather reads before it sorts.
 // - The shapes and bodies the last step gathered, as its last substep left them: a spawn's coarsening at the start of
@@ -28,7 +29,7 @@
 #include "recording.h"
 
 #define B2F_SNAP_MAGIC 0x444C4646u // 'FFLD'
-#define B2F_SNAP_VERSION 1u
+#define B2F_SNAP_VERSION 2u
 
 // The structs written whole. A change to any of them changes this, and an image of another layout is refused.
 static uint32_t FluidLayoutHash( void )
@@ -116,6 +117,9 @@ void b2fSerializeFluid( const b2World* world, b2RecBuffer* buf )
 	W( buf, f->rho, n * sizeof( float ) );
 	W( buf, f->id, n * sizeof( int ) );
 	W( buf, f->liquid, n );
+	W( buf, f->sleepTime, n * sizeof( float ) );
+	W( buf, f->calm, n * sizeof( b2Vec2 ) );
+	W( buf, f->asleep, n );
 	if ( f->speedMemory != NULL )
 	{
 		W( buf, f->speedMemory, n * sizeof( float ) );
@@ -309,11 +313,15 @@ bool b2fDeserializeFluid( b2World* world, const uint8_t* data, int size, int* cu
 	R( r, f->rho, n * sizeof( float ) );
 	R( r, f->id, n * sizeof( int ) );
 	R( r, f->liquid, n );
+	R( r, f->sleepTime, n * sizeof( float ) );
+	R( r, f->calm, n * sizeof( b2Vec2 ) );
+	R( r, f->asleep, n );
 	memcpy( f->prev, f->pos, n * sizeof( b2Pos ) );
 	for ( int i = 0; i < count; ++i )
 	{
-		r->ok = r->ok && f->liquid[i] < f->liquidCount;
+		r->ok = r->ok && f->liquid[i] < f->liquidCount && f->asleep[i] <= ( B2F_ASLEEP | B2F_ASLEEP_SHAPE | B2F_ASLEEP_NEW );
 	}
+	b2fCountAsleep( f );
 	if ( made[1] )
 	{
 		R( r, f->speedMemory, n * sizeof( float ) );
@@ -428,6 +436,8 @@ uint64_t b2fHashFluid( const b2World* world, uint64_t hash, bool deep )
 		hash = MixBits( hash, f->rho + i, sizeof( float ) );
 		hash = MixBits( hash, f->id + i, sizeof( int ) );
 		hash = ( hash ^ (uint64_t)f->liquid[i] ) * B2_SNAP_FNV_PRIME;
+		hash = MixBits( hash, f->sleepTime + i, sizeof( float ) );
+		hash = ( hash ^ (uint64_t)f->asleep[i] ) * B2_SNAP_FNV_PRIME;
 	}
 
 	// The liquid keeps bodies awake and wakes the ones it reaches, through sleepTime and the solver sets
@@ -447,6 +457,7 @@ uint64_t b2fHashFluid( const b2World* world, uint64_t hash, bool deep )
 		return hash;
 	}
 
+	hash = MixBits( hash, f->calm, (size_t)f->count * sizeof( b2Vec2 ) );
 	if ( f->speedMemory != NULL )
 	{
 		hash = MixBits( hash, f->speedMemory, (size_t)f->count * sizeof( float ) );

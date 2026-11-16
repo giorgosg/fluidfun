@@ -318,7 +318,11 @@ static void ReorderTask( int start, int end, int worker, void* context )
 	{
 		int p = f->permutation[i];
 #define B2F_REORDER_FIELD( type, name ) f->sorted.name[i] = f->name[p];
-		B2F_PARTICLE_FIELDS( B2F_REORDER_FIELD )
+		B2F_CORE_FIELDS( B2F_REORDER_FIELD )
+		if ( f->sleepOn )
+		{
+			B2F_SLEEP_FIELDS( B2F_REORDER_FIELD )
+		}
 		if ( f->speedMemory != NULL )
 		{
 			B2F_SPEED_FIELDS( B2F_REORDER_FIELD )
@@ -347,7 +351,11 @@ static void SwapArrays( b2fFluid* f )
 		f->name = f->sorted.name;                                                                                      \
 		f->sorted.name = t;                                                                                            \
 	}
-	B2F_PARTICLE_FIELDS( B2F_SWAP_FIELD )
+	B2F_CORE_FIELDS( B2F_SWAP_FIELD )
+	if ( f->sleepOn )
+	{
+		B2F_SLEEP_FIELDS( B2F_SWAP_FIELD )
+	}
 	if ( f->speedMemory != NULL )
 	{
 		B2F_SPEED_FIELDS( B2F_SWAP_FIELD )
@@ -366,4 +374,5 @@ void b2fSortParticles( b2fFluid* f, b2SubStepContext* context )
 	BuildGrid( f );
 	b2SubStep_ParallelFor( context, ReorderTask, f->count, 1024, f );
 	SwapArrays( f );
+	f->gridStale = false;
 }

@@ -107,7 +107,8 @@ and continues with any worker count.
 ## Liquids {#recording-fluid}
 
 This fork's fluid (`box2d/fluidfun.h`) is recorded and snapshotted with the world. Every call that
-changes the fluid is recorded: `b2CreateFluid`, `b2DestroyFluid`, the `b2Fluid_Set*` setters,
+changes the fluid is recorded: `b2CreateFluid`, `b2DestroyFluid`, the `b2Fluid_Set*` setters and
+`b2Fluid_EnableSleep`,
 `b2CreateLiquid`, `b2DestroyLiquid`, `b2Liquid_SetDef`, `b2Liquid_SetCohesionBetween`, the four
 `b2Liquid_Spawn*`, `b2Fluid_Remove`, `b2Fluid_Accelerate`, `b2Fluid_BlendVelocity`,
 `b2Fluid_Explode`, `b2CreateEmitter`, `b2DestroyEmitter` and `b2Emitter_SetDef`. `b2World_Explode`
@@ -118,16 +119,17 @@ as Box2D records none of its own; on replay they give the same answers from the 
 What the fluid does inside a step, gathering shapes from the broad-phase trees, keeping bodies in
 liquid awake and waking the ones it reaches, is part of the step, so replay reproduces it from the
 state. With a fluid, the per-step state hash covers every particle's position (at full width),
-velocity, size, density, id and liquid, and each body's sleep timer and solver set, and it is taken
+velocity, size, density, id and liquid, its sleep timer and whether it is asleep, and each body's
+sleep timer and solver set, and it is taken
 after the fluid's end of step, which changes particle sizes and wakes bodies. A replay that drifts in
 the liquid, or in which bodies sleep differently, shows `DIVERGED` at the frame it happens. A world
 without a fluid hashes as before.
 
 A snapshot holds the fluid as it stands between steps: its settings, liquids, emitters, every
-particle with its springs, the bodies and sensors it reports on, and the counters its ids come from,
+particle with its springs and its sleep, the bodies and sensors it reports on, and the counters its ids come from,
 so a recording can start with liquid already running, a backward scrub lands on the exact liquid of
 that frame, and `b2World_RestoreFromSnapshot` brings back the liquid and its ids. The fluid adds
-about 30 bytes a particle to a snapshot. A recording adds about 100 to 200 bytes a frame for the
+about 40 bytes a particle to a snapshot. A recording adds about 100 to 200 bytes a frame for the
 scenes in the samples, mostly the state hash and an emitter's or a drain's calls.
 
 The replay viewer draws the liquid's particles, coloured by liquid. `b2World_GetFluid` gives the
@@ -145,6 +147,9 @@ marked by a header flag far from Box2D's (`0x10000`), with its own magic, versio
 - A world that has never had a fluid snapshots exactly as Box2D does. A recording's seed snapshot and
   a replay's keyframes always carry the fluid section, since the counters that liquid and emitter ids
   come from must replay exactly.
+- The fork's format number counts changes to its records and its snapshot section: 2 since the
+  liquid's sleep (fluidfun PR 39), which added `enableSleep` to the recorded fluid def, the
+  `b2Fluid_EnableSleep` record and three particle fields to the section. Files of format 1 are refused.
 - A recording with no fork mark was written by Box2D itself. It has no fluid records and loads as
   before. A file with any other fork mark is refused.
 - Box2D's own reader does not look at the fork mark, skips records of an unknown opcode, and reads a

@@ -21,6 +21,7 @@ B2_REC_FLUID_OP( 0x02, DestroyFluid, RET_NONE, ARG( FLUIDID, fluid ) )
 B2_REC_FLUID_OP( 0x03, FluidSetAdaptiveDepth, RET_NONE, ARG( FLUIDID, fluid ) ARG( F32, adaptiveDepth ) )
 B2_REC_FLUID_OP( 0x04, FluidSetAdaptiveFullBox, RET_NONE, ARG( FLUIDID, fluid ) ARG( F32, adaptiveFullBox ) )
 B2_REC_FLUID_OP( 0x05, FluidSetMaxCapacity, RET_NONE, ARG( FLUIDID, fluid ) ARG( I32, maxCapacity ) )
+B2_REC_FLUID_OP( 0x06, FluidEnableSleep, RET_NONE, ARG( FLUIDID, fluid ) ARG( BOOL, flag ) )
 
 B2_REC_FLUID_OP( 0x10, CreateLiquid, RET_LIQUIDID, ARG( FLUIDID, fluid ) ARG( LIQUIDDEF, def ) )
 B2_REC_FLUID_OP( 0x11, DestroyLiquid, RET_NONE, ARG( LIQUIDID, liquid ) )

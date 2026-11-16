@@ -94,9 +94,15 @@ static inline float b2fLatticeSize( float size )
 // Fields every particle carries, kept in sort order. Sorting, compaction, splits and spawning all go through
 // this list, so a new field is one entry here. Densities are among them since the caller reads them between steps,
 // and the coarsening of spawns across the sorts between its passes.
-#define B2F_PARTICLE_FIELDS( X )                                                                                        \
+#define B2F_PARTICLE_FIELDS( X ) B2F_CORE_FIELDS( X ) B2F_SLEEP_FIELDS( X )
+#define B2F_CORE_FIELDS( X )                                                                                            \
 	X( b2Pos, pos ) X( b2Pos, prev ) X( float, vx ) X( float, vy ) X( float, size ) X( float, rho ) X( int, id )        \
 		X( unsigned char, liquid )
+
+// A particle's sleep (fluid_sleep.c): how long it has been slower than B2F_SLEEP_SPEED; calm, its velocity smoothed
+// over B2F_CALM_TIME while awake, and while asleep, in x, the density it wakes by; and whether it is asleep, the
+// B2F_ASLEEP bits, zero when awake. With sleep off they are all zero, so the sort leaves them where they are.
+#define B2F_SLEEP_FIELDS( X ) X( float, sleepTime ) X( b2Vec2, calm ) X( unsigned char, asleep )
 
 // A particle field only adaptiveSpeed reads, made once some adaptive liquid has it (UpdateLiquids), and then
 // sorted, copied and cleared with the particle fields
@@ -108,11 +114,12 @@ static inline float b2fLatticeSize( float size )
 	X( unsigned char, adaptClass ) X( float, adaptTarget )
 
 // Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. marked is
-// scratch for the calls that remove particles.
+// scratch for the calls that remove particles, and wake holds the B2F_WAKE_ bits of this substep.
 #define B2F_WORK_FIELDS( X )                                                                                            \
 	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rhoNear ) X( float, pressure )          \
 		X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) X( int, contactCount )             \
-			X( int, pairCount ) X( int, cell ) X( int, sortCell ) X( int, permutation ) X( unsigned char, marked )
+			X( int, pairCount ) X( int, cell ) X( int, sortCell ) X( int, permutation ) X( unsigned char, marked )      \
+				X( unsigned char, wake )
 
 // Working values only adaptive sizes use: each particle's search window and grid block, which the sort fills when
 // sizes vary, and the size pass's measurements and scratch. Made with the carried fields once some liquid is
@@ -122,6 +129,34 @@ static inline float b2fLatticeSize( float size )
 		X( float, adaptPressure ) X( unsigned char, adaptUsed )
 
 #define B2F_DECLARE_FIELD( type, name ) type* name;
+
+// Sleep (fluid_sleep.c). A particle slower than B2F_SLEEP_SPEED for B2_TIME_TO_SLEEP, Box2D's own time for bodies,
+// falls asleep. Its speed is its velocity smoothed over B2F_CALM_TIME, since against a wall under deep liquid still
+// particles ring at 0.04 m/s with a period of four substeps while going nowhere, as Macklin et al. 2014 freeze a
+// particle by how far it moved over a step rather than within it. Asleep, it holds still, as Goswami and Pajarola 2011 keep passive particles still, and the substep skips it.
+// Asleep particles within reach of awake ones, or against a shape, are the shell, which works out its density for
+// its awake neighbours and to see whether it should wake; the rest skip the density pass too. The shell wakes when
+// that density has moved this share of rest density from what it was in its first substep asleep, or when an awake
+// neighbour is faster than B2F_WAKE_SPEED.
+#define B2F_SLEEP_SPEED ( 0.03f * b2_lengthUnitsPerMeter )
+#define B2F_CALM_TIME 0.1f
+#define B2F_WAKE_SPEED ( 0.05f * b2_lengthUnitsPerMeter )
+#define B2F_WAKE_DENSITY 0.02f
+
+// A particle asleep has B2F_ASLEEP set, with B2F_ASLEEP_SHAPE once it has been against a shape. For the substep after
+// it falls asleep it has B2F_ASLEEP_NEW too: it is in the shell then, and its density, the first worked out with
+// it and its neighbours where they lie asleep, is the one it wakes by. The density of the substep it fell asleep in
+// was worked out with its predicted position, not where it stopped, which against a wall under deep liquid differed
+// by more than the wake test allows, so it woke at once, every half second.
+#define B2F_ASLEEP 1u
+#define B2F_ASLEEP_SHAPE 2u
+#define B2F_ASLEEP_NEW 4u
+
+// The wake bits of a particle in a substep: it touches an awake body, so it may not fall asleep; it is to wake at the
+// end of the substep; and it is asleep in the shell
+#define B2F_WAKE_HELD 1u
+#define B2F_WAKE_NOW 2u
+#define B2F_WAKE_SHELL 4u
 
 // Springs a particle holds, each to a partner by id, since indices change with every sort, with removals between
 // steps, and with merges and splits at the end of each. The spring pass finds each partner in an id table it builds
@@ -321,6 +356,9 @@ typedef struct b2fReaction
 	// How high the liquid against the body stands above its lowest point: the highest particle that is not spray, and
 	// not lying on an upward face, plus half its size, or zero
 	float wetTop;
+	// How many particles in reach have not been still for B2_TIME_TO_SLEEP, which keep the body from sleeping and wake
+	// it if it sleeps
+	float unsettled;
 } b2fReaction;
 
 #define B2F_MAX_EMITTERS B2_MAX_EMITTERS
@@ -381,6 +419,8 @@ struct b2fFluid
 	b2fLiquid liquids[B2F_MAX_LIQUIDS];
 	int liquidCount;
 	bool adaptive;	 // some liquid has adaptive sizes
+	// A bit for each liquid whose particles may fall asleep: those without springs
+	uint32_t liquidSleeps;
 	float cohesionBetween[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
 	b2fLiquidPair liquidPairs[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
 	// For each liquid a bit for every liquid it pushes on, itself always included, and whether some pair of live
@@ -416,6 +456,22 @@ struct b2fFluid
 	int idMapMask, idMapShift;
 	bool springy;	 // some liquid has springs
 	bool checkSprings;	 // the first substep of a step, which checks both ends hold each spring
+
+	// Whether particles may fall asleep this step, def.enableSleep and the world's, and how many were asleep after the
+	// last substep, or more
+	bool sleepOn;
+	int asleepCount;
+	// Particles were added, removed or reordered since the last sort, so its grid no longer holds. While every
+	// particle is asleep and this is false, nothing has moved since the last sort and the substep need not sort.
+	bool gridStale;
+	// For each row of the grid, how many of its cells up to each one hold an awake particle, gridWidth + 1 a row, to
+	// find the shell
+	int* cellAwake;
+	int cellAwakeCapacity;
+	// The cells near an awake body this substep are those marked with holdSerial, when holdMarked
+	int* cellHold;
+	int cellHoldCapacity, holdSerial;
+	bool holdMarked;
 
 	int sizeChanges;
 	float maxRadius;
@@ -607,6 +663,18 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context );
 void b2fHoldBodies( b2fFluid* f );
 void b2fCollideHeld( b2fFluid* f );
 bool b2fShapeDistance( const b2fShape* s, b2Vec2 p, float* distance, b2Vec2* normal );
+
+// sleep.c
+// Reads whether particles may sleep this step, and wakes them all if they may not or if gravity changed
+void b2fPrepareSleep( b2fFluid* f, b2Vec2 gravity );
+// Marks the asleep particles in the shell, before the density pass
+void b2fFindShell( b2fFluid* f, b2SubStepContext* context );
+// Counts the asleep particles after the substep
+void b2fCountAsleep( b2fFluid* f );
+void b2fWakeParticle( b2fFluid* f, int i );
+void b2fWakeAll( b2fFluid* f );
+// Wakes the particles whose centres are in a box
+void b2fWakeBox( b2fFluid* f, b2fCoord minX, b2fCoord minY, b2fCoord maxX, b2fCoord maxY );
 
 // spawn.c
 // Adds the rows each enabled emitter owes for a step of this time

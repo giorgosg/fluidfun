@@ -171,6 +171,10 @@ static void UniformAccumulate( b2fFluid* f, int start, int end )
 	bool viscous = sigma > 0.0f || beta > 0.0f;
 	for ( int i = start; i < end; ++i )
 	{
+		if ( f->asleep[i] != 0 )
+		{
+			continue;
+		}
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float moveX = 0.0f, moveY = 0.0f;
 		float rhoI = f->rho[i], nearI = f->rhoNear[i], pressureI = TensileClamp( rhoI - single, tensile );
@@ -225,6 +229,54 @@ static void UniformAccumulate( b2fFluid* f, int start, int end )
 	}
 }
 
+// Whether a shell particle, asleep beside awake liquid or against a shape, should wake: its density has moved from what
+// it was in its first substep asleep, or an awake neighbour within reach is fast (fluid_sleep.c)
+static bool ShellWakes( b2fFluid* f, int i )
+{
+	// Just asleep, this density is the one it wakes by. The bit goes at the end of the substep, since neighbours read
+	// asleep in this pass.
+	if ( f->asleep[i] & B2F_ASLEEP_NEW )
+	{
+		f->calm[i].x = f->rho[i];
+	}
+	else if ( b2AbsFloat( f->rho[i] - f->calm[i].x ) > B2F_WAKE_DENSITY * f->restDensity )
+	{
+		return true;
+	}
+
+	float fast2 = B2F_WAKE_SPEED * B2F_WAKE_SPEED;
+	int n = f->pairCount[i];
+	if ( n >= 0 )
+	{
+		const b2fPair* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+		for ( int p = 0; p < n; ++p )
+		{
+			int j = pairs[p].j;
+			if ( f->asleep[j] == 0 && f->vx[j] * f->vx[j] + f->vy[j] * f->vy[j] > fast2 )
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Too many to keep: any in the window counts
+	FOR_NEIGHBOURS( f, i, j )
+	{
+		if ( f->asleep[j] == 0 && f->vx[j] * f->vx[j] + f->vy[j] * f->vy[j] > fast2 )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Asleep particles outside the shell skip the density pass, and keep the density they last had
+static inline bool SkipsDensity( const b2fFluid* f, int i )
+{
+	return f->asleep[i] != 0 && ( f->wake[i] & B2F_WAKE_SHELL ) == 0;
+}
+
 // Each particle's pressure and near pressure, from its own liquid's settings, scale with its size squared
 static void DensityTask( int start, int end, int worker, void* context )
 {
@@ -235,10 +287,18 @@ static void DensityTask( int start, int end, int worker, void* context )
 	{
 		for ( int i = start; i < end; ++i )
 		{
+			if ( SkipsDensity( f, i ) )
+			{
+				continue;
+			}
 			UniformDensity( f, i, f->rho + i, f->rhoNear + i );
 			if ( springy )
 			{
 				AddSprings( f, i );
+			}
+			if ( f->asleep[i] != 0 && ShellWakes( f, i ) )
+			{
+				f->wake[i] |= B2F_WAKE_NOW;
 			}
 		}
 		return;
@@ -247,6 +307,10 @@ static void DensityTask( int start, int end, int worker, void* context )
 	float rest = f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
+		if ( SkipsDensity( f, i ) )
+		{
+			continue;
+		}
 		Density( f, i, f->rho + i, f->rhoNear + i );
 		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 		float hi = 2.0f * b2fLatticeSize( f->size[i] ), hi2 = hi * hi;
@@ -255,6 +319,10 @@ static void DensityTask( int start, int end, int worker, void* context )
 		if ( springy )
 		{
 			AddSprings( f, i );
+		}
+		if ( f->asleep[i] != 0 && ShellWakes( f, i ) )
+		{
+			f->wake[i] |= B2F_WAKE_NOW;
 		}
 	}
 }
@@ -275,6 +343,10 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 	float dt = f->h;
 	for ( int i = start; i < end; ++i )
 	{
+		if ( f->asleep[i] != 0 )
+		{
+			continue;
+		}
 		b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 		float si = f->size[i], moveX = 0.0f, moveY = 0.0f;
 		float pressure = f->pressure[i], nearPressure = f->nearPressure[i];
@@ -343,6 +415,10 @@ static void ApplyTask( int start, int end, int worker, void* context )
 	float restRatio = 1.0f + B2F_SQUEEZE_SURFACE, invRest = 1.0f / f->restDensity;
 	for ( int i = start; i < end; ++i )
 	{
+		if ( f->asleep[i] != 0 )
+		{
+			continue;
+		}
 		float radius = 2.0f * b2fLatticeSize( f->size[i] ), limit = B2F_MOVE_LIMIT * radius;
 		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i];
 		if ( d2 > limit * limit )
@@ -384,6 +460,12 @@ static void PredictTask( int start, int end, int worker, void* context )
 	float h = f->h;
 	for ( int i = start; i < end; ++i )
 	{
+		// Asleep, it holds still, at zero velocity
+		if ( f->asleep[i] != 0 )
+		{
+			f->prev[i] = f->pos[i];
+			continue;
+		}
 		float scale = h * f->liquids[f->liquid[i]].def.gravityScale;
 		f->vx[i] += scale * f->worldGravity.x;
 		f->vy[i] += scale * f->worldGravity.y;
@@ -399,8 +481,20 @@ static void VelocityTask( int start, int end, int worker, void* context )
 	(void)worker;
 	b2fFluid* f = context;
 	float h = f->h, inv = 1.0f / h, limit = 0.5f * f->radius, limit2 = limit * limit;
+	float sleep2 = B2F_SLEEP_SPEED * B2F_SLEEP_SPEED, smooth = h < B2F_CALM_TIME ? h / B2F_CALM_TIME : 1.0f;
+	uint32_t sleeps = f->sleepOn ? f->liquidSleeps : 0u;
 	for ( int i = start; i < end; ++i )
 	{
+		if ( f->asleep[i] != 0 )
+		{
+			f->asleep[i] &= (unsigned char)~B2F_ASLEEP_NEW;
+			if ( f->wake[i] & B2F_WAKE_NOW )
+			{
+				b2fWakeParticle( f, i );
+			}
+			continue;
+		}
+
 		float dx = (float)( f->pos[i].x - f->prev[i].x ), dy = (float)( f->pos[i].y - f->prev[i].y ), d2 = dx * dx + dy * dy;
 		if ( d2 > limit2 )
 		{
@@ -412,6 +506,26 @@ static void VelocityTask( int start, int end, int worker, void* context )
 		}
 		f->vx[i] = dx * inv;
 		f->vy[i] = dy * inv;
+
+		// Slow for B2_TIME_TO_SLEEP, by its velocity smoothed over B2F_CALM_TIME, and touching no awake body, it falls
+		// asleep where it is
+		if ( ( sleeps >> f->liquid[i] & 1u ) == 0 )
+		{
+			f->sleepTime[i] = 0.0f;
+			continue;
+		}
+		b2Vec2 calm = f->calm[i];
+		calm.x += smooth * ( f->vx[i] - calm.x );
+		calm.y += smooth * ( f->vy[i] - calm.y );
+		f->calm[i] = calm;
+		f->sleepTime[i] = b2LengthSquared( calm ) < sleep2 ? f->sleepTime[i] + h : 0.0f;
+		if ( f->sleepTime[i] >= B2_TIME_TO_SLEEP && ( f->wake[i] & B2F_WAKE_HELD ) == 0 )
+		{
+			f->asleep[i] = (unsigned char)( B2F_ASLEEP | B2F_ASLEEP_NEW | ( f->contactCount[i] > 0 ? B2F_ASLEEP_SHAPE : 0u ) );
+			f->vx[i] = 0.0f;
+			f->vy[i] = 0.0f;
+			f->calm[i] = b2Vec2_zero;
+		}
 	}
 }
 
@@ -558,6 +672,7 @@ void b2fPredict( b2fFluid* f, b2SubStepContext* context )
 
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 {
+	b2fFindShell( f, context );
 	b2SubStep_ParallelFor( context, DensityTask, f->count, 512, f );
 	b2SubStep_ParallelFor( context, AccumulateTask, f->count, 512, f );
 	b2SubStep_ParallelFor( context, ApplyTask, f->count, 2048, f );
@@ -566,4 +681,8 @@ void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 void b2fUpdateVelocities( b2fFluid* f, b2SubStepContext* context )
 {
 	b2SubStep_ParallelFor( context, VelocityTask, f->count, 2048, f );
+	if ( f->sleepOn || f->asleepCount > 0 )
+	{
+		b2fCountAsleep( f );
+	}
 }

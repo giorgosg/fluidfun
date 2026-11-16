@@ -98,6 +98,7 @@ b2FluidDef b2DefaultFluidDef( void )
 	def.adaptiveFullBox = 0.9f;
 	def.capacity = 4096;
 	def.maxCapacity = 1000000;
+	def.enableSleep = true;
 	def.internalValue = B2_SECRET_COOKIE;
 	return def;
 }
@@ -190,6 +191,7 @@ void b2fUpdateLiquids( b2fFluid* f )
 	float spacing = f->spacing;
 	f->adaptive = false;
 	f->springy = false;
+	f->liquidSleeps = 0;
 	bool fastSpeed = false;
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
@@ -202,6 +204,9 @@ void b2fUpdateLiquids( b2fFluid* f )
 			f->adaptive = f->adaptive || adaptive;
 			fastSpeed = fastSpeed || ( adaptive && liquid->def.tuning.adaptiveSpeed > 0.0f );
 			f->springy = f->springy || liquid->def.springStiffness > 0.0f;
+			// Springs pull on partners by id, and both ends must work a spring out alike, so liquid with them stays
+			// awake
+			f->liquidSleeps |= liquid->def.springStiffness > 0.0f ? 0u : 1u << a;
 		}
 	}
 
@@ -342,6 +347,7 @@ b2fFluid* b2fMakeFluid( b2World* world, const b2FluidDef* def, int capacity )
 	b2fUpdateLiquids( f );
 	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
+	f->gridStale = true;
 
 	size_t n = (size_t)f->capacity + 1;
 #define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
@@ -408,6 +414,8 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f->bodyOfIndex, (size_t)f->bodyOfIndexCapacity * sizeof( int ) );
 	b2Free( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );
 	b2Free( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
+	b2Free( f->cellAwake, (size_t)f->cellAwakeCapacity * sizeof( int ) );
+	b2Free( f->cellHold, (size_t)f->cellHoldCapacity * sizeof( int ) );
 	b2fShapeBins* bins[2] = { &f->shapeBins, &f->fixedBins };
 	for ( int i = 0; i < 2; ++i )
 	{
@@ -436,6 +444,7 @@ void b2Fluid_SetAdaptiveDepth( b2FluidId fluidId, float adaptiveDepth )
 	B2_CHECK_INPUT( b2IsValidFloat( adaptiveDepth ) && adaptiveDepth >= 0.0f );
 	b2fFluid* f = b2fGetFluid( fluidId );
 	f->def.adaptiveDepth = adaptiveDepth;
+	b2fWakeAll( f );
 	B2_REC( f->world, FluidSetAdaptiveDepth, fluidId, adaptiveDepth );
 }
 
@@ -449,12 +458,29 @@ void b2Fluid_SetAdaptiveFullBox( b2FluidId fluidId, float adaptiveFullBox )
 	B2_CHECK_INPUT( b2IsValidFloat( adaptiveFullBox ) && adaptiveFullBox > 0.0f );
 	b2fFluid* f = b2fGetFluid( fluidId );
 	f->def.adaptiveFullBox = adaptiveFullBox;
+	b2fWakeAll( f );
 	B2_REC( f->world, FluidSetAdaptiveFullBox, fluidId, adaptiveFullBox );
 }
 
 float b2Fluid_GetAdaptiveFullBox( b2FluidId fluidId )
 {
 	return b2fGetFluid( fluidId )->def.adaptiveFullBox;
+}
+
+void b2Fluid_EnableSleep( b2FluidId fluidId, bool flag )
+{
+	b2fFluid* f = b2fGetFluid( fluidId );
+	f->def.enableSleep = flag;
+	if ( flag == false )
+	{
+		b2fWakeAll( f );
+	}
+	B2_REC( f->world, FluidEnableSleep, fluidId, flag );
+}
+
+bool b2Fluid_IsSleepEnabled( b2FluidId fluidId )
+{
+	return b2fGetFluid( fluidId )->def.enableSleep;
 }
 
 void b2Fluid_SetMaxCapacity( b2FluidId fluidId, int maxCapacity )
@@ -575,6 +601,7 @@ int b2fRemoveMarked( b2fFluid* f )
 		b2fClearParticle( f, i );
 	}
 	f->count = kept;
+	f->gridStale = f->gridStale || kept < n;
 	return n - kept;
 }
 
@@ -626,6 +653,10 @@ int b2Fluid_Remove( b2FluidId fluidId, b2LiquidId liquidId, b2FluidRegion region
 	}
 
 	MarkInside( f, liquid, &outline, maxCount );
+
+	// What is left around the gap wakes to fill it: every particle within the coarsest reach of the region
+	float grow = 2.0f * f->maxRadius;
+	b2fWakeBox( f, outline.minX - grow, outline.minY - grow, outline.maxX + grow, outline.maxY + grow );
 	int removed = b2fRemoveMarked( f );
 	B2_REC_CREATE( f->world, FluidRemove, removed, fluidId, liquidId, region, maxCount );
 	return removed;
@@ -699,6 +730,7 @@ b2LiquidId b2CreateLiquid( b2FluidId fluidId, const b2LiquidDef* def )
 		f->cohesionBetween[other][index] = 0.0f;
 	}
 	b2fUpdateLiquids( f );
+	b2fWakeAll( f );
 	b2LiquidId id = { index + 1, fluidId.world0, f->liquids[index].generation };
 	B2_REC_CREATE( world, CreateLiquid, id, fluidId, *def );
 	return id;
@@ -730,6 +762,7 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 		f->liquidCount -= 1;
 	}
 	b2fUpdateLiquids( f );
+	b2fWakeAll( f );
 	B2_REC( world, DestroyLiquid, liquidId );
 }
 
@@ -754,6 +787,7 @@ void b2Liquid_SetDef( b2LiquidId liquidId, const b2LiquidDef* def )
 		f->coarsenLiquids &= ~( 1u << index );
 	}
 	b2fUpdateLiquids( f );
+	b2fWakeAll( f );
 	B2_REC( world, LiquidSetDef, liquidId, *def );
 }
 
@@ -792,6 +826,7 @@ void b2Liquid_SetCohesionBetween( b2LiquidId liquidA, b2LiquidId liquidB, float 
 		f->cohesionBetween[a][b] = cohesion;
 		f->cohesionBetween[b][a] = cohesion;
 		b2fUpdateLiquids( f );
+		b2fWakeAll( f );
 		B2_REC( f->world, LiquidSetCohesionBetween, liquidA, liquidB, cohesion );
 	}
 }
@@ -815,6 +850,7 @@ b2FluidParticles b2Fluid_GetParticles( b2FluidId fluidId )
 		.liquids = f->liquid,
 		.densities = f->rho,
 		.ids = f->id,
+		.asleep = f->asleep,
 		.restDensity = f->restDensity,
 	};
 }
@@ -830,7 +866,8 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 	uint64_t ticks = b2GetTicks();
 
 	// Spawned particles waiting for their sizes get them first, at this step's substep, and settle into place, which
-	// gathers the shapes itself, where they are now
+	// gathers the shapes itself, where they are now. Sleep comes first: a change of gravity wakes everything.
+	b2fPrepareSleep( f, f->world->gravity );
 	f->worldGravity = f->world->gravity;
 	if ( f->coarsenLiquids != 0 && timeStep > 0.0f )
 	{
@@ -882,8 +919,27 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFl
 	f->h = h;
 
 	b2fUpdateBodies( f );
-	b2fPredict( f, context );
-	b2fSortParticles( f, context );
+	if ( f->asleepCount == f->count && f->gridStale == false )
+	{
+		// All asleep, nothing has moved since the last sort, so its grid holds. Only shapes and bodies can wake the
+		// liquid, and they change only between steps, apart from awake bodies, which move in every substep. So the
+		// first substep of a step looks for them, and the rest only while some body near the liquid is awake.
+		bool awakeBody = false;
+		for ( int i = 0; i < f->bodyCount && awakeBody == false; ++i )
+		{
+			awakeBody = f->bodies[i].awake;
+		}
+		if ( subStepIndex > 0 && awakeBody == false )
+		{
+			f->profile.total += b2GetMilliseconds( start );
+			return;
+		}
+	}
+	else
+	{
+		b2fPredict( f, context );
+		b2fSortParticles( f, context );
+	}
 	f->profile.sort += b2GetMillisecondsAndReset( &ticks );
 
 	b2fFindContacts( f, context );

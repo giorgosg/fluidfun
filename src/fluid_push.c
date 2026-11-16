@@ -6,7 +6,8 @@
 // and the end of the substep rewrites them from how far the particle went, after density, springs and shapes have
 // moved it. Springs and density act on positions, so a liquid with springs carries the push the same way, with its
 // springs pulling it back afterwards. The size pass before the step passes velocity along with mass when particles
-// merge and split, so a push is kept through that too.
+// merge and split, so a push is kept through that too. A particle pushed wakes, and its neighbours with it once it
+// moves (fluid_sleep.c).
 #include "fluid_internal.h"
 
 #include "core.h"
@@ -36,6 +37,7 @@ static int PushInside( b2fFluid* f, int liquid, const b2fOutline* outline, Push 
 		// keep v + share t rather than v + share ( t - v ), so that a share of 1 sets the velocity exactly
 		f->vx[i] = keep * ( f->vx[i] + push.change.x ) + targetX;
 		f->vy[i] = keep * ( f->vy[i] + push.change.y ) + targetY;
+		b2fWakeParticle( f, i );
 		pushed += 1;
 	}
 	return pushed;
@@ -169,6 +171,7 @@ int b2fExplode( b2fFluid* f, const b2ExplosionDef* def )
 		float change = def->impulsePerLength * scale / ( density * length );
 		f->vx[i] += change * direction.x;
 		f->vy[i] += change * direction.y;
+		b2fWakeParticle( f, i );
 		pushed += 1;
 	}
 	return pushed;

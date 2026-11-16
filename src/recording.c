@@ -544,6 +544,7 @@ void b2RecW_FLUIDDEF( b2RecBuffer* buf, b2FluidDef v )
 	b2RecW_F32( buf, v.adaptiveFullBox );
 	b2RecW_I32( buf, v.capacity );
 	b2RecW_I32( buf, v.maxCapacity );
+	b2RecW_BOOL( buf, v.enableSleep );
 	// internalValue omitted
 }
 
