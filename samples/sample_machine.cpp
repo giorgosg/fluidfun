@@ -62,6 +62,12 @@ public:
 			uint32_t red = (uint32_t)( tint[0] + ( 255.0f - tint[0] ) * speed );
 			uint32_t green = (uint32_t)( tint[1] + ( 255.0f - tint[1] ) * speed );
 			uint32_t blue = (uint32_t)( tint[2] + ( 255.0f - tint[2] ) * speed );
+			if ( s_showAsleep && particles.asleep[i] != 0 )
+			{
+				red = red * 2 / 5;
+				green = green * 2 / 5;
+				blue = blue * 2 / 5;
+			}
 			float size = b2MaxFloat( s_dotScale * particles.sizes[i] * pixelsPerMetre, 1.5f );
 			DrawPoint( m_context->draw, particles.positions[i], size, b2HexColor( ( red << 16 ) | ( green << 8 ) | blue ) );
 		}
@@ -79,6 +85,24 @@ public:
 		ImGui::Text( "Particles %d", b2Fluid_GetParticleCount( m_machine.fluid ) );
 		b2FluidProfile profile = b2Fluid_GetProfile( m_machine.fluid );
 		ImGui::Text( "Fluid %.2f ms", profile.total );
+		ImGui::Text( "prepare %.2f sort %.2f", profile.prepare, profile.sort );
+		ImGui::Text( "density %.2f collide %.2f sizes %.2f", profile.density, profile.collide, profile.sizes );
+
+		// Asleep out of all, for each liquid
+		static const char* names[machine_liquidCount] = { "Water", "Oil", "Honey", "Mercury", "Jelly", "Dough" };
+		b2FluidParticles particles = b2Fluid_GetParticles( m_machine.fluid );
+		int asleep[B2_MAX_LIQUIDS] = {}, all[B2_MAX_LIQUIDS] = {};
+		for ( int i = 0; i < particles.count; ++i )
+		{
+			all[particles.liquids[i]] += 1;
+			asleep[particles.liquids[i]] += particles.asleep[i] != 0 ? 1 : 0;
+		}
+		for ( int k = 0; k < machine_liquidCount; ++k )
+		{
+			int index = b2Liquid_GetIndex( m_machine.liquids[k] );
+			ImGui::Text( "%s asleep %d / %d", names[k], asleep[index], all[index] );
+		}
+		ImGui::Checkbox( "Show asleep", &s_showAsleep );
 
 		ImGui::Checkbox( "Camera follows", &s_follow );
 		ImGui::Checkbox( "Start again at the end", &s_loop );
@@ -92,7 +116,6 @@ public:
 		ImGui::SliderFloat( "Dot size", &s_dotScale, 0.3f, 2.0f, "%.2f" );
 
 		// One liquid's settings at a time
-		static const char* names[machine_liquidCount] = { "Water", "Oil", "Honey", "Mercury", "Jelly", "Dough" };
 		ImGui::Combo( "Liquid", &s_liquid, names, machine_liquidCount );
 		b2LiquidDef* liquid = s_def.liquids + s_liquid;
 		bool changed = false;
@@ -138,6 +161,7 @@ public:
 	static inline bool s_loop = true;
 	static inline float s_dotScale = 1.0f;
 	static inline int s_liquid = 0;
+	static inline bool s_showAsleep = true;
 
 	Machine m_machine;
 };
