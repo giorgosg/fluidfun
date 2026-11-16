@@ -12,8 +12,11 @@
 // - An asleep particle that touches an awake body, or lies in the cells near one (MarkHeld in fluid_boundary.c),
 //   wakes at once, since the body may move into it, and none there falls asleep (B2F_WAKE_HELD). Its sleep time keeps
 //   running, so a body at rest in still liquid can sleep, and then the liquid round it.
-// - Liquid with springs never sleeps, since both ends of a spring must work it out alike. The size pass sizes asleep
-//   particles as the rest, and one whose size changes wakes.
+// - Both ends of a spring work it out alike, so particles joined by springs, directly or through others, sleep and wake
+//   as one group (b2fSpringGroups): a group falls asleep in the substep its last particle has been slow for
+//   B2_TIME_TO_SLEEP, and when any of it wakes, for whatever reason, all of it wakes before the next spring pass.
+//   While both ends are asleep a spring is skipped, and springs neither form nor go at asleep particles. The size
+//   pass sizes asleep particles as the rest, and one whose size changes wakes.
 // - The shell is the asleep particles with an awake particle within their search window, found from the cells
 //   (b2fFindShell), and those against a shape. Shell particles work out their density and pressure, which their
 //   awake neighbours read; deep asleep particles skip the density pass as well, apart from those that fell asleep in
@@ -51,6 +54,7 @@ void b2fWakeAll( b2fFluid* f )
 	memset( f->sleepTime, 0, (size_t)f->count * sizeof( float ) );
 	memset( f->calm, 0, (size_t)f->count * sizeof( b2Vec2 ) );
 	f->asleepCount = 0;
+	f->springAsleep = 0;
 }
 
 void b2fWakeBox( b2fFluid* f, b2fCoord minX, b2fCoord minY, b2fCoord maxX, b2fCoord maxY )
@@ -150,4 +154,114 @@ void b2fFindShell( b2fFluid* f, b2SubStepContext* context )
 	}
 	b2SubStep_ParallelFor( context, CellRowTask, f->gridHeight, 16, f );
 	b2SubStep_ParallelFor( context, ShellTask, f->count, 1024, f );
+}
+
+// What a spring group holds, at its root
+#define B2F_GROUP_ASLEEP 1u
+#define B2F_GROUP_AWAKE 2u
+#define B2F_GROUP_RESTLESS 4u
+
+static int GroupRoot( int* parent, int i )
+{
+	while ( parent[i] != i )
+	{
+		parent[i] = parent[parent[i]];
+		i = parent[i];
+	}
+	return i;
+}
+
+// The groups are the particles of liquids with springs joined through the springs either end holds, found by union
+// and find over the springs once, on one thread, which takes no ordering between workers. That runs only when a group
+// may change state: when some particle is ready to fall asleep, or the count of asleep ones has changed since the last
+// call, since then something has woken (falling asleep happens only here). A spring forms only between awake
+// particles, and the spring pass ends one that is held by an awake particle alone and whose other end is asleep, so
+// the springs held at the start of the substep are the groups' springs.
+void b2fSpringGroups( b2fFluid* f, bool settle )
+{
+	uint32_t springLiquids = f->springLiquids;
+	int n = f->count, asleep = 0, ready = 0;
+	for ( int i = 0; i < n; ++i )
+	{
+		if ( ( springLiquids >> f->liquid[i] & 1u ) != 0 )
+		{
+			asleep += f->asleep[i] != 0 ? 1 : 0;
+			ready += settle && f->asleep[i] == 0 && ( f->wake[i] & B2F_WAKE_CALM ) != 0 ? 1 : 0;
+		}
+	}
+	if ( ready == 0 && ( asleep == f->springAsleep || asleep == 0 ) )
+	{
+		f->springAsleep = asleep;
+		return;
+	}
+
+	int* parent = f->springParent;
+	unsigned char* group = f->springGroup;
+	for ( int i = 0; i < n; ++i )
+	{
+		parent[i] = i;
+		group[i] = 0;
+	}
+	for ( int i = 0; i < n; ++i )
+	{
+		if ( ( springLiquids >> f->liquid[i] & 1u ) == 0 )
+		{
+			continue;
+		}
+		const b2fSprings* sp = f->springs + i;
+		for ( int s = 0; s < sp->count; ++s )
+		{
+			int j = sp->rest[s] >= 0.0f ? b2fFindParticle( f, sp->id[s] ) : -1;
+			if ( j < 0 )
+			{
+				continue;
+			}
+			int a = GroupRoot( parent, i ), b = GroupRoot( parent, j );
+			if ( a != b )
+			{
+				// The lower index is the root, though which is does not change the groups
+				parent[a > b ? a : b] = a < b ? a : b;
+			}
+		}
+	}
+
+	for ( int i = 0; i < n; ++i )
+	{
+		if ( ( springLiquids >> f->liquid[i] & 1u ) == 0 )
+		{
+			continue;
+		}
+		unsigned char state = B2F_GROUP_ASLEEP;
+		if ( f->asleep[i] == 0 )
+		{
+			bool calm = settle && ( f->wake[i] & B2F_WAKE_CALM ) != 0;
+			state = calm ? B2F_GROUP_AWAKE : B2F_GROUP_AWAKE | B2F_GROUP_RESTLESS;
+		}
+		group[GroupRoot( parent, i )] |= state;
+	}
+
+	asleep = 0;
+	for ( int i = 0; i < n; ++i )
+	{
+		if ( ( springLiquids >> f->liquid[i] & 1u ) == 0 )
+		{
+			continue;
+		}
+		unsigned char state = group[GroupRoot( parent, i )];
+		if ( f->asleep[i] != 0 && ( state & B2F_GROUP_AWAKE ) != 0 )
+		{
+			b2fWakeParticle( f, i );
+		}
+		else if ( f->asleep[i] == 0 && state == B2F_GROUP_AWAKE )
+		{
+			// All of the group ready, it falls asleep as VelocityTask puts other particles to sleep
+			unsigned int shape = f->contactCount[i] > 0 ? B2F_ASLEEP_SHAPE : 0u;
+			f->asleep[i] = (unsigned char)( B2F_ASLEEP | B2F_ASLEEP_NEW | shape );
+			f->vx[i] = 0.0f;
+			f->vy[i] = 0.0f;
+			f->calm[i] = b2Vec2_zero;
+		}
+		asleep += f->asleep[i] != 0 ? 1 : 0;
+	}
+	f->springAsleep = asleep;
 }

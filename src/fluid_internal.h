@@ -153,10 +153,12 @@ static inline float b2fLatticeSize( float size )
 #define B2F_ASLEEP_NEW 4u
 
 // The wake bits of a particle in a substep: it touches an awake body, so it may not fall asleep; it is to wake at the
-// end of the substep; and it is asleep in the shell
+// end of the substep; it is asleep in the shell; and, of a liquid with springs, it has been slow long enough to fall
+// asleep, and does if every particle its springs join it to has too (b2fSpringGroups)
 #define B2F_WAKE_HELD 1u
 #define B2F_WAKE_NOW 2u
 #define B2F_WAKE_SHELL 4u
+#define B2F_WAKE_CALM 8u
 
 // Springs a particle holds, each to a partner by id, since indices change with every sort, with removals between
 // steps, and with merges and splits at the end of each. The spring pass finds each partner in an id table it builds
@@ -419,8 +421,9 @@ struct b2fFluid
 	b2fLiquid liquids[B2F_MAX_LIQUIDS];
 	int liquidCount;
 	bool adaptive;	 // some liquid has adaptive sizes
-	// A bit for each liquid whose particles may fall asleep: those without springs
-	uint32_t liquidSleeps;
+	// A bit for each live liquid with springs, whose particles fall asleep and wake with all those their springs join
+	// them to (b2fSpringGroups)
+	uint32_t springLiquids;
 	float cohesionBetween[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
 	b2fLiquidPair liquidPairs[B2F_MAX_LIQUIDS][B2F_MAX_LIQUIDS];
 	// For each liquid a bit for every liquid it pushes on, itself always included, and whether some pair of live
@@ -456,6 +459,13 @@ struct b2fFluid
 	int idMapMask, idMapShift;
 	bool springy;	 // some liquid has springs
 	bool checkSprings;	 // the first substep of a step, which checks both ends hold each spring
+	// Scratch for b2fSpringGroups, made with the spring arrays: each particle's parent in the union of its springs,
+	// and what the group at each root holds
+	int* springParent;
+	unsigned char* springGroup;
+	// How many particles of liquids with springs were asleep after the last b2fSpringGroups, or -1 when not known, as
+	// in a fluid just made or restored. While it holds, none has woken since, so no group is part asleep.
+	int springAsleep;
 
 	// Whether particles may fall asleep this step, def.enableSleep and the world's, and how many were asleep after the
 	// last substep, or more
@@ -619,6 +629,30 @@ b2fFluid* b2fGetFluid( b2FluidId fluidId );
 b2fFluid* b2fMakeFluid( struct b2World* world, const b2FluidDef* def, int capacity );
 // Rebuilds what the passes read from the liquids' settings
 void b2fUpdateLiquids( b2fFluid* f );
+// Springs find their partners by id in a table of where each id is this substep (b2fBuildIdMap). The slot is the high
+// bits of the id times 2^32 over the golden ratio (Fibonacci hashing). Ids only grow, so after spawns, splits and
+// drains the live ids can span many table sizes: the id itself, or the low bits of the product, would put ids that
+// differ by a multiple of the table size in the same slot, and a block of such ids would make one long run to probe
+// through.
+static inline unsigned int b2fIdHash( const b2fFluid* f, int id )
+{
+	return ( (unsigned int)id * 2654435761u ) >> f->idMapShift;
+}
+
+static inline int b2fFindParticle( const b2fFluid* f, int id )
+{
+	unsigned int slot = b2fIdHash( f, id );
+	while ( f->idMap[slot].id != -1 )
+	{
+		if ( f->idMap[slot].id == id )
+		{
+			return f->idMap[slot].index;
+		}
+		slot = ( slot + 1 ) & (unsigned int)f->idMapMask;
+	}
+	return -1;
+}
+
 // Makes the fields only adaptive sizes, adaptiveSpeed or springs use, if not made yet
 void b2fAllocateOptional( b2fFluid* f, bool adapt, bool speed, bool springs );
 // Makes room for at least needed particles, doubling, up to maxCapacity. Not during a substep.
@@ -675,6 +709,11 @@ void b2fWakeParticle( b2fFluid* f, int i );
 void b2fWakeAll( b2fFluid* f );
 // Wakes the particles whose centres are in a box
 void b2fWakeBox( b2fFluid* f, b2fCoord minX, b2fCoord minY, b2fCoord maxX, b2fCoord maxY );
+// Fills the id table for this substep's order (fluid_solver.c)
+void b2fBuildIdMap( b2fFluid* f );
+// Keeps particles joined by springs asleep or awake together, reading the id table: wakes every asleep particle whose
+// springs join it to an awake one, and, with settle, puts to sleep each group whose particles are all B2F_WAKE_CALM
+void b2fSpringGroups( b2fFluid* f, bool settle );
 
 // spawn.c
 // Adds the rows each enabled emitter owes for a step of this time

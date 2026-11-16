@@ -181,6 +181,8 @@ void b2fAllocateOptional( b2fFluid* f, bool adapt, bool speed, bool springs )
 		f->springs = b2AllocZero( n * sizeof( b2fSprings ) );
 		f->sortedSprings = b2AllocZero( n * sizeof( b2fSprings ) );
 		f->idMap = b2Alloc( IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
+		f->springParent = b2Alloc( n * sizeof( int ) );
+		f->springGroup = b2Alloc( n * sizeof( unsigned char ) );
 	}
 }
 
@@ -191,7 +193,7 @@ void b2fUpdateLiquids( b2fFluid* f )
 	float spacing = f->spacing;
 	f->adaptive = false;
 	f->springy = false;
-	f->liquidSleeps = 0;
+	f->springLiquids = 0;
 	bool fastSpeed = false;
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
@@ -204,9 +206,7 @@ void b2fUpdateLiquids( b2fFluid* f )
 			f->adaptive = f->adaptive || adaptive;
 			fastSpeed = fastSpeed || ( adaptive && liquid->def.tuning.adaptiveSpeed > 0.0f );
 			f->springy = f->springy || liquid->def.springStiffness > 0.0f;
-			// Springs pull on partners by id, and both ends must work a spring out alike, so liquid with them stays
-			// awake
-			f->liquidSleeps |= liquid->def.springStiffness > 0.0f ? 0u : 1u << a;
+			f->springLiquids |= liquid->def.springStiffness > 0.0f ? 1u << a : 0u;
 		}
 	}
 
@@ -348,6 +348,7 @@ b2fFluid* b2fMakeFluid( b2World* world, const b2FluidDef* def, int capacity )
 	f->restDensity = LatticeDensity( f->spacing, f->radius );
 	f->maxRadius = f->radius;
 	f->gridStale = true;
+	f->springAsleep = -1;
 
 	size_t n = (size_t)f->capacity + 1;
 #define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
@@ -404,6 +405,8 @@ void b2FreeFluid( b2fFluid* f )
 		b2Free( f->springs, n * sizeof( b2fSprings ) );
 		b2Free( f->sortedSprings, n * sizeof( b2fSprings ) );
 		b2Free( f->idMap, IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
+		b2Free( f->springParent, n * sizeof( int ) );
+		b2Free( f->springGroup, n * sizeof( unsigned char ) );
 	}
 	b2Free( f->cellStart, (size_t)f->gridCapacity * sizeof( int ) );
 	b2Free( f->blockSize, (size_t)f->blockCapacity * sizeof( float ) );
@@ -566,6 +569,8 @@ bool b2fGrow( b2fFluid* f, int needed )
 		f->sortedSprings = Resize( f->sortedSprings, old, capacity, sizeof( b2fSprings ), true );
 		b2Free( f->idMap, IdMapSlots( old ) * sizeof( b2fIdSlot ) );
 		f->idMap = b2Alloc( IdMapSlots( capacity ) * sizeof( b2fIdSlot ) );
+		f->springParent = Resize( f->springParent, old, capacity, sizeof( int ), false );
+		f->springGroup = Resize( f->springGroup, old, capacity, sizeof( unsigned char ), false );
 	}
 
 	f->capacity = capacity;
@@ -874,6 +879,13 @@ void b2PrepareFluid( b2fFluid* f, float timeStep, int subStepCount )
 		b2fCoarsenSpawned( f, timeStep / (float)( subStepCount > 1 ? subStepCount : 1 ) );
 	}
 	b2fStepEmitters( f, timeStep );
+	// What woke between steps wakes the rest of its spring group before the first substep predicts anything
+	if ( f->springy && ( f->sleepOn || f->springAsleep != 0 ) )
+	{
+		b2fBuildIdMap( f );
+		b2fSpringGroups( f, false );
+		b2fCountAsleep( f );
+	}
 	b2fGatherShapes( f );
 
 	f->stepTime = 0.0f;
