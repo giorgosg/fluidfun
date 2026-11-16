@@ -81,6 +81,9 @@ b2LiquidDef b2MakeJellyDef( void )
 	// Springs only from the spawn, so it pulls back to the shape it spawned with: forming new springs while a crate
 	// squeezed it left a dent 0.17 m deep (findings section 58)
 	def.formSpringsAfterSpawn = false;
+	// Uniform sizes: a particle that splits starts with no springs and forms them where it is, so splits while it is
+	// squeezed would record the squeeze again
+	def.tuning.adaptiveRatio = 1.0f;
 	return def;
 }
 

@@ -196,7 +196,7 @@ B2_API b2LiquidDef b2MakeHoneyDef( void );
 B2_API b2LiquidDef b2MakeMercuryDef( void );
 /// Thick, sticky and slow
 B2_API b2LiquidDef b2MakeSlimeDef( void );
-/// Springs back to the shape it had
+/// Springs back to the shape it was spawned in. Uniform sizes, since particles that split would form springs anew
 B2_API b2LiquidDef b2MakeJellyDef( void );
 /// Gives way when pushed and keeps its new shape
 B2_API b2LiquidDef b2MakeDoughDef( void );
