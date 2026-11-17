@@ -3,6 +3,7 @@
 #pragma once
 
 #include "box2d/fluidfun.h"
+#include "container.h"
 #include "core.h"
 #include "fluid.h"
 
@@ -27,11 +28,45 @@ typedef float b2fCoord;
 
 // The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount see its memory. b2Free takes the size, so
 // every array is freed with the count it was made with. This grows an array of oldCount items to newCount, keeping
-// what it held; the new part is not cleared.
+// what it held; the new part is not cleared. The density box tables use it, ten arrays with one capacity; the fluid's
+// other arrays are per particle, grown together by b2fGrow, or Box2D's b2Array.
 static inline void* b2fGrowArray( void* array, int oldCount, int newCount, size_t itemSize )
 {
 	return b2GrowAlloc( array, (size_t)oldCount * itemSize, (size_t)newCount * itemSize );
 }
+
+// Sets an array's count, growing it to at least twice its capacity when it must grow, as b2Array_Push does, so an
+// array resized a little larger each step is not reallocated each step. b2Array_Resize grows to exactly n instead.
+// What the array held stays; the new part is not cleared. n is read more than once.
+#define b2fArray_ResizeGrow( a, n )                                                                                     \
+	do                                                                                                                 \
+	{                                                                                                                  \
+		b2Array_Grow( a, n );                                                                                          \
+		( a ).count = ( n );                                                                                           \
+	}                                                                                                                  \
+	while ( 0 )
+
+// Makes a table looked up by index, such as a body's index in the world, long enough to hold index: its count becomes
+// index + 1 if it was shorter, the new entries set to value, and its capacity grows as b2fArray_ResizeGrow grows it.
+// Every entry below the count is set, so a lookup checks the index against the count.
+static inline void b2fGrowTable( b2Array( int ) * table, int index, int value )
+{
+	if ( index < table->count )
+	{
+		return;
+	}
+	b2Array_Grow( *table, index + 1 );
+	for ( int i = table->count; i <= index; ++i )
+	{
+		table->data[i] = value;
+	}
+	table->count = index + 1;
+}
+
+// A float array under the fluid's own name, so that a float array declared by Box2D's container.h one day does not
+// clash with it
+typedef float b2fFloat;
+b2DeclareArrayNative( b2fFloat );
 
 #define B2F_CHUNK_COUNT 64
 #define B2F_CONTACTS_PER_PARTICLE 4
@@ -195,6 +230,16 @@ typedef struct b2fBox
 // The grid covers the bulk of the liquid only while at most one particle in this many is outside it (b2fFindBulk)
 #define B2F_BULK_OUTSIDE 8
 
+// A stretch of an axis (b2fAxis): where it starts, and the cell it starts at, the first stretch's at the grid's corner
+// and cell 0
+typedef struct b2fStretch
+{
+	b2fCoord origin;
+	int first;
+} b2fStretch;
+
+b2DeclareArray( b2fStretch );
+
 // Where cells lie along one side of a grid. Usually one stretch, a cell every cell size from the grid's corner. Liquid
 // in parts far apart along that side gets a stretch for each part, with the empty space between cut to a gap of a few
 // cells, so the grid's cells follow the liquid rather than the area between its parts (b2fFinishAxis). The map from a
@@ -202,21 +247,19 @@ typedef struct b2fBox
 // are, so every pair a pass needs is still found, and a cut gap at least as wide as any reach finds no pair across it.
 typedef struct b2fAxis
 {
-	// Where each stretch starts, and the cell it starts at: the first at the grid's corner and cell 0
-	b2fCoord* origin;
-	int* first;
-	int count, capacity;
+	b2Array( b2fStretch ) stretches;
 	float inverse;	 // one over the cell size
 } b2fAxis;
 
 // The stretch a coordinate is in: the last that starts at or before it, or the first
 static inline int b2fAxisStretch( const b2fAxis* axis, b2fCoord v )
 {
-	int lo = 0, hi = axis->count - 1;
+	const b2fStretch* stretches = axis->stretches.data;
+	int lo = 0, hi = axis->stretches.count - 1;
 	while ( lo < hi )
 	{
 		int mid = ( lo + hi + 1 ) >> 1;
-		if ( axis->origin[mid] <= v )
+		if ( stretches[mid].origin <= v )
 		{
 			lo = mid;
 		}
@@ -232,15 +275,16 @@ static inline int b2fAxisStretch( const b2fAxis* axis, b2fCoord v )
 // gap, is at the last cell before the next stretch; one before the first or after the last is not clamped.
 static inline float b2fAxisCoord( const b2fAxis* axis, b2fCoord v )
 {
-	if ( axis->count == 1 )
+	const b2fStretch* stretches = axis->stretches.data;
+	if ( axis->stretches.count == 1 )
 	{
-		return (float)( v - axis->origin[0] ) * axis->inverse;
+		return (float)( v - stretches[0].origin ) * axis->inverse;
 	}
 	int k = b2fAxisStretch( axis, v );
-	float t = (float)axis->first[k] + (float)( v - axis->origin[k] ) * axis->inverse;
-	if ( k + 1 < axis->count )
+	float t = (float)stretches[k].first + (float)( v - stretches[k].origin ) * axis->inverse;
+	if ( k + 1 < axis->stretches.count )
 	{
-		float end = (float)( axis->first[k + 1] - 1 );
+		float end = (float)( stretches[k + 1].first - 1 );
 		t = t < end ? t : end;
 	}
 	return t;
@@ -272,15 +316,14 @@ typedef struct b2fGrid
 	int border;	 // empty cells on each side, as many as the widest search reaches past its own cell
 	int uniformWindow;	 // cells each side every particle searches when sizes are uniform, otherwise 0
 	// Where each cell's particles start, as indices into the particle arrays, width * height + 1 of them
-	int* start;
-	int capacity;
+	b2Array( int ) start;
 	// The bounds of the particles, and those the grid is laid over, inside its border: all of them, or with bulkOnly
 	// the bulk of the liquid, and the rest are in the cells along its edge
 	b2fBox all, bulk;
 	bool bulkOnly;
 	// Largest particle in each block of cells, and the largest whose reach touches each block
-	float *blockSize, *blockReach;
-	int blockCapacity;
+	b2Array( b2fFloat ) blockSize;
+	b2Array( b2fFloat ) blockReach;
 	// The largest particle in the grid, and the largest the border makes room for, on the solver's lattice
 	float sizeLargest, largest;
 } b2fGrid;
@@ -340,6 +383,9 @@ typedef struct b2fPatch
 	float normalX, normalY;	 // pushes this body away from the other
 	int bodyIndex, otherIndex;
 } b2fPatch;
+
+b2DeclareArray( b2fShape );
+b2DeclareArray( b2fPatch );
 
 // A gap narrower than this many particle spacings counts as one liquid has not filled
 #define B2F_PATCH_GAP 3.0f
@@ -426,9 +472,8 @@ typedef struct b2fShapeBins
 	float inverse;	 // one over the side of a square
 	int width, height;
 	// Where each square's list starts in shapes, width * height + 1 of them
-	int* start;
-	int* shapes;
-	int startCapacity, shapeCapacity;
+	b2Array( int ) start;
+	b2Array( int ) shapes;
 } b2fShapeBins;
 
 // A body that has been in liquid lately, kept across steps, since the list of bodies is rebuilt every step
@@ -441,6 +486,9 @@ typedef struct b2fBodyRecord
 	// Whether the body was near the liquid this step, and had liquid in reach
 	bool seen, wet;
 } b2fBodyRecord;
+
+b2DeclareArray( b2fBody );
+b2DeclareArray( b2fBodyRecord );
 
 // A body's inLiquid changes after this many seconds of steps in a row with liquid in reach, or without it, so that a
 // splash passing by does not begin and end it every step. At 60 Hz that is three steps, and at 120 Hz six.
@@ -455,6 +503,12 @@ typedef struct b2fSensor
 	// A bit for each liquid the sensor counts, by index, from the filters when last gathered
 	uint32_t liquids;
 } b2fSensor;
+
+b2DeclareArray( b2fSensor );
+b2DeclareArray( b2FluidBodyBeginEvent );
+b2DeclareArray( b2FluidBodyEndEvent );
+b2DeclareArray( b2FluidSensorBeginEvent );
+b2DeclareArray( b2FluidSensorEndEvent );
 
 // A shape within the interaction radius of a particle
 typedef struct b2fContact
@@ -494,6 +548,8 @@ typedef struct b2fReaction
 	// it if it sleeps
 	float unsettled;
 } b2fReaction;
+
+b2DeclareArray( b2fReaction );
 
 #define B2F_MAX_EMITTERS B2_MAX_EMITTERS
 
@@ -619,11 +675,10 @@ struct b2fFluid
 	bool filedNow;
 	// For each row of the awake particles' grid, how many of its cells up to each one hold a particle, width + 1 a row,
 	// to find the shell
-	int* cellAwake;
-	int cellAwakeCapacity;
+	b2Array( int ) cellAwake;
 	// The cells near an awake body this substep are those marked with holdSerial, when holdMarked
-	int* cellHold;
-	int cellHoldCapacity, holdSerial;
+	b2Array( int ) cellHold;
+	int holdSerial;
 	bool holdMarked;
 
 	int sizeChanges;
@@ -638,32 +693,27 @@ struct b2fFluid
 	// The grid over the awake particles, sorted every substep
 	b2fGrid grid;
 
-	b2fShape* shapes;
-	int shapeCount, shapeCapacity;
+	b2Array( b2fShape ) shapes;
 	// When liquid lies outside its bulk, shapes are gathered with several queries, and this marks each shape of the
 	// world, by its index there, with the gather that took it, so it is taken once
-	int* gatherMark;
-	int gatherMarkCapacity, gatherSerial;
+	b2Array( int ) gatherMark;
+	int gatherSerial;
 	bool gatherMarking;
-	b2fBody* bodies;
-	int bodyCount, bodyCapacity;
+	b2Array( b2fBody ) bodies;
 	// Where each body of the world is in bodies, by its index in the world; good only where that entry is below
-	// bodyCount and its body has this index, so it needs no clearing between steps
-	int* bodyOfIndex;
-	int bodyOfIndexCapacity;
-	b2fReaction* reactions;
-	int reactionCapacity;
-	b2fPatch* patches;
-	int patchCount, patchCapacity;
+	// the count of bodies and its body has this index, so it needs no clearing between steps
+	b2Array( int ) bodyOfIndex;
+	// What each chunk of particles gives each body in a substep, B2F_CHUNK_COUNT times the bodies, summed afterwards
+	b2Array( b2fReaction ) reactions;
+	b2Array( b2fPatch ) patches;
 	// The shapes in the blocks of each substep's grid, and the shapes forces do not move in a grid over them, once a
 	// step, for finding patches; and the shapes in the blocks of the sleep grid, for asleep particles
 	b2fShapeBins shapeBins, fixedBins, sleepBins;
 	// Scratch for finding patches, one of each per shape: the shapes of each body in order, a mark per shape, and
 	// the candidates of one query
-	int* bodyShapes;
-	int* shapeMark;
-	int* candidates;
-	int markCapacity;
+	b2Array( int ) bodyShapes;
+	b2Array( int ) shapeMark;
+	b2Array( int ) candidates;
 
 	// Set per step and substep. Gravity is the world's; each liquid scales it by its gravityScale.
 	float h;
@@ -677,8 +727,9 @@ struct b2fFluid
 	// Liquid in parts far apart is measured a part at a time (fluid_adapt.c): the axes that find the parts, the particles
 	// of each part in turn, and where each part's run starts in that list
 	b2fAxis partAxes[2];
-	int *partList, *partStart, *partOf;
-	int partListCapacity, partStartCapacity;
+	b2Array( int ) partList;
+	b2Array( int ) partStart;
+	b2Array( int ) partOf;
 	// Scratch for laying out axes: which bins along x and along y hold particles
 	struct b2BitSet* axisBits[2];
 
@@ -690,23 +741,17 @@ struct b2fFluid
 	// What the liquid tells the caller after each step (fluid_state.c). Time and substeps the liquid ran this step.
 	float stepTime;
 	int stepSubSteps;
-	b2fBodyRecord* records;
-	int recordCount, recordCapacity;
+	b2Array( b2fBodyRecord ) records;
 	// The record of each body, by its index in the world, plus one; zero for none. A destroyed body's slot can point
 	// at its record until the record goes, so the id in the record is checked.
-	int* recordOfBody;
-	int recordOfBodyCapacity;
-	b2fSensor* sensors;
-	int sensorCount, sensorCapacity;
+	b2Array( int ) recordOfBody;
+	b2Array( b2fSensor ) sensors;
 	// Mass of each liquid within reach of each body in the last substep, to find which liquid a body is in
-	float* bodyLiquidMass;
-	int bodyLiquidCapacity;
-	b2FluidBodyBeginEvent* bodyBeginEvents;
-	b2FluidBodyEndEvent* bodyEndEvents;
-	b2FluidSensorBeginEvent* sensorBeginEvents;
-	b2FluidSensorEndEvent* sensorEndEvents;
-	int bodyBeginCount, bodyEndCount, sensorBeginCount, sensorEndCount;
-	int bodyBeginCapacity, bodyEndCapacity, sensorBeginCapacity, sensorEndCapacity;
+	b2Array( b2fFloat ) bodyLiquidMass;
+	b2Array( b2FluidBodyBeginEvent ) bodyBeginEvents;
+	b2Array( b2FluidBodyEndEvent ) bodyEndEvents;
+	b2Array( b2FluidSensorBeginEvent ) sensorBeginEvents;
+	b2Array( b2FluidSensorEndEvent ) sensorEndEvents;
 };
 
 static inline void b2fCopyParticle( b2fFluid* f, int to, int from )
@@ -749,7 +794,7 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 		for ( const b2fGrid* grid_ = g_ == 0 ? &( f )->grid : &( f )->sleepGrid; grid_ != NULL; grid_ = NULL )                   \
 			for ( int r_ = g_ == 0 ? ( reach ) : ( sleepReach ), row_ = -r_, cell_ = g_ == 0 ? ( f )->cell[i] : ( f )->sleepCell[i]; \
 				  row_ <= r_; ++row_ )                                                                                           \
-				for ( int j = grid_->start[cell_ + row_ * grid_->width - r_], end_ = grid_->start[cell_ + row_ * grid_->width + r_ + 1]; \
+				for ( int j = grid_->start.data[cell_ + row_ * grid_->width - r_], end_ = grid_->start.data[cell_ + row_ * grid_->width + r_ + 1]; \
 					  j < end_; ++j )
 
 #define FOR_NEIGHBOURS( f, i, j )                                                                                       \

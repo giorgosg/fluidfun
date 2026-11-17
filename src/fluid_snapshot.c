@@ -140,29 +140,29 @@ void b2fSerializeFluid( const b2World* world, b2RecBuffer* buf )
 
 	// Gathered by the last step, read by the next step's coarsening before it gathers. The body state pointer is only
 	// good inside a step.
-	WI( buf, f->shapeCount );
-	W( buf, f->shapes, (size_t)f->shapeCount * sizeof( b2fShape ) );
-	WI( buf, f->bodyCount );
-	for ( int i = 0; i < f->bodyCount; ++i )
+	WI( buf, f->shapes.count );
+	W( buf, f->shapes.data, (size_t)f->shapes.count * sizeof( b2fShape ) );
+	WI( buf, f->bodies.count );
+	for ( int i = 0; i < f->bodies.count; ++i )
 	{
-		b2fBody body = f->bodies[i];
+		b2fBody body = f->bodies.data[i];
 		body.state = NULL;
 		W( buf, &body, sizeof( body ) );
 	}
 	uint8_t flags[2] = { f->shapesFiltered, f->shapesDropped };
 	W( buf, flags, sizeof( flags ) );
 
-	WI( buf, f->recordCount );
-	W( buf, f->records, (size_t)f->recordCount * sizeof( b2fBodyRecord ) );
-	int lookup = f->recordOfBodyCapacity;
-	while ( lookup > 0 && f->recordOfBody[lookup - 1] == 0 )
+	WI( buf, f->records.count );
+	W( buf, f->records.data, (size_t)f->records.count * sizeof( b2fBodyRecord ) );
+	int lookup = f->recordOfBody.count;
+	while ( lookup > 0 && f->recordOfBody.data[lookup - 1] == 0 )
 	{
 		lookup -= 1;
 	}
 	WI( buf, lookup );
-	W( buf, f->recordOfBody, (size_t)lookup * sizeof( int ) );
-	WI( buf, f->sensorCount );
-	W( buf, f->sensors, (size_t)f->sensorCount * sizeof( b2fSensor ) );
+	W( buf, f->recordOfBody.data, (size_t)lookup * sizeof( int ) );
+	WI( buf, f->sensors.count );
+	W( buf, f->sensors.data, (size_t)f->sensors.count * sizeof( b2fSensor ) );
 }
 
 typedef struct Reader
@@ -205,17 +205,6 @@ static int RCount( Reader* r, int limit, size_t bytes )
 		return 0;
 	}
 	return count;
-}
-
-// Grows an array the fluid frees by its capacity to hold count items
-static void* Room( void* array, int* capacity, int count, size_t size )
-{
-	if ( count > *capacity )
-	{
-		array = b2fGrowArray( array, *capacity, count, size );
-		*capacity = count;
-	}
-	return array;
 }
 
 void b2fClearFluidState( b2World* world )
@@ -351,31 +340,31 @@ bool b2fDeserializeFluid( b2World* world, const uint8_t* data, int size, int* cu
 		}
 	}
 
-	f->shapeCount = RCount( r, INT_MAX / (int)sizeof( b2fShape ), sizeof( b2fShape ) );
-	f->shapes = Room( f->shapes, &f->shapeCapacity, f->shapeCount, sizeof( b2fShape ) );
-	R( r, f->shapes, (size_t)f->shapeCount * sizeof( b2fShape ) );
-	f->bodyCount = RCount( r, INT_MAX / (int)sizeof( b2fBody ), sizeof( b2fBody ) );
-	f->bodies = Room( f->bodies, &f->bodyCapacity, f->bodyCount, sizeof( b2fBody ) );
-	R( r, f->bodies, (size_t)f->bodyCount * sizeof( b2fBody ) );
-	for ( int i = 0; i < f->bodyCount; ++i )
+	int shapeCount = RCount( r, INT_MAX / (int)sizeof( b2fShape ), sizeof( b2fShape ) );
+	b2Array_Resize( f->shapes, shapeCount );
+	R( r, f->shapes.data, (size_t)shapeCount * sizeof( b2fShape ) );
+	int bodyCount = RCount( r, INT_MAX / (int)sizeof( b2fBody ), sizeof( b2fBody ) );
+	b2Array_Resize( f->bodies, bodyCount );
+	R( r, f->bodies.data, (size_t)bodyCount * sizeof( b2fBody ) );
+	for ( int i = 0; i < f->bodies.count; ++i )
 	{
-		f->bodies[i].id.world0 = world0;
+		f->bodies.data[i].id.world0 = world0;
 	}
-	for ( int i = 0; i < f->shapeCount; ++i )
+	for ( int i = 0; i < f->shapes.count; ++i )
 	{
-		r->ok = r->ok && 0 <= f->shapes[i].bodyIndex && f->shapes[i].bodyIndex < f->bodyCount;
+		r->ok = r->ok && 0 <= f->shapes.data[i].bodyIndex && f->shapes.data[i].bodyIndex < f->bodies.count;
 	}
 	uint8_t flags[2];
 	R( r, flags, sizeof( flags ) );
 	f->shapesFiltered = flags[0] != 0;
 	f->shapesDropped = flags[1] != 0;
 
-	f->recordCount = RCount( r, INT_MAX / (int)sizeof( b2fBodyRecord ), sizeof( b2fBodyRecord ) );
-	f->records = Room( f->records, &f->recordCapacity, f->recordCount, sizeof( b2fBodyRecord ) );
-	R( r, f->records, (size_t)f->recordCount * sizeof( b2fBodyRecord ) );
-	for ( int i = 0; i < f->recordCount; ++i )
+	int recordCount = RCount( r, INT_MAX / (int)sizeof( b2fBodyRecord ), sizeof( b2fBodyRecord ) );
+	b2Array_Resize( f->records, recordCount );
+	R( r, f->records.data, (size_t)recordCount * sizeof( b2fBodyRecord ) );
+	for ( int i = 0; i < f->records.count; ++i )
 	{
-		b2fBodyRecord* record = f->records + i;
+		b2fBodyRecord* record = f->records.data + i;
 		record->id.world0 = world0;
 		if ( B2_IS_NON_NULL( record->state.liquidId ) )
 		{
@@ -383,18 +372,18 @@ bool b2fDeserializeFluid( b2World* world, const uint8_t* data, int size, int* cu
 		}
 	}
 	int lookup = RCount( r, INT_MAX / (int)sizeof( int ), sizeof( int ) );
-	f->recordOfBody = Room( f->recordOfBody, &f->recordOfBodyCapacity, lookup, sizeof( int ) );
-	R( r, f->recordOfBody, (size_t)lookup * sizeof( int ) );
+	b2Array_Resize( f->recordOfBody, lookup );
+	R( r, f->recordOfBody.data, (size_t)lookup * sizeof( int ) );
 	for ( int i = 0; i < lookup; ++i )
 	{
-		r->ok = r->ok && 0 <= f->recordOfBody[i] && f->recordOfBody[i] <= f->recordCount;
+		r->ok = r->ok && 0 <= f->recordOfBody.data[i] && f->recordOfBody.data[i] <= f->records.count;
 	}
-	f->sensorCount = RCount( r, INT_MAX / (int)sizeof( b2fSensor ), sizeof( b2fSensor ) );
-	f->sensors = Room( f->sensors, &f->sensorCapacity, f->sensorCount, sizeof( b2fSensor ) );
-	R( r, f->sensors, (size_t)f->sensorCount * sizeof( b2fSensor ) );
-	for ( int i = 0; i < f->sensorCount; ++i )
+	int sensorCount = RCount( r, INT_MAX / (int)sizeof( b2fSensor ), sizeof( b2fSensor ) );
+	b2Array_Resize( f->sensors, sensorCount );
+	R( r, f->sensors.data, (size_t)sensorCount * sizeof( b2fSensor ) );
+	for ( int i = 0; i < f->sensors.count; ++i )
 	{
-		f->sensors[i].id.world0 = world0;
+		f->sensors.data[i].id.world0 = world0;
 	}
 
 	if ( r->ok == false )
@@ -493,17 +482,17 @@ uint64_t b2fHashFluid( const b2World* world, uint64_t hash, bool deep )
 		hash = MixBits( hash, &emitter->rows, sizeof( int ) );
 	}
 	hash = MixBits( hash, &f->coarsenLiquids, sizeof( uint32_t ) );
-	for ( int r = 0; r < f->recordCount; ++r )
+	for ( int r = 0; r < f->records.count; ++r )
 	{
-		const b2fBodyRecord* record = f->records + r;
+		const b2fBodyRecord* record = f->records.data + r;
 		hash = MixBits( hash, &record->id.index1, sizeof( int ) );
 		hash = ( hash ^ (uint64_t)record->state.inLiquid ) * B2_SNAP_FNV_PRIME;
 		hash = MixBits( hash, &record->run, sizeof( float ) );
 	}
-	for ( int s = 0; s < f->sensorCount; ++s )
+	for ( int s = 0; s < f->sensors.count; ++s )
 	{
-		hash = MixBits( hash, &f->sensors[s].id.index1, sizeof( int ) );
-		hash = MixBits( hash, &f->sensors[s].area, sizeof( float ) );
+		hash = MixBits( hash, &f->sensors.data[s].id.index1, sizeof( int ) );
+		hash = MixBits( hash, &f->sensors.data[s].area, sizeof( float ) );
 	}
 	return hash;
 }

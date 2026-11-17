@@ -56,7 +56,7 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 	{
 		float move = pressure * contacts[c].pressureWeight + nearPressure * contacts[c].nearWeight;
 		move = move < 0.0f ? 0.0f : ( move > limit ? limit : move );
-		if ( adhesion > 0.0f && f->bodies[contacts[c].bodyIndex].adheres )
+		if ( adhesion > 0.0f && f->bodies.data[contacts[c].bodyIndex].adheres )
 		{
 			float d = ( 1.0f - contacts[c].share ) * h;
 			float spline = -4.0f * d * d / h + 6.0f * d - 2.0f * h;

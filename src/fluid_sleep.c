@@ -118,7 +118,7 @@ static void FindAwakeCell( b2fFluid* f, int i )
 	if ( grid->uniformWindow == 0 )
 	{
 		int bw = ( grid->width + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT;
-		float near = grid->blockReach[( cy >> B2F_BLOCK_SHIFT ) * bw + ( cx >> B2F_BLOCK_SHIFT )];
+		float near = grid->blockReach.data[( cy >> B2F_BLOCK_SHIFT ) * bw + ( cx >> B2F_BLOCK_SHIFT )];
 		float size = b2fLatticeSize( f->size[i] ), reach = size + ( near > size ? near : size );
 		f->window[i] = (int)ceilf( reach * inv );
 	}
@@ -143,8 +143,8 @@ static void CellRowTask( int start, int end, int worker, void* context )
 	int width = grid->width, stride = width + 1;
 	for ( int row = start; row < end; ++row )
 	{
-		int* counts = f->cellAwake + row * stride;
-		const int* cells = grid->start + row * width;
+		int* counts = f->cellAwake.data + row * stride;
+		const int* cells = grid->start.data + row * width;
 		int sum = 0;
 		counts[0] = 0;
 		for ( int x = 0; x < width; ++x )
@@ -179,7 +179,7 @@ static void ShellTask( int start, int end, int worker, void* context )
 			int cx = f->cell[i] % width, cy = f->cell[i] / width;
 			for ( int row = cy - r; row <= cy + r && shell == false; ++row )
 			{
-				const int* counts = f->cellAwake + row * stride;
+				const int* counts = f->cellAwake.data + row * stride;
 				shell = counts[cx + r + 1] > counts[cx - r];
 			}
 		}
@@ -202,11 +202,7 @@ void b2fFindShell( b2fFluid* f, b2SubStepContext* context )
 	if ( a > 0 )
 	{
 		int needed = f->grid.height * ( f->grid.width + 1 );
-		if ( needed > f->cellAwakeCapacity )
-		{
-			f->cellAwake = b2fGrowArray( f->cellAwake, f->cellAwakeCapacity, 2 * needed, sizeof( int ) );
-			f->cellAwakeCapacity = 2 * needed;
-		}
+		b2fArray_ResizeGrow( f->cellAwake, needed );
 		b2SubStep_ParallelFor( context, CellRowTask, f->grid.height, 16, f );
 	}
 	b2SubStep_ParallelFor( context, ShellTask, n - a, 512, f );
@@ -234,10 +230,10 @@ bool b2fWakeHeld( b2fFluid* f )
 
 	const b2fGrid* grid = &f->sleepGrid;
 	int width = grid->width, height = grid->height, woke = 0;
-	for ( int si = 0; si < f->shapeCount; ++si )
+	for ( int si = 0; si < f->shapes.count; ++si )
 	{
-		const b2fShape* s = f->shapes + si;
-		if ( f->bodies[s->bodyIndex].awake == false )
+		const b2fShape* s = f->shapes.data + si;
+		if ( f->bodies.data[s->bodyIndex].awake == false )
 		{
 			continue;
 		}
@@ -256,7 +252,7 @@ bool b2fWakeHeld( b2fFluid* f )
 		{
 			for ( int c = y * width + cx0, last = y * width + cx1; c <= last; ++c )
 			{
-				for ( int k = grid->start[c]; k < grid->start[c + 1]; ++k )
+				for ( int k = grid->start.data[c]; k < grid->start.data[c + 1]; ++k )
 				{
 					// Just filed, the grid holds where particles are to go
 					int i = f->filePending ? f->order[k] : k;

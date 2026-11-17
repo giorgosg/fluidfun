@@ -427,29 +427,29 @@ void b2FreeFluid( b2fFluid* f )
 	b2fGrid* grids[2] = { &f->grid, &f->sleepGrid };
 	for ( int i = 0; i < 2; ++i )
 	{
-		b2Free( grids[i]->start, (size_t)grids[i]->capacity * sizeof( int ) );
-		b2Free( grids[i]->blockSize, (size_t)grids[i]->blockCapacity * sizeof( float ) );
-		b2Free( grids[i]->blockReach, (size_t)grids[i]->blockCapacity * sizeof( float ) );
+		b2Array_Destroy( grids[i]->start );
+		b2Array_Destroy( grids[i]->blockSize );
+		b2Array_Destroy( grids[i]->blockReach );
 		b2fFreeAxis( &grids[i]->ax );
 		b2fFreeAxis( &grids[i]->ay );
 	}
-	b2Free( f->cellAwake, (size_t)f->cellAwakeCapacity * sizeof( int ) );
-	b2Free( f->shapes, (size_t)f->shapeCapacity * sizeof( b2fShape ) );
-	b2Free( f->gatherMark, (size_t)f->gatherMarkCapacity * sizeof( int ) );
-	b2Free( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
-	b2Free( f->bodyOfIndex, (size_t)f->bodyOfIndexCapacity * sizeof( int ) );
-	b2Free( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );
-	b2Free( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
-	b2Free( f->cellHold, (size_t)f->cellHoldCapacity * sizeof( int ) );
+	b2Array_Destroy( f->cellAwake );
+	b2Array_Destroy( f->shapes );
+	b2Array_Destroy( f->gatherMark );
+	b2Array_Destroy( f->bodies );
+	b2Array_Destroy( f->bodyOfIndex );
+	b2Array_Destroy( f->reactions );
+	b2Array_Destroy( f->patches );
+	b2Array_Destroy( f->cellHold );
 	b2fShapeBins* bins[3] = { &f->shapeBins, &f->fixedBins, &f->sleepBins };
 	for ( int i = 0; i < 3; ++i )
 	{
-		b2Free( bins[i]->start, (size_t)bins[i]->startCapacity * sizeof( int ) );
-		b2Free( bins[i]->shapes, (size_t)bins[i]->shapeCapacity * sizeof( int ) );
+		b2Array_Destroy( bins[i]->start );
+		b2Array_Destroy( bins[i]->shapes );
 	}
-	b2Free( f->bodyShapes, (size_t)f->markCapacity * sizeof( int ) );
-	b2Free( f->shapeMark, (size_t)f->markCapacity * sizeof( int ) );
-	b2Free( f->candidates, (size_t)f->markCapacity * sizeof( int ) );
+	b2Array_Destroy( f->bodyShapes );
+	b2Array_Destroy( f->shapeMark );
+	b2Array_Destroy( f->candidates );
 	size_t boxes = (size_t)f->boxCapacity;
 	b2Free( f->boxMass, boxes * sizeof( double ) );
 	b2Free( f->boxPx, boxes * sizeof( double ) );
@@ -461,9 +461,9 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f->boxPressure, boxes * sizeof( float ) );
 	b2Free( f->boxDepth, boxes * sizeof( float ) );
 	b2Free( f->boxFlow, boxes * sizeof( float ) );
-	b2Free( f->partList, (size_t)f->partListCapacity * sizeof( int ) );
-	b2Free( f->partOf, (size_t)f->partListCapacity * sizeof( int ) );
-	b2Free( f->partStart, (size_t)f->partStartCapacity * sizeof( int ) );
+	b2Array_Destroy( f->partList );
+	b2Array_Destroy( f->partOf );
+	b2Array_Destroy( f->partStart );
 	for ( int i = 0; i < 2; ++i )
 	{
 		b2fFreeAxis( f->partAxes + i );
@@ -1000,9 +1000,9 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFl
 
 	b2fUpdateBodies( f );
 	bool awakeBody = false;
-	for ( int i = 0; i < f->bodyCount && awakeBody == false; ++i )
+	for ( int i = 0; i < f->bodies.count && awakeBody == false; ++i )
 	{
-		awakeBody = f->bodies[i].awake;
+		awakeBody = f->bodies.data[i].awake;
 	}
 
 	// Asleep particles are filed apart from the awake ones once some fall asleep or wake, and those near an awake body
