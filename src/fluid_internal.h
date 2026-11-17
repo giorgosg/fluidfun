@@ -195,11 +195,77 @@ typedef struct b2fBox
 // The grid covers the bulk of the liquid only while at most one particle in this many is outside it (b2fFindBulk)
 #define B2F_BULK_OUTSIDE 8
 
+// Where cells lie along one side of a grid. Usually one stretch, a cell every cell size from the grid's corner. Liquid
+// in parts far apart along that side gets a stretch for each part, with the empty space between cut to a gap of a few
+// cells, so the grid's cells follow the liquid rather than the area between its parts (b2fFinishAxis). The map from a
+// coordinate to its cell keeps the order of coordinates and never moves two points further apart in cells than they
+// are, so every pair a pass needs is still found, and a cut gap at least as wide as any reach finds no pair across it.
+typedef struct b2fAxis
+{
+	// Where each stretch starts, and the cell it starts at: the first at the grid's corner and cell 0
+	b2fCoord* origin;
+	int* first;
+	int count, capacity;
+	float inverse;	 // one over the cell size
+} b2fAxis;
+
+// The stretch a coordinate is in: the last that starts at or before it, or the first
+static inline int b2fAxisStretch( const b2fAxis* axis, b2fCoord v )
+{
+	int lo = 0, hi = axis->count - 1;
+	while ( lo < hi )
+	{
+		int mid = ( lo + hi + 1 ) >> 1;
+		if ( axis->origin[mid] <= v )
+		{
+			lo = mid;
+		}
+		else
+		{
+			hi = mid - 1;
+		}
+	}
+	return lo;
+}
+
+// Where a coordinate is along an axis, in cells from the grid's corner, not rounded. One between stretches, in a cut
+// gap, is at the last cell before the next stretch; one before the first or after the last is not clamped.
+static inline float b2fAxisCoord( const b2fAxis* axis, b2fCoord v )
+{
+	if ( axis->count == 1 )
+	{
+		return (float)( v - axis->origin[0] ) * axis->inverse;
+	}
+	int k = b2fAxisStretch( axis, v );
+	float t = (float)axis->first[k] + (float)( v - axis->origin[k] ) * axis->inverse;
+	if ( k + 1 < axis->count )
+	{
+		float end = (float)( axis->first[k + 1] - 1 );
+		t = t < end ? t : end;
+	}
+	return t;
+}
+
+// Marks which stretches of an axis hold particles, in bins of several cells, before b2fFinishAxis lays it out
+typedef struct b2fAxisLayout
+{
+	b2fCoord lo, hi;
+	float cell;
+	int binCells;
+	double inverseBin;
+	uint32_t binCount;
+	struct b2BitSet* bits;
+} b2fAxisLayout;
+
 // Cells over a run of particles sorted by cell along rows, so the particles of each cell are one run and each row of a
 // square of cells is one run too (fluid_grid.c). The fluid keeps two: one over the awake particles, sorted again every
 // substep, and one over the asleep particles, made when they are filed and kept while none of them wakes.
 typedef struct b2fGrid
 {
+	// Where cells lie along x and y. Where the liquid is in parts far apart, the empty space between is cut out, so the
+	// cell size stays the smallest (b2fAxis).
+	b2fAxis ax, ay;
+	bool cut;	 // some axis has more than one stretch
 	b2fCoord x, y;	 // lower corner, border included
 	float cell;	 // cellSize, doubled as often as it takes to keep the grid small
 	int width, height;
@@ -218,6 +284,38 @@ typedef struct b2fGrid
 	// The largest particle in the grid, and the largest the border makes room for, on the solver's lattice
 	float sizeLargest, largest;
 } b2fGrid;
+
+// A point's cell in a grid, clamped inside its border, with the cell's column and row. Clamped in float before the
+// conversion, so a point however far out is in range.
+static inline int b2fGridCell( const b2fGrid* grid, b2Pos p, int* cx, int* cy )
+{
+	float lo = (float)grid->border, hiX = (float)( grid->width - 1 - grid->border ), hiY = (float)( grid->height - 1 - grid->border );
+	float tx, ty;
+	if ( grid->cut )
+	{
+		tx = b2fAxisCoord( &grid->ax, p.x );
+		ty = b2fAxisCoord( &grid->ay, p.y );
+	}
+	else
+	{
+		float inv = grid->ax.inverse;
+		tx = (float)( p.x - grid->x ) * inv;
+		ty = (float)( p.y - grid->y ) * inv;
+	}
+	*cx = (int)( tx > lo ? ( tx < hiX ? tx : hiX ) : lo );
+	*cy = (int)( ty > lo ? ( ty < hiY ? ty : hiY ) : lo );
+	return *cy * grid->width + *cx;
+}
+
+// The cells from a to b along an axis of a grid, clamped inside its border as particles' cells are, so every particle
+// between a and b is in a cell of the range
+static inline void b2fGridRange( const b2fGrid* grid, const b2fAxis* axis, int size, b2fCoord a, b2fCoord b, int* c0, int* c1 )
+{
+	float lo = (float)grid->border, hi = (float)( size - 1 - grid->border );
+	float t0 = b2fAxisCoord( axis, a ), t1 = b2fAxisCoord( axis, b );
+	*c0 = (int)( t0 > lo ? ( t0 < hi ? t0 : hi ) : lo );
+	*c1 = (int)( t1 > lo ? ( t1 < hi ? t1 : hi ) : lo );
+}
 
 typedef struct b2fShape
 {
@@ -322,6 +420,8 @@ typedef struct b2fBody
 // overlap: clamping does not change the order of coordinates.
 typedef struct b2fShapeBins
 {
+	// The particles' grid whose blocks these are, with its axes, or null for a grid of its own
+	const struct b2fGrid* grid;
 	b2fCoord x, y;	 // lower corner of the grid
 	float inverse;	 // one over the side of a square
 	int width, height;
@@ -574,6 +674,13 @@ struct b2fFluid
 	unsigned char *boxLiquid, *boxNeeded;
 	float *boxDepth, *boxFlow, *boxPressure;
 	int boxCapacity;
+	// Liquid in parts far apart is measured a part at a time (fluid_adapt.c): the axes that find the parts, the particles
+	// of each part in turn, and where each part's run starts in that list
+	b2fAxis partAxes[2];
+	int *partList, *partStart, *partOf;
+	int partListCapacity, partStartCapacity;
+	// Scratch for laying out axes: which bins along x and along y hold particles
+	struct b2BitSet* axisBits[2];
 
 	b2FluidProfile profile;
 	// This step's substeps, which ran inside the solver's, for the world's profile
@@ -647,6 +754,9 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 
 #define FOR_NEIGHBOURS( f, i, j )                                                                                       \
 	FOR_NEIGHBOURS_WITHIN( f, i, j, ( f )->grid.uniformWindow > 0 ? ( f )->grid.uniformWindow : ( f )->window[i], ( f )->sleepWindow[i] )
+
+// The particles of a run: those listed from first to last, or with no list the particles first to last themselves
+#define FOR_RUN( list, first, last, i ) for ( int k_ = ( first ), i = 0; k_ < ( last ) && ( i = ( list ) != NULL ? ( list )[k_] : k_, true ); ++k_ )
 
 // A shape's outline where it is now, and its bounds in the world, for testing whether particle centres are inside it.
 // Every call that picks particles in a region tests this one outline (b2fPicks), whatever the region's type: a box
@@ -727,6 +837,26 @@ void b2fSortAwake( b2fFluid* f, b2SubStepContext* context );
 // B2F_BULK_OUTSIDE. Otherwise true, and the bulk is a box that fits and holds as many particles as it can, found along
 // each axis in turn. One thread, in particle order, so it does not depend on worker count.
 bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk );
+// An axis of one stretch, a cell of this inverse size from origin
+void b2fPlainAxis( b2fAxis* axis, b2fCoord origin, float inverse );
+// Starts laying out an axis over coordinates from lo to hi in cells of this size, with the bits of the given scratch.
+// Each coordinate of a particle is then marked, and b2fFinishAxis lays the axis out.
+void b2fBeginAxis( b2fFluid* f, int which, b2fAxisLayout* layout, b2fCoord lo, b2fCoord hi, float cell );
+void b2fMarkAxis( b2fAxisLayout* layout, b2fCoord v );
+// The bin a coordinate marks
+uint32_t b2fAxisBin( const b2fAxisLayout* layout, b2fCoord v );
+// Lays out the axis from the marks: border empty cells before the first particle, a stretch for each run of marked bins,
+// and gaps of more than gap empty cells between runs cut to gap. Returns the cells from the grid's corner to the last
+// particle's, with border cells after it, or more than limit, where it stops.
+int b2fFinishAxis( b2fAxis* axis, const b2fAxisLayout* layout, int border, int gap, int limit );
+void b2fFreeAxis( b2fAxis* axis );
+// Finds the parts of the liquid, apart along x or y by more than gap empty cells of this size: the particles in one
+// stretch of each of the axes laid out over them (b2fFinishAxis), kept in partAxes. Lists the particles of each part in
+// partList, part after part, each part's in particle order, from partStart[p] to partStart[p + 1], and returns how many
+// parts there could be, x stretches times y stretches. Returns 1, listing nothing, for one part, or too many to list.
+int b2fFindParts( b2fFluid* f, float cell, int gap );
+// Whether a grid of this cell and border over the box fits the limits of a grid over count particles
+bool b2fFitsGrid( const b2fBox* box, float cell, int border, int count );
 
 // solver.c
 void b2fPredict( b2fFluid* f, b2SubStepContext* context );

@@ -113,11 +113,8 @@ static void FindAwakeCell( b2fFluid* f, int i )
 {
 	const b2fGrid* grid = &f->grid;
 	float inv = 1.0f / grid->cell;
-	float firstCell = (float)grid->border, lastX = (float)( grid->width - 1 - grid->border ), lastY = (float)( grid->height - 1 - grid->border );
-	float tx = (float)( f->pos[i].x - grid->x ) * inv, ty = (float)( f->pos[i].y - grid->y ) * inv;
-	int cx = (int)( tx > firstCell ? ( tx < lastX ? tx : lastX ) : firstCell );
-	int cy = (int)( ty > firstCell ? ( ty < lastY ? ty : lastY ) : firstCell );
-	f->cell[i] = cy * grid->width + cx;
+	int cx, cy;
+	f->cell[i] = b2fGridCell( grid, f->pos[i], &cx, &cy );
 	if ( grid->uniformWindow == 0 )
 	{
 		int bw = ( grid->width + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT;
@@ -237,7 +234,6 @@ bool b2fWakeHeld( b2fFluid* f )
 
 	const b2fGrid* grid = &f->sleepGrid;
 	int width = grid->width, height = grid->height, woke = 0;
-	float inverse = 1.0f / grid->cell;
 	for ( int si = 0; si < f->shapeCount; ++si )
 	{
 		const b2fShape* s = f->shapes + si;
@@ -253,11 +249,9 @@ bool b2fWakeHeld( b2fFluid* f )
 			continue;
 		}
 		// Clamped as the particles' cells are, so every particle inside the bounds is in a cell of the range
-		float x0 = (float)( minX - grid->x ) * inverse, x1 = (float)( maxX - grid->x ) * inverse;
-		float y0 = (float)( minY - grid->y ) * inverse, y1 = (float)( maxY - grid->y ) * inverse;
-		float lo = (float)grid->border, hiX = (float)( width - 1 - grid->border ), hiY = (float)( height - 1 - grid->border );
-		int cx0 = (int)( x0 > lo ? ( x0 < hiX ? x0 : hiX ) : lo ), cx1 = (int)( x1 > lo ? ( x1 < hiX ? x1 : hiX ) : lo );
-		int cy0 = (int)( y0 > lo ? ( y0 < hiY ? y0 : hiY ) : lo ), cy1 = (int)( y1 > lo ? ( y1 < hiY ? y1 : hiY ) : lo );
+		int cx0, cx1, cy0, cy1;
+		b2fGridRange( grid, &grid->ax, width, minX, maxX, &cx0, &cx1 );
+		b2fGridRange( grid, &grid->ay, height, minY, maxY, &cy0, &cy1 );
 		for ( int y = cy0; y <= cy1; ++y )
 		{
 			for ( int c = y * width + cx0, last = y * width + cx1; c <= last; ++c )
