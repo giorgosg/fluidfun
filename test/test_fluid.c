@@ -1250,16 +1250,24 @@ static int FluidCrowdedSprings( void )
 	}
 	b2World_Step( worldId, 1.0f / 60.0f, 1 );
 
+	// Each spring is in the table once, so a particle's springs are those with its id at either end
 	const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
+	int* springsOfId = calloc( (size_t)f->nextParticleId, sizeof( int ) );
+	for ( int s = 0; s < f->springs.count; ++s )
+	{
+		springsOfId[f->springs.data[s].a] += 1;
+		springsOfId[f->springs.data[s].b] += 1;
+	}
 	int crowded = 0, springless = 0;
 	for ( int i = 0; i < f->count; ++i )
 	{
 		if ( f->pairCount[i] < 0 )
 		{
 			crowded += 1;
-			springless += f->springs[i].count == 0 ? 1 : 0;
+			springless += springsOfId[f->id[i]] == 0 ? 1 : 0;
 		}
 	}
+	free( springsOfId );
 	ENSURE( crowded > 0 );
 	ENSURE( springless == 0 );
 
@@ -1603,9 +1611,10 @@ static int FluidMemory( void )
 	// b2EndStep checks the arena is empty
 	ENSURE( b2GetStackAllocation( &world->stack ) == 0 );
 
-	// Each particle of room takes about 840 bytes with springs, as b2FluidDef::maxCapacity says
+	// Each particle of room takes 356 bytes with adaptive sizes and springs, as b2FluidDef::maxCapacity says, and with
+	// the pairs, springs and grids a step makes, 716 here
 	size_t withFluid = b2GetByteCount();
-	ENSURE( withFluid - worldOnly > (size_t)b2Fluid_GetCapacity( fluidId ) * 800 );
+	ENSURE( withFluid - worldOnly > (size_t)b2Fluid_GetCapacity( fluidId ) * 650 );
 
 	// The arena keeps the room the fluid's scratch made it grow to until the world goes, as it does for Box2D's own
 	b2DestroyFluid( fluidId );

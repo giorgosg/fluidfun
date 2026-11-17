@@ -244,7 +244,7 @@ static int RecordAndSeek( void )
 	// The script did what it means to: liquid grew past its first room, springs and speed memory were made, bodies
 	// met the liquid, and the honey fell asleep
 	b2fFluid* f = b2GetWorldFromId( worldId )->fluid;
-	ENSURE( f->capacity > 64 && f->springs != NULL && f->speedMemory != NULL );
+	ENSURE( f->capacity > 64 && f->springFormed != NULL && f->speedMemory != NULL );
 	ENSURE( s.events > 0 );
 	ENSURE( s.mostAsleep > 0 );
 

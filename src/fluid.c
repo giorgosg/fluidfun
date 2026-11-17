@@ -188,10 +188,17 @@ void b2fAllocateOptional( b2fFluid* f, bool adapt, bool speed, bool springs )
 #undef B2F_ALLOC_SORTED
 	}
 
-	if ( springs && f->springs == NULL )
+	// The spring table and its scratch are arrays of their own, which grow with the springs
+	if ( springs && f->springFormed == NULL )
 	{
-		f->springs = b2AllocZero( n * sizeof( b2fSprings ) );
-		f->sortedSprings = b2AllocZero( n * sizeof( b2fSprings ) );
+#define B2F_ALLOC_FIELD( type, name ) f->name = b2AllocZero( n * sizeof( type ) );
+#define B2F_ALLOC_SORTED( type, name ) f->sorted.name = b2AllocZero( n * sizeof( type ) );
+		B2F_SPRING_FIELDS( B2F_ALLOC_FIELD )
+		B2F_SPRING_FIELDS( B2F_ALLOC_SORTED )
+#undef B2F_ALLOC_FIELD
+#undef B2F_ALLOC_SORTED
+		f->springCount = b2Alloc( n * sizeof( unsigned char ) );
+		f->springOffers = b2Alloc( n * sizeof( uint32_t ) );
 		f->idMap = b2Alloc( IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
 		f->springParent = b2Alloc( n * sizeof( int ) );
 		f->springGroup = b2Alloc( n * sizeof( unsigned char ) );
@@ -223,6 +230,12 @@ void b2fUpdateLiquids( b2fFluid* f )
 	}
 
 	b2fAllocateOptional( f, f->adaptive, fastSpeed, f->springy );
+	// With no liquid that has springs, no spring is worked out, so none is kept to come back if one is given springs
+	// again
+	if ( f->springy == false )
+	{
+		f->springs.count = 0;
+	}
 
 	for ( int a = 0; a < f->liquidCount; ++a )
 	{
@@ -415,18 +428,27 @@ void b2FreeFluid( b2fFluid* f )
 		B2F_SPEED_FIELDS( B2F_FREE_FIELD )
 		B2F_SPEED_FIELDS( B2F_FREE_SORTED )
 	}
+	if ( f->springFormed != NULL )
+	{
+		B2F_SPRING_FIELDS( B2F_FREE_FIELD )
+		B2F_SPRING_FIELDS( B2F_FREE_SORTED )
+	}
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
 	b2Free( f->contacts, n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
 	b2DestroyBitSet( &f->marked );
-	if ( f->springs != NULL )
+	if ( f->springFormed != NULL )
 	{
-		b2Free( f->springs, n * sizeof( b2fSprings ) );
-		b2Free( f->sortedSprings, n * sizeof( b2fSprings ) );
+		b2Free( f->springCount, n * sizeof( unsigned char ) );
+		b2Free( f->springOffers, n * sizeof( uint32_t ) );
 		b2Free( f->idMap, IdMapSlots( f->capacity ) * sizeof( b2fIdSlot ) );
 		b2Free( f->springParent, n * sizeof( int ) );
 		b2Free( f->springGroup, n * sizeof( unsigned char ) );
 	}
+	b2Array_Destroy( f->springs );
+	b2Array_Destroy( f->springWork );
+	b2Array_Destroy( f->springStart );
+	b2Array_Destroy( f->springList );
 	b2fGrid* grids[2] = { &f->grid, &f->sleepGrid };
 	for ( int i = 0; i < 2; ++i )
 	{
@@ -592,15 +614,22 @@ bool b2fGrow( b2fFluid* f, int needed )
 		B2F_SPEED_FIELDS( B2F_GROW_FIELD )
 		B2F_SPEED_FIELDS( B2F_GROW_SORTED )
 	}
+	// The spring fields, with the spring arrays per particle below
+	if ( f->springFormed != NULL )
+	{
+		B2F_SPRING_FIELDS( B2F_GROW_FIELD )
+		B2F_SPRING_FIELDS( B2F_GROW_SORTED )
+	}
 #undef B2F_GROW_FIELD
 #undef B2F_GROW_SORTED
 	f->contacts = Resize( f->contacts, old, capacity, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ), true );
 
-	// The spring arrays, made once some liquid has springs, and the id table, which is cleared before each use
-	if ( f->springs != NULL )
+	// The spring arrays per particle, made once some liquid has springs, and the id table, which is cleared before each
+	// use. The spring table goes by springs, not particles, and grows by itself.
+	if ( f->springFormed != NULL )
 	{
-		f->springs = Resize( f->springs, old, capacity, sizeof( b2fSprings ), true );
-		f->sortedSprings = Resize( f->sortedSprings, old, capacity, sizeof( b2fSprings ), true );
+		f->springCount = Resize( f->springCount, old, capacity, sizeof( unsigned char ), false );
+		f->springOffers = Resize( f->springOffers, old, capacity, sizeof( uint32_t ), false );
 		b2Free( f->idMap, IdMapSlots( old ) * sizeof( b2fIdSlot ) );
 		f->idMap = b2Alloc( IdMapSlots( capacity ) * sizeof( b2fIdSlot ) );
 		f->springParent = Resize( f->springParent, old, capacity, sizeof( int ), false );
@@ -1003,7 +1032,6 @@ void b2FinishFluid( b2fFluid* f )
 
 void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFluid* f )
 {
-	f->checkSprings = subStepIndex == 0;
 	f->stepTime += h;
 	f->stepSubSteps += 1;
 	if ( f->count == 0 )

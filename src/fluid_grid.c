@@ -645,11 +645,11 @@ static void ReorderTask( int start, int end, int worker, void* context )
 		{
 			B2F_SPEED_FIELDS( B2F_REORDER_FIELD )
 		}
-#undef B2F_REORDER_FIELD
-		if ( f->springs != NULL )
+		if ( f->springFormed != NULL )
 		{
-			f->sortedSprings[i] = f->springs[p];
+			B2F_SPRING_FIELDS( B2F_REORDER_FIELD )
 		}
+#undef B2F_REORDER_FIELD
 
 		if ( i < active )
 		{
@@ -696,13 +696,11 @@ static void FinishReorder( b2fFluid* f, int first, int last, bool sleepFields )
 		{
 			B2F_SPEED_FIELDS( B2F_SWAP_FIELD )
 		}
-#undef B2F_SWAP_FIELD
-		if ( f->springs != NULL )
+		if ( f->springFormed != NULL )
 		{
-			b2fSprings* t = f->springs;
-			f->springs = f->sortedSprings;
-			f->sortedSprings = t;
+			B2F_SPRING_FIELDS( B2F_SWAP_FIELD )
 		}
+#undef B2F_SWAP_FIELD
 		return;
 	}
 
@@ -717,11 +715,11 @@ static void FinishReorder( b2fFluid* f, int first, int last, bool sleepFields )
 	{
 		B2F_SPEED_FIELDS( B2F_COPY_BACK )
 	}
-#undef B2F_COPY_BACK
-	if ( f->springs != NULL )
+	if ( f->springFormed != NULL )
 	{
-		memcpy( f->springs + first, f->sortedSprings + first, n * sizeof( b2fSprings ) );
+		B2F_SPRING_FIELDS( B2F_COPY_BACK )
 	}
+#undef B2F_COPY_BACK
 }
 
 static void Reorder( b2fFluid* f, b2SubStepContext* context, int first, int last, bool sleepFields )
