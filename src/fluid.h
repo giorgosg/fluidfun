@@ -15,9 +15,9 @@ struct b2fFluid;
 // in the world's own arrays.
 typedef struct b2SubStepContext b2SubStepContext;
 
-// Runs a parallel loop on the workers of the current step: in the solver's fluid stage while the solver runs, through
-// b2ParallelFor when no body is awake, and on the calling thread with no context, as outside a step. The loop finishes
-// before this returns.
+// Runs a parallel loop on the workers of the current step, in the solver's fluid stage, and on the calling thread with no
+// context, as outside a step. When no body is awake the solver's tasks run only the fluid (b2BeginSolve). The loop
+// finishes before this returns.
 void b2SubStep_ParallelFor( b2SubStepContext* context, b2ParallelForCallback* task, int itemCount, int minRange,
 							void* taskContext );
 

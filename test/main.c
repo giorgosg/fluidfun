@@ -51,6 +51,7 @@ extern int RestitutionTest( void );
 extern int ShapeTest( void );
 extern int SnapshotTest( void );
 extern int SortTest( void );
+extern int StepTest( void );
 extern int TableTest( void );
 extern int ThreadTest( void );
 extern int WorldTest( void );
@@ -132,6 +133,7 @@ int main( int argc, char** argv )
 	MAYBE_RUN_TEST( ShapeTest );
 	MAYBE_RUN_TEST( SnapshotTest );
 	MAYBE_RUN_TEST( SortTest );
+	MAYBE_RUN_TEST( StepTest );
 	MAYBE_RUN_TEST( ThreadTest );
 	MAYBE_RUN_TEST( WorldTest );
 
