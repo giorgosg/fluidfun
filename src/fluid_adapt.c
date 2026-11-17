@@ -536,10 +536,10 @@ static void MeasureDepth( b2fFluid* f, float reach, const float* perMetre, bool 
 		}
 		for ( int p = 0; p < parts; ++p )
 		{
-			if ( f->partStart[p] < f->partStart[p + 1] )
+			if ( f->partStart.data[p] < f->partStart.data[p + 1] )
 			{
 				BoxMeasure( f, f->adaptDepth, f->adaptFlow, f->adaptPressure, reach, perMetre, wantFlow, counted, measured, b2f_allParticles,
-							NULL, f->partList, f->partStart[p], f->partStart[p + 1], settle );
+							NULL, f->partList.data, f->partStart.data[p], f->partStart.data[p + 1], settle );
 			}
 		}
 		return;
@@ -667,10 +667,10 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 		float near = slope > 0.0f ? ( sqrtf( target / fineArea ) - 1.0f ) / slope : 0.0f;
 		b2Pos p = f->pos[i];
 		bool filtered = f->shapesFiltered;
-		for ( int si = 0; si < f->shapeCount; ++si )
+		for ( int si = 0; si < f->shapes.count; ++si )
 		{
-			const b2fShape* shape = f->shapes + si;
-			const b2fBody* body = f->bodies + shape->bodyIndex;
+			const b2fShape* shape = f->shapes.data + si;
+			const b2fBody* body = f->bodies.data + shape->bodyIndex;
 			// A body the liquid passes through is not there for it
 			if ( ( filtered && ( shape->liquids >> f->liquid[i] & 1u ) == 0 ) || body->adheres || p.x < shape->minX - near || p.x > shape->maxX + near || p.y < shape->minY - near || p.y > shape->maxY + near )
 			{
@@ -853,16 +853,16 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 
 		// A child inside a shape reads as a deep collision and would kick the body, so stay whole until clear
 		bool clear = true;
-		for ( int si = 0; si < f->shapeCount && clear; ++si )
+		for ( int si = 0; si < f->shapes.count && clear; ++si )
 		{
-			const b2fShape* shape = f->shapes + si;
+			const b2fShape* shape = f->shapes.data + si;
 			float reachOut = radius + latticeChild;
 			if ( ( f->shapesFiltered && ( shape->liquids >> f->liquid[i] & 1u ) == 0 ) || x + reachOut < shape->minX || x - reachOut > shape->maxX || y + reachOut < shape->minY || y - reachOut > shape->maxY )
 			{
 				continue;
 			}
 
-			const b2fBody* body = f->bodies + shape->bodyIndex;
+			const b2fBody* body = f->bodies.data + shape->bodyIndex;
 			for ( int c = 0; c < ring && clear; ++c )
 			{
 				float angle = phase + 6.2831853f * (float)c / (float)ring;

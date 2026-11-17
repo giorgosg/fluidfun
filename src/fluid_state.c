@@ -5,37 +5,23 @@
 
 #include "physics_world.h"
 
-// Grows an array of events by one and returns the new slot
-static void* Push( void** array, int* count, int* capacity, size_t size )
-{
-	if ( *count == *capacity )
-	{
-		int grown = *capacity == 0 ? 16 : 2 * *capacity;
-		*array = b2fGrowArray( *array, *capacity, grown, size );
-		*capacity = grown;
-	}
-	return (char*)*array + (size_t)( *count )++ * size;
-}
-
 static void BeginBody( b2fFluid* f, b2BodyId id, b2LiquidId liquidId )
 {
-	b2FluidBodyBeginEvent* event = Push( (void**)&f->bodyBeginEvents, &f->bodyBeginCount, &f->bodyBeginCapacity, sizeof( *event ) );
-	*event = ( b2FluidBodyBeginEvent ){ id, liquidId };
+	b2Array_Push( f->bodyBeginEvents, ( (b2FluidBodyBeginEvent){ id, liquidId } ) );
 }
 
 static void EndBody( b2fFluid* f, b2BodyId id )
 {
-	b2FluidBodyEndEvent* event = Push( (void**)&f->bodyEndEvents, &f->bodyEndCount, &f->bodyEndCapacity, sizeof( *event ) );
-	*event = ( b2FluidBodyEndEvent ){ id };
+	b2Array_Push( f->bodyEndEvents, ( (b2FluidBodyEndEvent){ id } ) );
 }
 
 static int FindRecord( const b2fFluid* f, b2BodyId id )
 {
 	int k = id.index1 - 1;
-	if ( 0 <= k && k < f->recordOfBodyCapacity && f->recordOfBody[k] > 0 )
+	if ( 0 <= k && k < f->recordOfBody.count && f->recordOfBody.data[k] > 0 )
 	{
-		int r = f->recordOfBody[k] - 1;
-		if ( B2_ID_EQUALS( f->records[r].id, id ) )
+		int r = f->recordOfBody.data[k] - 1;
+		if ( B2_ID_EQUALS( f->records.data[r].id, id ) )
 		{
 			return r;
 		}
@@ -45,51 +31,32 @@ static int FindRecord( const b2fFluid* f, b2BodyId id )
 
 static int AddRecord( b2fFluid* f, b2BodyId id )
 {
-	if ( f->recordCount == f->recordCapacity )
-	{
-		int capacity = f->recordCapacity == 0 ? 16 : 2 * f->recordCapacity;
-		f->records = b2fGrowArray( f->records, f->recordCapacity, capacity, sizeof( b2fBodyRecord ) );
-		f->recordCapacity = capacity;
-	}
 	int k = id.index1 - 1;
-	if ( k >= f->recordOfBodyCapacity )
-	{
-		int capacity = f->recordOfBodyCapacity == 0 ? 64 : f->recordOfBodyCapacity;
-		while ( capacity <= k )
-		{
-			capacity *= 2;
-		}
-		f->recordOfBody = b2fGrowArray( f->recordOfBody, f->recordOfBodyCapacity, capacity, sizeof( int ) );
-		memset( f->recordOfBody + f->recordOfBodyCapacity, 0, (size_t)( capacity - f->recordOfBodyCapacity ) * sizeof( int ) );
-		f->recordOfBodyCapacity = capacity;
-	}
-
-	int r = f->recordCount++;
-	f->records[r] = ( b2fBodyRecord ){ .id = id, .state = { .liquidId = b2_nullLiquidId } };
-	f->recordOfBody[k] = r + 1;
+	b2fCoverIndex( &f->recordOfBody, k, 0 );
+	int r = f->records.count;
+	b2Array_Push( f->records, ( (b2fBodyRecord){ .id = id, .state = { .liquidId = b2_nullLiquidId } } ) );
+	f->recordOfBody.data[k] = r + 1;
 	return r;
 }
 
 // Moves the last record into the gap. A slot that already names a newer body with the same index is left alone.
 static void RemoveRecord( b2fFluid* f, int r )
 {
-	int k = f->records[r].id.index1 - 1;
-	if ( f->recordOfBody[k] == r + 1 )
+	int k = f->records.data[r].id.index1 - 1;
+	if ( f->recordOfBody.data[k] == r + 1 )
 	{
-		f->recordOfBody[k] = 0;
+		f->recordOfBody.data[k] = 0;
 	}
 
-	int last = f->recordCount - 1;
-	if ( r != last )
+	int last = b2Array_RemoveSwap( f->records, r );
+	if ( last != B2_NULL_INDEX )
 	{
-		f->records[r] = f->records[last];
-		int moved = f->records[r].id.index1 - 1;
-		if ( f->recordOfBody[moved] == last + 1 )
+		int moved = f->records.data[r].id.index1 - 1;
+		if ( f->recordOfBody.data[moved] == last + 1 )
 		{
-			f->recordOfBody[moved] = r + 1;
+			f->recordOfBody.data[moved] = r + 1;
 		}
 	}
-	f->recordCount -= 1;
 }
 
 // inLiquid follows whether liquid was in reach, once that has held for B2F_WET_TIME in a row
@@ -126,25 +93,21 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 	if ( liveLiquids <= 1 )
 	{
 		b2LiquidId liquidId = liveLiquids == 1 ? b2fMakeLiquidId( f, onlyLiquid ) : b2_nullLiquidId;
-		for ( int r = 0; r < f->recordCount; ++r )
+		for ( int r = 0; r < f->records.count; ++r )
 		{
-			f->records[r].state.liquidId = f->records[r].seen ? liquidId : f->records[r].state.liquidId;
+			f->records.data[r].state.liquidId = f->records.data[r].seen ? liquidId : f->records.data[r].state.liquidId;
 		}
 		return;
 	}
 
 	// With no bodies there is nothing to find, and no array yet to clear
-	int needed = f->bodyCount * B2F_MAX_LIQUIDS;
+	int needed = f->bodies.count * B2F_MAX_LIQUIDS;
 	if ( needed == 0 )
 	{
 		return;
 	}
-	if ( needed > f->bodyLiquidCapacity )
-	{
-		f->bodyLiquidMass = b2fGrowArray( f->bodyLiquidMass, f->bodyLiquidCapacity, needed, sizeof( float ) );
-		f->bodyLiquidCapacity = needed;
-	}
-	memset( f->bodyLiquidMass, 0, (size_t)needed * sizeof( float ) );
+	b2Array_Resize( f->bodyLiquidMass, needed );
+	memset( f->bodyLiquidMass.data, 0, (size_t)needed * sizeof( float ) );
 
 	// The awake particles and the shell found contacts in the last substep; other asleep particles' were found earlier,
 	// and since then filing may have moved them, so a body with only those round it keeps the liquid it had
@@ -166,20 +129,20 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 			}
 			if ( first )
 			{
-				f->bodyLiquidMass[contacts[c].bodyIndex * B2F_MAX_LIQUIDS + f->liquid[i]] += m;
+				f->bodyLiquidMass.data[contacts[c].bodyIndex * B2F_MAX_LIQUIDS + f->liquid[i]] += m;
 			}
 		}
 	}
 
-	for ( int b = 0; b < f->bodyCount; ++b )
+	for ( int b = 0; b < f->bodies.count; ++b )
 	{
-		int r = FindRecord( f, f->bodies[b].id );
+		int r = FindRecord( f, f->bodies.data[b].id );
 		if ( r < 0 )
 		{
 			continue;
 		}
 
-		const float* masses = f->bodyLiquidMass + b * B2F_MAX_LIQUIDS;
+		const float* masses = f->bodyLiquidMass.data + b * B2F_MAX_LIQUIDS;
 		int best = -1;
 		for ( int l = 0; l < f->liquidCount; ++l )
 		{
@@ -187,7 +150,7 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 		}
 		if ( best >= 0 )
 		{
-			f->records[r].state.liquidId = b2fMakeLiquidId( f, best );
+			f->records.data[r].state.liquidId = b2fMakeLiquidId( f, best );
 		}
 	}
 }
@@ -195,14 +158,14 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 static void UpdateBodies( b2fFluid* f )
 {
 	float invTime = 1.0f / f->stepTime, invSubSteps = 1.0f / (float)f->stepSubSteps;
-	for ( int r = 0; r < f->recordCount; ++r )
+	for ( int r = 0; r < f->records.count; ++r )
 	{
-		f->records[r].seen = false;
+		f->records.data[r].seen = false;
 	}
 
-	for ( int b = 0; b < f->bodyCount; ++b )
+	for ( int b = 0; b < f->bodies.count; ++b )
 	{
-		const b2fBody* body = f->bodies + b;
+		const b2fBody* body = f->bodies.data + b;
 		int r = FindRecord( f, body->id );
 		if ( r < 0 && body->stepWet == false )
 		{
@@ -213,14 +176,14 @@ static void UpdateBodies( b2fFluid* f )
 		// it wakes: the liquid round it is still, and asleep it feels none of it
 		if ( r >= 0 && body->awake == false && body->adheres == false )
 		{
-			f->records[r].seen = true;
-			f->records[r].wet = f->records[r].state.inLiquid;
-			f->records[r].run = 0.0f;
+			f->records.data[r].seen = true;
+			f->records.data[r].wet = f->records.data[r].state.inLiquid;
+			f->records.data[r].run = 0.0f;
 			continue;
 		}
 
 		r = r < 0 ? AddRecord( f, body->id ) : r;
-		b2fBodyRecord* record = f->records + r;
+		b2fBodyRecord* record = f->records.data + r;
 		record->seen = true;
 		record->wet = body->stepWet;
 		b2FluidBodyState* state = &record->state;
@@ -240,9 +203,9 @@ static void UpdateBodies( b2fFluid* f )
 	}
 	FindLiquids( f, liveLiquids, onlyLiquid );
 
-	for ( int r = 0; r < f->recordCount; )
+	for ( int r = 0; r < f->records.count; )
 	{
-		b2fBodyRecord* record = f->records + r;
+		b2fBodyRecord* record = f->records.data + r;
 		bool wet = record->seen && record->wet;
 		if ( record->seen == false && b2Body_IsValid( record->id ) == false )
 		{
@@ -280,18 +243,17 @@ void b2fGatherSensor( b2fFluid* f, b2ShapeId shapeId, uint32_t liquids )
 		return;
 	}
 
-	for ( int i = 0; i < f->sensorCount; ++i )
+	for ( int i = 0; i < f->sensors.count; ++i )
 	{
-		if ( B2_ID_EQUALS( f->sensors[i].id, shapeId ) )
+		if ( B2_ID_EQUALS( f->sensors.data[i].id, shapeId ) )
 		{
-			f->sensors[i].gathered = true;
-			f->sensors[i].liquids = liquids;
+			f->sensors.data[i].gathered = true;
+			f->sensors.data[i].liquids = liquids;
 			return;
 		}
 	}
 
-	b2fSensor* sensor = Push( (void**)&f->sensors, &f->sensorCount, &f->sensorCapacity, sizeof( b2fSensor ) );
-	*sensor = ( b2fSensor ){ shapeId, 0.0f, true, liquids };
+	b2Array_Push( f->sensors, ( (b2fSensor){ shapeId, 0.0f, true, liquids } ) );
 }
 
 // A sensor's outline, and the area of liquid in it
@@ -481,10 +443,10 @@ bool b2fInsideOutline( const b2fOutline* s, b2Pos p )
 static void MeasureSensors( b2fFluid* f )
 {
 	int count = 0;
-	for ( int i = 0; i < f->sensorCount; ++i )
+	for ( int i = 0; i < f->sensors.count; ++i )
 	{
-		f->sensors[i].area = 0.0f;
-		count += f->sensors[i].gathered ? 1 : 0;
+		f->sensors.data[i].area = 0.0f;
+		count += f->sensors.data[i].gathered ? 1 : 0;
 	}
 	if ( count == 0 || f->count == 0 )
 	{
@@ -494,16 +456,16 @@ static void MeasureSensors( b2fFluid* f )
 	b2fSensorShape* shapes = b2Alloc( (size_t)count * sizeof( b2fSensorShape ) );
 	int shapeCount = 0;
 	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
-	for ( int i = 0; i < f->sensorCount; ++i )
+	for ( int i = 0; i < f->sensors.count; ++i )
 	{
-		if ( f->sensors[i].gathered == false )
+		if ( f->sensors.data[i].gathered == false )
 		{
 			continue;
 		}
 
 		b2fSensorShape* s = shapes + shapeCount;
-		*s = ( b2fSensorShape ){ .sensor = i, .liquids = f->sensors[i].liquids };
-		if ( b2fMakeOutline( f->sensors[i].id, &s->outline ) == false )
+		*s = ( b2fSensorShape ){ .sensor = i, .liquids = f->sensors.data[i].liquids };
+		if ( b2fMakeOutline( f->sensors.data[i].id, &s->outline ) == false )
 		{
 			continue;
 		}
@@ -535,7 +497,7 @@ static void MeasureSensors( b2fFluid* f )
 
 	for ( int k = 0; k < shapeCount; ++k )
 	{
-		f->sensors[shapes[k].sensor].area = (float)shapes[k].area;
+		f->sensors.data[shapes[k].sensor].area = (float)shapes[k].area;
 	}
 	b2Free( shapes, (size_t)count * sizeof( b2fSensorShape ) );
 }
@@ -543,19 +505,18 @@ static void MeasureSensors( b2fFluid* f )
 static void UpdateSensors( b2fFluid* f )
 {
 	// A destroyed sensor that held liquid ends now. What is left held liquid last step or is near it now.
-	int heldCount = f->sensorCount > 0 ? f->sensorCount : 1;
+	int heldCount = f->sensors.count > 0 ? f->sensors.count : 1;
 	bool* held = b2Alloc( (size_t)heldCount * sizeof( bool ) );
-	for ( int i = 0; i < f->sensorCount; )
+	for ( int i = 0; i < f->sensors.count; )
 	{
-		b2fSensor* sensor = f->sensors + i;
+		b2fSensor* sensor = f->sensors.data + i;
 		if ( b2Shape_IsValid( sensor->id ) == false )
 		{
 			if ( sensor->area > 0.0f )
 			{
-				b2FluidSensorEndEvent* event = Push( (void**)&f->sensorEndEvents, &f->sensorEndCount, &f->sensorEndCapacity, sizeof( *event ) );
-				event->sensorShapeId = sensor->id;
+				b2Array_Push( f->sensorEndEvents, ( (b2FluidSensorEndEvent){ sensor->id } ) );
 			}
-			*sensor = f->sensors[--f->sensorCount];
+			b2Array_RemoveSwap( f->sensors, i );
 			continue;
 		}
 		held[i] = sensor->area > 0.0f;
@@ -567,35 +528,33 @@ static void UpdateSensors( b2fFluid* f )
 	// Begin and end in the order the sensors are listed, then keep only those holding liquid; the next step's gather
 	// adds the others near it again
 	int kept = 0;
-	for ( int i = 0; i < f->sensorCount; ++i )
+	for ( int i = 0; i < f->sensors.count; ++i )
 	{
-		b2fSensor sensor = f->sensors[i];
+		b2fSensor sensor = f->sensors.data[i];
 		bool holds = sensor.area > 0.0f;
 		if ( holds && held[i] == false )
 		{
-			b2FluidSensorBeginEvent* event = Push( (void**)&f->sensorBeginEvents, &f->sensorBeginCount, &f->sensorBeginCapacity, sizeof( *event ) );
-			event->sensorShapeId = sensor.id;
+			b2Array_Push( f->sensorBeginEvents, ( (b2FluidSensorBeginEvent){ sensor.id } ) );
 		}
 		else if ( holds == false && held[i] )
 		{
-			b2FluidSensorEndEvent* event = Push( (void**)&f->sensorEndEvents, &f->sensorEndCount, &f->sensorEndCapacity, sizeof( *event ) );
-			event->sensorShapeId = sensor.id;
+			b2Array_Push( f->sensorEndEvents, ( (b2FluidSensorEndEvent){ sensor.id } ) );
 		}
 		if ( holds )
 		{
-			f->sensors[kept++] = sensor;
+			f->sensors.data[kept++] = sensor;
 		}
 	}
-	f->sensorCount = kept;
+	f->sensors.count = kept;
 	b2Free( held, (size_t)heldCount * sizeof( bool ) );
 }
 
 void b2fFinishStep( b2fFluid* f )
 {
-	f->bodyBeginCount = 0;
-	f->bodyEndCount = 0;
-	f->sensorBeginCount = 0;
-	f->sensorEndCount = 0;
+	b2Array_Clear( f->bodyBeginEvents );
+	b2Array_Clear( f->bodyEndEvents );
+	b2Array_Clear( f->sensorBeginEvents );
+	b2Array_Clear( f->sensorEndEvents );
 
 	// A step of no time ran no substeps, and leaves the last step's state as it was
 	if ( f->stepSubSteps == 0 || f->stepTime <= 0.0f )
@@ -604,7 +563,7 @@ void b2fFinishStep( b2fFluid* f )
 	}
 
 	UpdateBodies( f );
-	if ( f->sensorCount > 0 )
+	if ( f->sensors.count > 0 )
 	{
 		UpdateSensors( f );
 	}
@@ -612,14 +571,14 @@ void b2fFinishStep( b2fFluid* f )
 
 void b2fFreeState( b2fFluid* f )
 {
-	b2Free( f->records, (size_t)f->recordCapacity * sizeof( b2fBodyRecord ) );
-	b2Free( f->recordOfBody, (size_t)f->recordOfBodyCapacity * sizeof( int ) );
-	b2Free( f->sensors, (size_t)f->sensorCapacity * sizeof( b2fSensor ) );
-	b2Free( f->bodyLiquidMass, (size_t)f->bodyLiquidCapacity * sizeof( float ) );
-	b2Free( f->bodyBeginEvents, (size_t)f->bodyBeginCapacity * sizeof( b2FluidBodyBeginEvent ) );
-	b2Free( f->bodyEndEvents, (size_t)f->bodyEndCapacity * sizeof( b2FluidBodyEndEvent ) );
-	b2Free( f->sensorBeginEvents, (size_t)f->sensorBeginCapacity * sizeof( b2FluidSensorBeginEvent ) );
-	b2Free( f->sensorEndEvents, (size_t)f->sensorEndCapacity * sizeof( b2FluidSensorEndEvent ) );
+	b2Array_Destroy( f->records );
+	b2Array_Destroy( f->recordOfBody );
+	b2Array_Destroy( f->sensors );
+	b2Array_Destroy( f->bodyLiquidMass );
+	b2Array_Destroy( f->bodyBeginEvents );
+	b2Array_Destroy( f->bodyEndEvents );
+	b2Array_Destroy( f->sensorBeginEvents );
+	b2Array_Destroy( f->sensorEndEvents );
 }
 
 b2FluidBodyState b2Fluid_GetBodyState( b2FluidId fluidId, b2BodyId bodyId )
@@ -630,32 +589,32 @@ b2FluidBodyState b2Fluid_GetBodyState( b2FluidId fluidId, b2BodyId bodyId )
 	{
 		return ( b2FluidBodyState ){ .liquidId = b2_nullLiquidId };
 	}
-	return f->records[r].state;
+	return f->records.data[r].state;
 }
 
 b2FluidEvents b2Fluid_GetEvents( b2FluidId fluidId )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
 	return ( b2FluidEvents ){
-		.bodyBeginEvents = f->bodyBeginEvents,
-		.bodyEndEvents = f->bodyEndEvents,
-		.sensorBeginEvents = f->sensorBeginEvents,
-		.sensorEndEvents = f->sensorEndEvents,
-		.bodyBeginCount = f->bodyBeginCount,
-		.bodyEndCount = f->bodyEndCount,
-		.sensorBeginCount = f->sensorBeginCount,
-		.sensorEndCount = f->sensorEndCount,
+		.bodyBeginEvents = f->bodyBeginEvents.data,
+		.bodyEndEvents = f->bodyEndEvents.data,
+		.sensorBeginEvents = f->sensorBeginEvents.data,
+		.sensorEndEvents = f->sensorEndEvents.data,
+		.bodyBeginCount = f->bodyBeginEvents.count,
+		.bodyEndCount = f->bodyEndEvents.count,
+		.sensorBeginCount = f->sensorBeginEvents.count,
+		.sensorEndCount = f->sensorEndEvents.count,
 	};
 }
 
 float b2Fluid_GetSensorArea( b2FluidId fluidId, b2ShapeId sensorShapeId )
 {
 	b2fFluid* f = b2fGetFluid( fluidId );
-	for ( int i = 0; i < f->sensorCount; ++i )
+	for ( int i = 0; i < f->sensors.count; ++i )
 	{
-		if ( B2_ID_EQUALS( f->sensors[i].id, sensorShapeId ) )
+		if ( B2_ID_EQUALS( f->sensors.data[i].id, sensorShapeId ) )
 		{
-			return f->sensors[i].area;
+			return f->sensors.data[i].area;
 		}
 	}
 	return 0.0f;

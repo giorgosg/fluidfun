@@ -1768,8 +1768,8 @@ static int FluidFarStray( void )
 	const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
 	ENSURE( f->grid.cut && f->grid.bulkOnly == false );
 	ENSURE( f->grid.cell == f->cellSize );
-	ENSURE( f->grid.ax.count == 1 && f->grid.ay.count == 2 );
-	ENSURE( f->shapeCount == 5 );
+	ENSURE( f->grid.ax.stretches.count == 1 && f->grid.ay.stretches.count == 2 );
+	ENSURE( f->shapes.count == 5 );
 
 	int far = 0;
 	for ( int i = 0; i < f->count; ++i )

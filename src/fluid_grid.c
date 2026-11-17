@@ -13,13 +13,13 @@
 // Points k blocks apart are at least k - 1 blocks apart, so a size reaches ceil( 2 size / block ) blocks.
 static void SpreadBlockSizes( b2fGrid* grid, int bw, int bh )
 {
-	memset( grid->blockReach, 0, (size_t)( bw * bh ) * sizeof( float ) );
+	memset( grid->blockReach.data, 0, (size_t)( bw * bh ) * sizeof( float ) );
 	float blockLength = B2F_BLOCK_CELLS * grid->cell;
 	for ( int by = 0; by < bh; ++by )
 	{
 		for ( int bx = 0; bx < bw; ++bx )
 		{
-			float size = grid->blockSize[by * bw + bx];
+			float size = grid->blockSize.data[by * bw + bx];
 			if ( size <= 0.0f )
 			{
 				continue;
@@ -32,7 +32,7 @@ static void SpreadBlockSizes( b2fGrid* grid, int bw, int bh )
 			{
 				for ( int x = x0; x <= x1; ++x )
 				{
-					float* reach = grid->blockReach + y * bw + x;
+					float* reach = grid->blockReach.data + y * bw + x;
 					*reach = *reach > size ? *reach : size;
 				}
 			}
@@ -61,31 +61,16 @@ static bool GridFits( const b2fBox* box, float cell, int border, int64_t limit )
 	return width <= B2F_GRID_SIDE && height <= B2F_GRID_SIDE && (int64_t)width * height <= limit;
 }
 
-static void ReserveStretches( b2fAxis* axis, int count )
-{
-	if ( count > axis->capacity )
-	{
-		int capacity = axis->capacity == 0 ? 8 : 2 * axis->capacity;
-		capacity = capacity > count ? capacity : count;
-		axis->origin = b2fGrowArray( axis->origin, axis->capacity, capacity, sizeof( b2fCoord ) );
-		axis->first = b2fGrowArray( axis->first, axis->capacity, capacity, sizeof( int ) );
-		axis->capacity = capacity;
-	}
-}
-
 void b2fPlainAxis( b2fAxis* axis, b2fCoord origin, float inverse )
 {
-	ReserveStretches( axis, 1 );
-	axis->origin[0] = origin;
-	axis->first[0] = 0;
-	axis->count = 1;
+	b2Array_Clear( axis->stretches );
+	b2Array_Push( axis->stretches, ( (b2fStretch){ origin, 0 } ) );
 	axis->inverse = inverse;
 }
 
 void b2fFreeAxis( b2fAxis* axis )
 {
-	b2Free( axis->origin, (size_t)axis->capacity * sizeof( b2fCoord ) );
-	b2Free( axis->first, (size_t)axis->capacity * sizeof( int ) );
+	b2Array_Destroy( axis->stretches );
 	*axis = ( b2fAxis ){ 0 };
 }
 
@@ -160,10 +145,8 @@ int b2fFinishAxis( b2fAxis* axis, const b2fAxisLayout* layout, int border, int g
 				{
 					return limit + 1;
 				}
-				ReserveStretches( axis, axis->count + 1 );
-				axis->origin[axis->count] = layout->lo + (b2fCoord)( (double)bin * binLength );
-				axis->first[axis->count] = (int)start;
-				axis->count += 1;
+				b2fStretch stretch = { layout->lo + (b2fCoord)( (double)bin * binLength ), (int)start };
+				b2Array_Push( axis->stretches, stretch );
 				stretchFirst = start;
 				stretchBin = bin;
 			}
@@ -354,25 +337,17 @@ int b2fFindParts( b2fFluid* f, float cell, int gap )
 	}
 	b2fFinishAxis( f->partAxes, layouts, 0, gap, INT_MAX / 2 );
 	b2fFinishAxis( f->partAxes + 1, layouts + 1, 0, gap, INT_MAX / 2 );
-	int nx = f->partAxes[0].count, ny = f->partAxes[1].count;
+	int nx = f->partAxes[0].stretches.count, ny = f->partAxes[1].stretches.count;
 	if ( nx * ny == 1 || (int64_t)nx * ny > B2F_MAX_PARTS )
 	{
 		return 1;
 	}
 
 	int parts = nx * ny;
-	if ( parts + 1 > f->partStartCapacity )
-	{
-		f->partStart = b2fGrowArray( f->partStart, f->partStartCapacity, 2 * ( parts + 1 ), sizeof( int ) );
-		f->partStartCapacity = 2 * ( parts + 1 );
-	}
-	if ( n > f->partListCapacity )
-	{
-		f->partList = b2fGrowArray( f->partList, f->partListCapacity, 2 * n, sizeof( int ) );
-		f->partOf = b2fGrowArray( f->partOf, f->partListCapacity, 2 * n, sizeof( int ) );
-		f->partListCapacity = 2 * n;
-	}
-	memset( f->partStart, 0, (size_t)( parts + 1 ) * sizeof( int ) );
+	b2fArray_Resize( f->partStart, parts + 1 );
+	b2fArray_Resize( f->partList, n );
+	b2fArray_Resize( f->partOf, n );
+	memset( f->partStart.data, 0, (size_t)( parts + 1 ) * sizeof( int ) );
 
 	// A particle's stretch goes by its bin, as the marks did, so one on the edge of a bin is in the stretch of that bin
 	for ( int i = 0; i < n; ++i )
@@ -383,11 +358,11 @@ int b2fFindParts( b2fFluid* f, float cell, int gap )
 			const b2fAxis* axis = f->partAxes + a;
 			const b2fAxisLayout* layout = layouts + a;
 			uint32_t bin = b2fAxisBin( layout, a == 0 ? f->pos[i].x : f->pos[i].y );
-			int lo = 0, hi = axis->count - 1;
+			int lo = 0, hi = axis->stretches.count - 1;
 			while ( lo < hi )
 			{
 				int mid = ( lo + hi + 1 ) >> 1;
-				if ( b2fAxisBin( layout, axis->origin[mid] ) <= bin )
+				if ( b2fAxisBin( layout, axis->stretches.data[mid].origin ) <= bin )
 				{
 					lo = mid;
 				}
@@ -399,22 +374,22 @@ int b2fFindParts( b2fFluid* f, float cell, int gap )
 			s[a] = lo;
 		}
 		int part = s[1] * nx + s[0];
-		f->partOf[i] = part;
-		f->partStart[part + 1] += 1;
+		f->partOf.data[i] = part;
+		f->partStart.data[part + 1] += 1;
 	}
 	for ( int p = 0; p < parts; ++p )
 	{
-		f->partStart[p + 1] += f->partStart[p];
+		f->partStart.data[p + 1] += f->partStart.data[p];
 	}
 	for ( int i = 0; i < n; ++i )
 	{
-		f->partList[f->partStart[f->partOf[i]]++] = i;
+		f->partList.data[f->partStart.data[f->partOf.data[i]]++] = i;
 	}
 	for ( int p = parts; p > 0; --p )
 	{
-		f->partStart[p] = f->partStart[p - 1];
+		f->partStart.data[p] = f->partStart.data[p - 1];
 	}
-	f->partStart[0] = 0;
+	f->partStart.data[0] = 0;
 	return parts;
 }
 
@@ -503,8 +478,8 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 	if ( GridFits( &box, cs, border, cellLimit ) == false && CutGrid( f, grid, list, first, last, cs, border, cellLimit, &width, &height ) )
 	{
 		grid->cut = true;
-		grid->x = grid->ax.origin[0];
-		grid->y = grid->ay.origin[0];
+		grid->x = grid->ax.stretches.data[0].origin;
+		grid->y = grid->ay.stretches.data[0].origin;
 	}
 	else
 	{
@@ -536,24 +511,16 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 	grid->height = height;
 
 	int cellCount = width * height;
-	if ( cellCount + 2 > grid->capacity )
-	{
-		grid->start = b2fGrowArray( grid->start, grid->capacity, 2 * cellCount + 2, sizeof( int ) );
-		grid->capacity = 2 * cellCount + 2;
-	}
-	int* start = grid->start;
+	b2fArray_Resize( grid->start, cellCount + 2 );
+	int* start = grid->start.data;
 	memset( start, 0, ( (size_t)cellCount + 2 ) * sizeof( int ) );
 
 	int bw = ( width + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT, bh = ( height + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT;
 	if ( adaptive )
 	{
-		if ( bw * bh > grid->blockCapacity )
-		{
-			grid->blockSize = b2fGrowArray( grid->blockSize, grid->blockCapacity, 2 * bw * bh, sizeof( float ) );
-			grid->blockReach = b2fGrowArray( grid->blockReach, grid->blockCapacity, 2 * bw * bh, sizeof( float ) );
-			grid->blockCapacity = 2 * bw * bh;
-		}
-		memset( grid->blockSize, 0, (size_t)( bw * bh ) * sizeof( float ) );
+		b2fArray_Resize( grid->blockSize, bw * bh );
+		b2fArray_Resize( grid->blockReach, bw * bh );
+		memset( grid->blockSize.data, 0, (size_t)( bw * bh ) * sizeof( float ) );
 	}
 
 	// A grid that is not cut keeps its corner and cell in locals, as stores to the cells and blocks could otherwise
@@ -586,7 +553,7 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 			int b = ( cy >> B2F_BLOCK_SHIFT ) * bw + ( cx >> B2F_BLOCK_SHIFT );
 			f->sortBlock[i] = b;
 			float size = b2fLatticeSize( f->size[i] );
-			grid->blockSize[b] = grid->blockSize[b] > size ? grid->blockSize[b] : size;
+			grid->blockSize.data[b] = grid->blockSize.data[b] > size ? grid->blockSize.data[b] : size;
 		}
 	}
 
@@ -617,7 +584,7 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 // larger of its own and the largest whose reach touches the block
 static inline int GridWindow( const b2fGrid* grid, int block, float size )
 {
-	float near = grid->blockReach[block], s = b2fLatticeSize( size ), reach = s + ( near > s ? near : s );
+	float near = grid->blockReach.data[block], s = b2fLatticeSize( size ), reach = s + ( near > s ? near : s );
 	return (int)ceilf( reach / grid->cell );
 }
 

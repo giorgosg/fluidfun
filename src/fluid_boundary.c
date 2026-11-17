@@ -56,49 +56,28 @@ void b2fBuildWallTable( b2fFluid* f )
 // The fluid's body for a body of the world, by its index in the world, added when the first of its shapes is gathered
 static int FindBody( b2fFluid* f, int bodyId )
 {
-	if ( bodyId < f->bodyOfIndexCapacity )
+	// New entries name no body, so a lookup never reads an unset one
+	b2fCoverIndex( &f->bodyOfIndex, bodyId, -1 );
+	int i = f->bodyOfIndex.data[bodyId];
+	if ( 0 <= i && i < f->bodies.count && f->bodies.data[i].id.index1 - 1 == bodyId )
 	{
-		int i = f->bodyOfIndex[bodyId];
-		if ( 0 <= i && i < f->bodyCount && f->bodies[i].id.index1 - 1 == bodyId )
-		{
-			return i;
-		}
-	}
-	else
-	{
-		int capacity = f->bodyOfIndexCapacity == 0 ? 64 : f->bodyOfIndexCapacity;
-		while ( capacity <= bodyId )
-		{
-			capacity *= 2;
-		}
-		f->bodyOfIndex = b2fGrowArray( f->bodyOfIndex, f->bodyOfIndexCapacity, capacity, sizeof( int ) );
-		// New entries name no body, so a lookup never reads an unset one
-		for ( int i = f->bodyOfIndexCapacity; i < capacity; ++i )
-		{
-			f->bodyOfIndex[i] = -1;
-		}
-		f->bodyOfIndexCapacity = capacity;
-	}
-
-	if ( f->bodyCount == f->bodyCapacity )
-	{
-		int capacity = f->bodyCapacity == 0 ? 32 : 2 * f->bodyCapacity;
-		f->bodies = b2fGrowArray( f->bodies, f->bodyCapacity, capacity, sizeof( b2fBody ) );
-		f->bodyCapacity = capacity;
+		return i;
 	}
 
 	b2World* world = f->world;
 	b2Body* body = b2Array_Get( world->bodies, bodyId );
 	b2BodyState* state = b2GetBodyState( world, body );
-	f->bodies[f->bodyCount] = (b2fBody){
+	int added = f->bodies.count;
+	b2fBody* fluidBody = b2Array_Emplace( f->bodies );
+	*fluidBody = (b2fBody){
 		.id = { bodyId + 1, world->worldId, body->generation },
 		.lastVelocity = state != NULL ? state->linearVelocity : b2Vec2_zero,
 		.lastAngularVelocity = state != NULL ? state->angularVelocity : 0.0f,
 		.adheres = body->type != b2_dynamicBody,
 		.isStatic = body->type == b2_staticBody,
 	};
-	f->bodyOfIndex[bodyId] = f->bodyCount;
-	return f->bodyCount++;
+	f->bodyOfIndex.data[bodyId] = added;
+	return added;
 }
 
 static bool OverlapShape( int proxyId, uint64_t userData, void* context )
@@ -112,22 +91,12 @@ static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 	if ( f->gatherMarking )
 	{
 		int index = (int)userData;
-		if ( index >= f->gatherMarkCapacity )
-		{
-			int capacity = f->gatherMarkCapacity == 0 ? 64 : f->gatherMarkCapacity;
-			while ( capacity <= index )
-			{
-				capacity *= 2;
-			}
-			f->gatherMark = b2fGrowArray( f->gatherMark, f->gatherMarkCapacity, capacity, sizeof( int ) );
-			memset( f->gatherMark + f->gatherMarkCapacity, 0, (size_t)( capacity - f->gatherMarkCapacity ) * sizeof( int ) );
-			f->gatherMarkCapacity = capacity;
-		}
-		if ( f->gatherMark[index] == f->gatherSerial )
+		b2fCoverIndex( &f->gatherMark, index, 0 );
+		if ( f->gatherMark.data[index] == f->gatherSerial )
 		{
 			return true;
 		}
-		f->gatherMark[index] = f->gatherSerial;
+		f->gatherMark.data[index] = f->gatherSerial;
 	}
 
 	// The liquid passes through sensors, which only count the liquid in them once a step
@@ -215,16 +184,9 @@ static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 			return true;
 	}
 
-	if ( f->shapeCount == f->shapeCapacity )
-	{
-		int capacity = f->shapeCapacity == 0 ? 32 : 2 * f->shapeCapacity;
-		f->shapes = b2fGrowArray( f->shapes, f->shapeCapacity, capacity, sizeof( b2fShape ) );
-		f->shapeCapacity = capacity;
-	}
-
 	shape.bodyIndex = FindBody( f, source->bodyId );
-	f->shapes[f->shapeCount++] = shape;
-	b2fBody* body = f->bodies + shape.bodyIndex;
+	b2Array_Push( f->shapes, shape );
+	b2fBody* body = f->bodies.data + shape.bodyIndex;
 	body->area += area;
 	body->areaCenter = b2MulAdd( body->areaCenter, area, center );
 	f->shapesFiltered = f->shapesFiltered || liquids != f->liveLiquids;
@@ -233,14 +195,8 @@ static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 
 static void AddPatch( b2fFluid* f, int bodyIndex, int otherIndex, b2Vec2 normal )
 {
-	if ( f->patchCount == f->patchCapacity )
-	{
-		int capacity = f->patchCapacity == 0 ? 32 : 2 * f->patchCapacity;
-		f->patches = b2fGrowArray( f->patches, f->patchCapacity, capacity, sizeof( b2fPatch ) );
-		f->patchCapacity = capacity;
-	}
-	f->patches[f->patchCount++] = ( b2fPatch ){ normal.x, normal.y, bodyIndex, otherIndex };
-	f->bodies[bodyIndex].patchCount += 1;
+	b2Array_Push( f->patches, ( (b2fPatch){ normal.x, normal.y, bodyIndex, otherIndex } ) );
+	f->bodies.data[bodyIndex].patchCount += 1;
 }
 
 static b2ShapeProxy ShapeProxy( const b2fShape* s )
@@ -290,20 +246,14 @@ static inline int BinOf( const b2fShapeBins* bins, b2fCoord x, b2fCoord y )
 static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 {
 	int squares = bins->width * bins->height;
-	if ( squares + 1 > bins->startCapacity )
-	{
-		int capacity = 2 * ( squares + 1 );
-		b2Free( bins->start, (size_t)bins->startCapacity * sizeof( int ) );
-		bins->start = b2Alloc( (size_t)capacity * sizeof( int ) );
-		bins->startCapacity = capacity;
-	}
-	memset( bins->start, 0, ( (size_t)squares + 1 ) * sizeof( int ) );
+	b2fArray_Resize( bins->start, squares + 1 );
+	memset( bins->start.data, 0, ( (size_t)squares + 1 ) * sizeof( int ) );
 
 	int total = 0;
-	for ( int si = 0; si < f->shapeCount; ++si )
+	for ( int si = 0; si < f->shapes.count; ++si )
 	{
-		const b2fShape* s = f->shapes + si;
-		if ( fixedOnly && f->bodies[s->bodyIndex].adheres == false )
+		const b2fShape* s = f->shapes.data + si;
+		if ( fixedOnly && f->bodies.data[s->bodyIndex].adheres == false )
 		{
 			continue;
 		}
@@ -313,28 +263,22 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 		{
 			for ( int x = x0; x <= x1; ++x )
 			{
-				bins->start[y * bins->width + x + 1] += 1;
+				bins->start.data[y * bins->width + x + 1] += 1;
 			}
 		}
 		total += ( x1 - x0 + 1 ) * ( y1 - y0 + 1 );
 	}
 
-	if ( total > bins->shapeCapacity )
-	{
-		int capacity = 2 * total;
-		b2Free( bins->shapes, (size_t)bins->shapeCapacity * sizeof( int ) );
-		bins->shapes = b2Alloc( (size_t)capacity * sizeof( int ) );
-		bins->shapeCapacity = capacity;
-	}
+	b2fArray_Resize( bins->shapes, total );
 
 	for ( int q = 0; q < squares; ++q )
 	{
-		bins->start[q + 1] += bins->start[q];
+		bins->start.data[q + 1] += bins->start.data[q];
 	}
-	for ( int si = 0; si < f->shapeCount; ++si )
+	for ( int si = 0; si < f->shapes.count; ++si )
 	{
-		const b2fShape* s = f->shapes + si;
-		if ( fixedOnly && f->bodies[s->bodyIndex].adheres == false )
+		const b2fShape* s = f->shapes.data + si;
+		if ( fixedOnly && f->bodies.data[s->bodyIndex].adheres == false )
 		{
 			continue;
 		}
@@ -344,15 +288,15 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 		{
 			for ( int x = x0; x <= x1; ++x )
 			{
-				bins->shapes[bins->start[y * bins->width + x]++] = si;
+				bins->shapes.data[bins->start.data[y * bins->width + x]++] = si;
 			}
 		}
 	}
 	for ( int q = squares; q > 0; --q )
 	{
-		bins->start[q] = bins->start[q - 1];
+		bins->start.data[q] = bins->start.data[q - 1];
 	}
-	bins->start[0] = 0;
+	bins->start.data[0] = 0;
 }
 
 // Bins the shapes into the blocks of a grid, once the particles are sorted and the shapes' bounds set: the awake
@@ -407,32 +351,24 @@ static void SetBounds( b2fShape* s, b2Pos origin, b2Rot rotation, float grow, b2
 // are those until b2fUpdateBodies sets them for the first substep. Returns how many shapes were binned.
 static int BinFixedShapes( b2fFluid* f, float range )
 {
-	if ( f->shapeCount > f->markCapacity )
-	{
-		size_t old = (size_t)f->markCapacity * sizeof( int ), size = (size_t)f->shapeCapacity * sizeof( int );
-		b2Free( f->bodyShapes, old );
-		b2Free( f->shapeMark, old );
-		b2Free( f->candidates, old );
-		f->bodyShapes = b2Alloc( size );
-		f->shapeMark = b2Alloc( size );
-		f->candidates = b2Alloc( size );
-		f->markCapacity = f->shapeCapacity;
-	}
-	memset( f->shapeMark, 0, (size_t)f->shapeCount * sizeof( int ) );
+	b2fArray_Resize( f->bodyShapes, f->shapes.count );
+	b2fArray_Resize( f->shapeMark, f->shapes.count );
+	b2fArray_Resize( f->candidates, f->shapes.count );
+	memset( f->shapeMark.data, 0, (size_t)f->shapes.count * sizeof( int ) );
 
-	for ( int b = 0; b < f->bodyCount; ++b )
+	for ( int b = 0; b < f->bodies.count; ++b )
 	{
-		b2Body* body = b2Array_Get( f->world->bodies, f->bodies[b].id.index1 - 1 );
-		f->bodies[b].transform = b2GetBodyTransformQuick( f->world, body );
-		f->bodies[b].shapeCount = 0;
+		b2Body* body = b2Array_Get( f->world->bodies, f->bodies.data[b].id.index1 - 1 );
+		f->bodies.data[b].transform = b2GetBodyTransformQuick( f->world, body );
+		f->bodies.data[b].shapeCount = 0;
 	}
 
 	int count = 0;
 	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
-	for ( int si = 0; si < f->shapeCount; ++si )
+	for ( int si = 0; si < f->shapes.count; ++si )
 	{
-		b2fShape* s = f->shapes + si;
-		b2fBody* body = f->bodies + s->bodyIndex;
+		b2fShape* s = f->shapes.data + si;
+		b2fBody* body = f->bodies.data + s->bodyIndex;
 		SetBounds( s, body->transform.p, body->transform.q, s->radius, NULL, b2Vec2_zero );
 		body->shapeCount += 1;
 		if ( body->adheres )
@@ -446,16 +382,16 @@ static int BinFixedShapes( b2fFluid* f, float range )
 	}
 
 	int first = 0;
-	for ( int b = 0; b < f->bodyCount; ++b )
+	for ( int b = 0; b < f->bodies.count; ++b )
 	{
-		f->bodies[b].firstShape = first;
-		first += f->bodies[b].shapeCount;
-		f->bodies[b].shapeCount = 0;
+		f->bodies.data[b].firstShape = first;
+		first += f->bodies.data[b].shapeCount;
+		f->bodies.data[b].shapeCount = 0;
 	}
-	for ( int si = 0; si < f->shapeCount; ++si )
+	for ( int si = 0; si < f->shapes.count; ++si )
 	{
-		b2fBody* body = f->bodies + f->shapes[si].bodyIndex;
-		f->bodyShapes[body->firstShape + body->shapeCount++] = si;
+		b2fBody* body = f->bodies.data + f->shapes.data[si].bodyIndex;
+		f->bodyShapes.data[body->firstShape + body->shapeCount++] = si;
 	}
 
 	if ( count == 0 )
@@ -488,17 +424,17 @@ static int BinFixedShapes( b2fFluid* f, float range )
 static void FindPatches( b2fFluid* f )
 {
 	float range = B2F_PATCH_GAP * f->spacing;
-	f->patchCount = 0;
+	b2Array_Clear( f->patches );
 	int fixedCount = BinFixedShapes( f, range );
 	const b2fShapeBins* bins = &f->fixedBins;
 
 	// A little past the gap, so that rounding in the bounds never leaves out a pair the distance would keep
 	float reach = 1.1f * range;
 	int query = 0;
-	for ( int bodyIndex = 0; bodyIndex < f->bodyCount; ++bodyIndex )
+	for ( int bodyIndex = 0; bodyIndex < f->bodies.count; ++bodyIndex )
 	{
-		b2fBody* body = f->bodies + bodyIndex;
-		body->firstPatch = f->patchCount;
+		b2fBody* body = f->bodies.data + bodyIndex;
+		body->firstPatch = f->patches.count;
 		body->patchCount = 0;
 		const b2Body* source = b2Array_Get( f->world->bodies, body->id.index1 - 1 );
 		if ( body->adheres || source->setIndex != b2_awakeSet )
@@ -509,7 +445,7 @@ static void FindPatches( b2fFluid* f )
 		b2WorldTransform transform = body->transform;
 		for ( int k = 0; k < body->shapeCount && fixedCount > 0; ++k )
 		{
-			const b2fShape* shape = f->shapes + f->bodyShapes[body->firstShape + k];
+			const b2fShape* shape = f->shapes.data + f->bodyShapes.data[body->firstShape + k];
 			b2fCoord minX = shape->minX - reach, minY = shape->minY - reach, maxX = shape->maxX + reach, maxY = shape->maxY + reach;
 			int x0 = BinX( bins, minX ), x1 = BinX( bins, maxX );
 			int y0 = BinY( bins, minY ), y1 = BinY( bins, maxY );
@@ -522,35 +458,35 @@ static void FindPatches( b2fFluid* f )
 				for ( int x = x0; x <= x1; ++x )
 				{
 					int square = y * bins->width + x;
-					for ( int e = bins->start[square]; e < bins->start[square + 1]; ++e )
+					for ( int e = bins->start.data[square]; e < bins->start.data[square + 1]; ++e )
 					{
-						int j = bins->shapes[e];
-						const b2fShape* other = f->shapes + j;
-						if ( f->shapeMark[j] == query )
+						int j = bins->shapes.data[e];
+						const b2fShape* other = f->shapes.data + j;
+						if ( f->shapeMark.data[j] == query )
 						{
 							continue;
 						}
-						f->shapeMark[j] = query;
+						f->shapeMark.data[j] = query;
 						if ( other->maxX >= minX && other->minX <= maxX && other->maxY >= minY && other->minY <= maxY )
 						{
-							f->candidates[candidateCount++] = j;
+							f->candidates.data[candidateCount++] = j;
 						}
 					}
 				}
 			}
-			qsort( f->candidates, (size_t)candidateCount, sizeof( int ), CompareInts );
+			qsort( f->candidates.data, (size_t)candidateCount, sizeof( int ), CompareInts );
 
 			b2ShapeProxy proxy = ShapeProxy( shape );
 			for ( int c = 0; c < candidateCount; ++c )
 			{
 				// Only shapes that forces do not move count from a distance. A wheel turning beside its hull is always
 				// close to it, and its thrust is the liquid's push towards the hull, which this would cancel.
-				const b2fShape* other = f->shapes + f->candidates[c];
+				const b2fShape* other = f->shapes.data + f->candidates.data[c];
 				int otherIndex = other->bodyIndex;
 				b2DistanceInput input = { 0 };
 				input.proxyA = proxy;
 				input.proxyB = ShapeProxy( other );
-				input.transform = b2InvMulWorldTransforms( transform, f->bodies[otherIndex].transform );
+				input.transform = b2InvMulWorldTransforms( transform, f->bodies.data[otherIndex].transform );
 				input.useRadii = true;
 				b2SimplexCache cache = { 0 };
 				b2DistanceOutput output = b2ComputeShapeDistance( &input, &cache, NULL, 0 );
@@ -587,14 +523,14 @@ static void FindPatches( b2fFluid* f )
 			// The other body counts only if some shape of it was gathered this step
 			bool first = shapeA->bodyId == body->id.index1 - 1;
 			int otherId = first ? shapeB->bodyId : shapeA->bodyId;
-			int otherIndex = otherId < f->bodyOfIndexCapacity ? f->bodyOfIndex[otherId] : -1;
-			if ( otherIndex < 0 || otherIndex >= f->bodyCount || f->bodies[otherIndex].id.index1 - 1 != otherId )
+			int otherIndex = otherId < f->bodyOfIndex.count ? f->bodyOfIndex.data[otherId] : -1;
+			if ( otherIndex < 0 || otherIndex >= f->bodies.count || f->bodies.data[otherIndex].id.index1 - 1 != otherId )
 			{
 				continue;
 			}
 
 			const b2Manifold* manifold = &b2GetContactSim( world, contact )->manifold;
-			if ( manifold->pointCount > 0 && ( f->bodies[otherIndex].adheres == false || manifold->points[0].separation <= 0.0f ) )
+			if ( manifold->pointCount > 0 && ( f->bodies.data[otherIndex].adheres == false || manifold->points[0].separation <= 0.0f ) )
 			{
 				AddPatch( f, bodyIndex, otherIndex, first ? b2Neg( manifold->normal ) : manifold->normal );
 			}
@@ -694,16 +630,16 @@ static b2AABB* PartBoxes( const b2fFluid* f, int parts, float grow, int* boxCoun
 	int count = 0;
 	for ( int p = 0; p < parts; ++p )
 	{
-		int first = f->partStart[p], last = f->partStart[p + 1];
+		int first = f->partStart.data[p], last = f->partStart.data[p + 1];
 		if ( first == last )
 		{
 			continue;
 		}
-		b2Pos q = f->pos[f->partList[first]];
+		b2Pos q = f->pos[f->partList.data[first]];
 		b2fBox box = { q.x, q.y, q.x, q.y };
 		for ( int k = first + 1; k < last; ++k )
 		{
-			b2Pos r = f->pos[f->partList[k]];
+			b2Pos r = f->pos[f->partList.data[k]];
 			box.minX = box.minX < r.x ? box.minX : r.x;
 			box.maxX = box.maxX > r.x ? box.maxX : r.x;
 			box.minY = box.minY < r.y ? box.minY : r.y;
@@ -720,13 +656,13 @@ static b2AABB* PartBoxes( const b2fFluid* f, int parts, float grow, int* boxCoun
 // Shapes near the liquid, gathered once a step
 void b2fGatherShapes( b2fFluid* f )
 {
-	f->shapeCount = 0;
-	f->bodyCount = 0;
+	b2Array_Clear( f->shapes );
+	b2Array_Clear( f->bodies );
 	f->shapesFiltered = false;
 	f->shapesDropped = false;
-	for ( int i = 0; i < f->sensorCount; ++i )
+	for ( int i = 0; i < f->sensors.count; ++i )
 	{
-		f->sensors[i].gathered = false;
+		f->sensors.data[i].gathered = false;
 	}
 	if ( f->count > 0 )
 	{
@@ -800,12 +736,8 @@ void b2fGatherShapes( b2fFluid* f )
 		}
 	}
 
-	int needed = f->bodyCount * B2F_CHUNK_COUNT;
-	if ( needed > f->reactionCapacity )
-	{
-		f->reactions = b2fGrowArray( f->reactions, f->reactionCapacity, 2 * needed, sizeof( b2fReaction ) );
-		f->reactionCapacity = 2 * needed;
-	}
+	int needed = f->bodies.count * B2F_CHUNK_COUNT;
+	b2fArray_Resize( f->reactions, needed );
 
 	FindPatches( f );
 }
@@ -817,9 +749,9 @@ void b2fGatherShapes( b2fFluid* f )
 // liquid never reaches may sleep, however near the liquid it is, and so may one in still liquid.
 void b2fWakeReached( b2fFluid* f )
 {
-	for ( int i = 0; i < f->bodyCount; ++i )
+	for ( int i = 0; i < f->bodies.count; ++i )
 	{
-		const b2fBody* body = f->bodies + i;
+		const b2fBody* body = f->bodies.data + i;
 		if ( body->reached && body->adheres == false )
 		{
 			b2WakeBody( f->world, b2Array_Get( f->world->bodies, body->id.index1 - 1 ) );
@@ -905,7 +837,7 @@ bool b2fShapeDistance( const b2fShape* s, b2Vec2 p, float* distance, b2Vec2* nor
 // one is on it too.
 static bool Buries( const b2fFluid* f, const b2fShape* s, b2Pos point, float tolerance )
 {
-	const b2fBody* body = f->bodies + s->bodyIndex;
+	const b2fBody* body = f->bodies.data + s->bodyIndex;
 	b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( point, body->origin ) );
 	float distance;
 	b2Vec2 normal;
@@ -924,7 +856,7 @@ static bool Buries( const b2fFluid* f, const b2fShape* s, b2Pos point, float tol
 // they part again.
 static inline bool FixedTogether( const b2fFluid* f, const b2fShape* a, const b2fShape* b )
 {
-	return a->bodyIndex == b->bodyIndex || ( f->bodies[a->bodyIndex].isStatic && f->bodies[b->bodyIndex].isStatic );
+	return a->bodyIndex == b->bodyIndex || ( f->bodies.data[a->bodyIndex].isStatic && f->bodies.data[b->bodyIndex].isStatic );
 }
 
 // The contacts of awake particles, in their grid's bins, and of asleep ones, in the sleep grid's: those in the shell,
@@ -966,11 +898,11 @@ static void ContactTask( int start, int end, int worker, void* context )
 		int foundCount = 0;
 		// Near an awake body, a particle may not sleep (MarkHeld). Asleep ones near one woke before the substep
 		// (b2fWakeHeld), and their cells in the awake particles' grid can be clamped from far off.
-		unsigned char wake = awake && f->holdMarked && f->cellHold[f->cell[i]] == f->holdSerial ? B2F_WAKE_HELD : 0;
+		unsigned char wake = awake && f->holdMarked && f->cellHold.data[f->cell[i]] == f->holdSerial ? B2F_WAKE_HELD : 0;
 		int bin = BinOf( bins, x, y );
-		for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd && foundCount < 2 * B2F_CONTACTS_PER_PARTICLE; ++k )
+		for ( int k = bins->start.data[bin], binEnd = bins->start.data[bin + 1]; k < binEnd && foundCount < 2 * B2F_CONTACTS_PER_PARTICLE; ++k )
 		{
-			const b2fShape* s = f->shapes + bins->shapes[k];
+			const b2fShape* s = f->shapes.data + bins->shapes.data[k];
 			if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
 			{
 				continue;
@@ -983,7 +915,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 				continue;
 			}
 
-			const b2fBody* body = f->bodies + s->bodyIndex;
+			const b2fBody* body = f->bodies.data + s->bodyIndex;
 			b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( ( b2Pos ){ x, y }, body->origin ) );
 			float distance;
 			b2Vec2 normal;
@@ -1049,7 +981,7 @@ static void ContactTask( int start, int end, int worker, void* context )
 		// (fluid_sleep.c).
 		for ( int c = 0; c < count; ++c )
 		{
-			wake = f->bodies[contacts[c].bodyIndex].awake ? B2F_WAKE_HELD : wake;
+			wake = f->bodies.data[contacts[c].bodyIndex].awake ? B2F_WAKE_HELD : wake;
 		}
 		f->wake[i] = wake;
 		if ( f->asleep[i] != 0 && wake != 0 )
@@ -1104,8 +1036,8 @@ static void CollideTask( int start, int end, int worker, void* context )
 
 	for ( int chunk = start; chunk < end; ++chunk )
 	{
-		b2fReaction* reactions = f->reactions + chunk * f->bodyCount;
-		memset( reactions, 0, (size_t)f->bodyCount * sizeof( b2fReaction ) );
+		b2fReaction* reactions = f->reactions.data + chunk * f->bodies.count;
+		memset( reactions, 0, (size_t)f->bodies.count * sizeof( b2fReaction ) );
 
 		int first = (int)( (int64_t)f->activeCount * chunk / B2F_CHUNK_COUNT );
 		int last = (int)( (int64_t)f->activeCount * ( chunk + 1 ) / B2F_CHUNK_COUNT );
@@ -1130,7 +1062,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 			const b2fContact* contacts = f->contacts + B2F_CONTACTS_PER_PARTICLE * i;
 			for ( int c = 0; c < f->contactCount[i]; ++c )
 			{
-				const b2fBody* body = f->bodies + contacts[c].bodyIndex;
+				const b2fBody* body = f->bodies.data + contacts[c].bodyIndex;
 				if ( body->awake )
 				{
 					float impulse = m * contacts[c].move * inv;
@@ -1189,10 +1121,10 @@ static void CollideTask( int start, int end, int worker, void* context )
 			// leaves it on this square's list. Pushes are short next to a square, and in the test scenes none brought a
 			// particle into the bounds of a shape missing from the list.
 			int bin = BinOf( bins, f->pos[i].x, f->pos[i].y );
-			for ( int k = bins->start[bin], binEnd = bins->start[bin + 1]; k < binEnd; ++k )
+			for ( int k = bins->start.data[bin], binEnd = bins->start.data[bin + 1]; k < binEnd; ++k )
 			{
-				int si = bins->shapes[k];
-				const b2fShape* s = f->shapes + si;
+				int si = bins->shapes.data[k];
+				const b2fShape* s = f->shapes.data + si;
 				b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 				if ( x < s->minX || x > s->maxX || y < s->minY || y > s->maxY )
 				{
@@ -1206,7 +1138,7 @@ static void CollideTask( int start, int end, int worker, void* context )
 					continue;
 				}
 
-				const b2fBody* body = f->bodies + s->bodyIndex;
+				const b2fBody* body = f->bodies.data + s->bodyIndex;
 				b2Pos world = { x, y };
 				b2Vec2 local = b2InvRotateVector( body->motion.rotation, b2SubPos( world, body->origin ) );
 				float distance = 0.0f;
@@ -1334,9 +1266,9 @@ static b2Vec2 OpenSide( const b2fFluid* f, const b2fBody* body, const b2fReactio
 	b2Vec2 gap = total->wetLength > 0.0f ? b2MulSV( 1.0f / total->wetLength, ( b2Vec2 ){ total->wetNormalX, total->wetNormalY } ) : up;
 	for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
 	{
-		b2Vec2 normal = { f->patches[i].normalX, f->patches[i].normalY };
+		b2Vec2 normal = { f->patches.data[i].normalX, f->patches.data[i].normalY };
 		float along = b2Dot( gap, normal );
-		if ( f->bodies[f->patches[i].otherIndex].adheres && along > 0.0f )
+		if ( f->bodies.data[f->patches.data[i].otherIndex].adheres && along > 0.0f )
 		{
 			gap = b2MulSub( gap, along, normal );
 		}
@@ -1375,9 +1307,9 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 	}
 	b2Vec2 up = b2MulSV( -1.0f / g, f->worldGravity );
 
-	for ( int bodyIndex = 0; bodyIndex < f->bodyCount; ++bodyIndex )
+	for ( int bodyIndex = 0; bodyIndex < f->bodies.count; ++bodyIndex )
 	{
-		const b2fBody* body = f->bodies + bodyIndex;
+		const b2fBody* body = f->bodies.data + bodyIndex;
 		b2fReaction* total = totals + bodyIndex;
 		float height = body->high - body->low;
 		if ( body->awake == false || body->motion.invMass == 0.0f || total->wetDensity <= 0.0f || height <= 0.0f )
@@ -1420,8 +1352,8 @@ static void ApplyPatches( b2fFluid* f, b2fReaction* totals )
 
 		for ( int i = body->firstPatch; i < body->firstPatch + body->patchCount; ++i )
 		{
-			const b2fPatch* patch = f->patches + i;
-			const b2fBody* other = f->bodies + patch->otherIndex;
+			const b2fPatch* patch = f->patches.data + i;
+			const b2fBody* other = f->bodies.data + patch->otherIndex;
 			b2Vec2 normal = { patch->normalX, patch->normalY };
 			if ( other->adheres == false )
 			{
@@ -1466,9 +1398,9 @@ static void RecordReactions( b2fFluid* f, const b2fReaction* totals )
 {
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
-	for ( int i = 0; i < f->bodyCount; ++i )
+	for ( int i = 0; i < f->bodies.count; ++i )
 	{
-		b2fBody* body = f->bodies + i;
+		b2fBody* body = f->bodies.data + i;
 		const b2fReaction* total = totals + i;
 		// Liquid that has not been still: a sleeping body gets wetMass only from such liquid
 		body->reached = body->reached || ( body->awake ? total->unsettled > 0.0f : total->wetMass > 0.0f );
@@ -1578,7 +1510,7 @@ static void ShareTask( int start, int end, int worker, void* context )
 		int count = f->contactCount[i];
 		for ( int c = 0; c < count; ++c )
 		{
-			const b2fBody* body = f->bodies + contacts[c].bodyIndex;
+			const b2fBody* body = f->bodies.data + contacts[c].bodyIndex;
 			float share = body->sharing && added > 0.0f ? ContactShare( contacts, count, c ) : 0.0f;
 			if ( share > 0.0f )
 			{
@@ -1627,9 +1559,9 @@ static void ReadMotion( b2World* world, b2fBody* body )
 
 void b2fUpdateBodies( b2fFluid* f )
 {
-	for ( int i = 0; i < f->bodyCount; ++i )
+	for ( int i = 0; i < f->bodies.count; ++i )
 	{
-		b2fBody* body = f->bodies + i;
+		b2fBody* body = f->bodies.data + i;
 		ReadMotion( f->world, body );
 		body->solverDelta = body->awake ? b2Sub( body->motion.linearVelocity, body->lastVelocity ) : b2Vec2_zero;
 		body->solverAngularDelta = body->awake ? body->motion.angularVelocity - body->lastAngularVelocity : 0.0f;
@@ -1649,9 +1581,9 @@ void b2fUpdateBodies( b2fFluid* f )
 // Every body where Box2D has it and still, as a wall that feels nothing, for passes that run outside a step
 void b2fHoldBodies( b2fFluid* f )
 {
-	for ( int i = 0; i < f->bodyCount; ++i )
+	for ( int i = 0; i < f->bodies.count; ++i )
 	{
-		b2fBody* body = f->bodies + i;
+		b2fBody* body = f->bodies.data + i;
 		b2Body* source = b2Array_Get( f->world->bodies, body->id.index1 - 1 );
 		const b2BodySim* sim = b2GetBodySim( f->world, source );
 		b2WorldTransform transform = sim->transform;
@@ -1679,10 +1611,10 @@ static void SetShapeBounds( b2fFluid* f )
 	float g = b2Length( f->worldGravity );
 	b2Vec2 up = g > 0.0f ? b2MulSV( -1.0f / g, f->worldGravity ) : b2Vec2_zero;
 
-	for ( int i = 0; i < f->shapeCount; ++i )
+	for ( int i = 0; i < f->shapes.count; ++i )
 	{
-		b2fShape* s = f->shapes + i;
-		b2fBody* body = f->bodies + s->bodyIndex;
+		b2fShape* s = f->shapes.data + i;
+		b2fBody* body = f->bodies.data + s->bodyIndex;
 		SetBounds( s, body->origin, body->motion.rotation, s->radius + f->maxRadius, body, up );
 	}
 }
@@ -1701,21 +1633,16 @@ static void MarkHeld( b2fFluid* f )
 
 	int width = f->grid.width, height = f->grid.height, cells = width * height;
 	float inverse = 1.0f / f->grid.cell;
-	for ( int i = 0; i < f->shapeCount; ++i )
+	for ( int i = 0; i < f->shapes.count; ++i )
 	{
-		const b2fShape* s = f->shapes + i;
-		if ( f->bodies[s->bodyIndex].awake == false )
+		const b2fShape* s = f->shapes.data + i;
+		if ( f->bodies.data[s->bodyIndex].awake == false )
 		{
 			continue;
 		}
 		if ( f->holdMarked == false )
 		{
-			if ( cells > f->cellHoldCapacity )
-			{
-				f->cellHold = b2fGrowArray( f->cellHold, f->cellHoldCapacity, 2 * cells, sizeof( int ) );
-				memset( f->cellHold + f->cellHoldCapacity, 0, (size_t)( 2 * cells - f->cellHoldCapacity ) * sizeof( int ) );
-				f->cellHoldCapacity = 2 * cells;
-			}
+			b2fCoverIndex( &f->cellHold, cells - 1, 0 );
 			f->holdSerial += 1;
 			f->holdMarked = true;
 		}
@@ -1747,7 +1674,7 @@ static void MarkHeld( b2fFluid* f )
 		{
 			for ( int x = cx0; x <= cx1; ++x )
 			{
-				f->cellHold[y * width + x] = f->holdSerial;
+				f->cellHold.data[y * width + x] = f->holdSerial;
 			}
 		}
 	}
@@ -1764,7 +1691,7 @@ void b2fFindContacts( b2fFluid* f, b2SubStepContext* context, bool all )
 	f->profile.sleep += b2GetMilliseconds( ticks );
 
 	int a = f->activeCount, settled = f->settledCount;
-	if ( f->shapeCount == 0 )
+	if ( f->shapes.count == 0 )
 	{
 		memset( f->contactCount, 0, (size_t)a * sizeof( int ) );
 		memset( f->wallDensity, 0, (size_t)a * sizeof( float ) );
@@ -1812,7 +1739,7 @@ void b2fFindContacts( b2fFluid* f, b2SubStepContext* context, bool all )
 // with the bodies held
 void b2fCollideHeld( b2fFluid* f )
 {
-	if ( f->shapeCount > 0 )
+	if ( f->shapes.count > 0 )
 	{
 		CollideTask( 0, B2F_CHUNK_COUNT, 0, f );
 	}
@@ -1820,7 +1747,7 @@ void b2fCollideHeld( b2fFluid* f )
 
 void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 {
-	if ( f->shapeCount == 0 )
+	if ( f->shapes.count == 0 )
 	{
 		return;
 	}
@@ -1828,12 +1755,12 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 	b2SubStep_ParallelFor( context, CollideTask, B2F_CHUNK_COUNT, 1, f );
 
 	// Chunk 0 holds the totals, summed in chunk order so the result does not depend on the workers
-	b2fReaction* totals = f->reactions;
+	b2fReaction* totals = f->reactions.data;
 	for ( int chunk = 1; chunk < B2F_CHUNK_COUNT; ++chunk )
 	{
-		for ( int i = 0; i < f->bodyCount; ++i )
+		for ( int i = 0; i < f->bodies.count; ++i )
 		{
-			const b2fReaction* r = f->reactions + chunk * f->bodyCount + i;
+			const b2fReaction* r = f->reactions.data + chunk * f->bodies.count + i;
 			b2fReaction* t = totals + i;
 			t->x += r->x;
 			t->y += r->y;
@@ -1865,9 +1792,9 @@ void b2fCollide( b2fFluid* f, b2SubStepContext* context )
 	RecordReactions( f, totals );
 
 	bool sharing = false;
-	for ( int i = 0; i < f->bodyCount; ++i )
+	for ( int i = 0; i < f->bodies.count; ++i )
 	{
-		b2fBody* body = f->bodies + i;
+		b2fBody* body = f->bodies.data + i;
 		if ( body->awake )
 		{
 			Respond( body, totals + i );
