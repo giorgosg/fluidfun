@@ -1544,6 +1544,7 @@ static int FluidMemory( void )
 	size_t start = b2GetByteCount();
 	b2WorldDef worldDef = b2DefaultWorldDef();
 	b2WorldId worldId = b2CreateWorld( &worldDef );
+	b2World* world = b2GetWorldFromId( worldId );
 	b2BodyDef bodyDef = b2DefaultBodyDef();
 	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
 	b2ShapeDef shapeDef = b2DefaultShapeDef();
@@ -1571,6 +1572,7 @@ static int FluidMemory( void )
 	}
 	size_t worldOnly = b2GetByteCount();
 	ENSURE( worldOnly > start );
+	int arenaBefore = b2GetStackCapacity( &world->stack );
 
 	b2FluidDef def = b2DefaultFluidDef();
 	def.capacity = 500;
@@ -1597,13 +1599,18 @@ static int FluidMemory( void )
 	}
 	ENSURE( bodyBegins > 0 );
 	ENSURE( b2Fluid_GetSensorArea( fluidId, sensorId ) > 0.0f );
+	// The fluid's scratch comes from the world's arena and is all given back, also what b2FinishFluid takes after
+	// b2EndStep checks the arena is empty
+	ENSURE( b2GetStackAllocation( &world->stack ) == 0 );
 
 	// Each particle of room takes about 840 bytes with springs, as b2FluidDef::maxCapacity says
 	size_t withFluid = b2GetByteCount();
 	ENSURE( withFluid - worldOnly > (size_t)b2Fluid_GetCapacity( fluidId ) * 800 );
 
+	// The arena keeps the room the fluid's scratch made it grow to until the world goes, as it does for Box2D's own
 	b2DestroyFluid( fluidId );
-	ENSURE( b2GetByteCount() == worldOnly );
+	ENSURE( b2GetStackAllocation( &world->stack ) == 0 );
+	ENSURE( b2GetByteCount() == worldOnly + (size_t)( b2GetStackCapacity( &world->stack ) - arenaBefore ) );
 
 	// A fluid the world destroys goes with it
 	fluidId = b2CreateFluid( worldId, &def );

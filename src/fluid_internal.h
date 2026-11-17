@@ -880,8 +880,10 @@ void b2fSortAwake( b2fFluid* f, b2SubStepContext* context );
 // The bounds of the particles first to last, or those list holds from first to last, and the part of them a grid of this cell and border covers: all of them,
 // and false, when their bounds fit the grid's limits, or when the box found below leaves out more than one particle in
 // B2F_BULK_OUTSIDE. Otherwise true, and the bulk is a box that fits and holds as many particles as it can, found along
-// each axis in turn. One thread, in particle order, so it does not depend on worker count.
-bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk );
+// each axis in turn, and outside, unless null, is how many particles lie outside it. One thread, in particle order, so
+// it does not depend on worker count.
+bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk,
+				  int* outside );
 // An axis of one stretch, a cell of this inverse size from origin
 void b2fPlainAxis( b2fAxis* axis, b2fCoord origin, float inverse );
 // Starts laying out an axis over coordinates from lo to hi in cells of this size, with the bits of the given scratch.

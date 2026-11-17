@@ -3,6 +3,8 @@
 // their depth asks for, after Winchenbach et al. 2017.
 #include "fluid_internal.h"
 
+#include "physics_world.h"
+
 // Depth at which particles of a liquid reach its coarsest size
 static float AdaptiveReach( const b2fFluid* f, int liquid, float g, float h )
 {
@@ -956,14 +958,18 @@ static void SettleMerged( b2fFluid* f )
 	// Filed first, so the sorts below move only the awake particles
 	b2fSortParticles( f, NULL );
 
-	// Sorts move particles, so each keeps where it started, to take back its velocity from there
-	size_t floats = (size_t)n * sizeof( float ), ints = (size_t)n * sizeof( int );
-	float* startVx = b2Alloc( floats );
-	float* startVy = b2Alloc( floats );
-	int* from = b2Alloc( ints );
-	int* scratch = b2Alloc( ints );
-	memcpy( startVx, f->vx, floats );
-	memcpy( startVy, f->vy, floats );
+	// Sorts move particles, so each keeps where it started, to take back its velocity from there. Scratch on the world's
+	// arena, freed in reverse order below; from and scratch swap during the iterations, so the frees use the originals.
+	b2Stack* stack = &f->world->stack;
+	int floats = n * (int)sizeof( float ), ints = n * (int)sizeof( int );
+	float* startVx = b2StackAlloc( stack, floats, "settle vx" );
+	float* startVy = b2StackAlloc( stack, floats, "settle vy" );
+	int* const fromBlock = b2StackAlloc( stack, ints, "settle from" );
+	int* const scratchBlock = b2StackAlloc( stack, ints, "settle scratch" );
+	int* from = fromBlock;
+	int* scratch = scratchBlock;
+	memcpy( startVx, f->vx, (size_t)floats );
+	memcpy( startVy, f->vy, (size_t)floats );
 	for ( int i = 0; i < n; ++i )
 	{
 		from[i] = i;
@@ -1017,10 +1023,10 @@ static void SettleMerged( b2fFluid* f )
 		f->vx[i] = startVx[from[i]];
 		f->vy[i] = startVy[from[i]];
 	}
-	b2Free( startVx, floats );
-	b2Free( startVy, floats );
-	b2Free( from, ints );
-	b2Free( scratch, ints );
+	b2StackFree( stack, scratchBlock );
+	b2StackFree( stack, fromBlock );
+	b2StackFree( stack, startVy );
+	b2StackFree( stack, startVx );
 	f->springy = springy;
 }
 
