@@ -21,7 +21,7 @@
 // The order must reproduce from run to run. This is necessary because the Gauss-Seidel constraint solver is order dependent.
 //
 // Creation:
-// - Contacts are created using results from b2UpdateBroadPhasePairs
+// - Contacts are created using results from the broad-phase pair update
 // - These results are ordered according to the order of the broad-phase move array
 // - The move array is ordered according to the shape creation order using a bitset.
 // - The island/shape/body order is determined by creation order
@@ -283,8 +283,9 @@ void b2CreateContact( b2World* world, b2Shape* shapeA, b2Shape* shapeB )
 	contact->shapeIdB = shapeIdB;
 	contact->flags = 0;
 
-	// Both bodies must enable recycling
-	if ( ( bodyA->flags & b2_bodyEnableContactRecycling ) != 0 && ( bodyB->flags & b2_bodyEnableContactRecycling ) != 0 )
+	// Both bodies must enable recycling. Disable for pre-solve.
+	if ( ( bodyA->flags & b2_bodyEnableContactRecycling ) != 0 && ( bodyB->flags & b2_bodyEnableContactRecycling ) != 0 &&
+		 shapeA->enablePreSolveEvents == false && shapeB->enablePreSolveEvents == false )
 	{
 		contact->flags |= b2_contactRecycleFlag;
 	}

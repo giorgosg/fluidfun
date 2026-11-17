@@ -11,7 +11,8 @@
 // LAB_FRAMES with LAB_FRAME_EVERY, LAB_START (every so many frames), and LAB_DUMP=frame,path (every particle after
 // that frame). LAB_POOL_SHAPE spawns the Deep Pool's liquid as a circle (2) or a hexagon (3) instead of a box. LAB_HZ
 // sets the step rate, 60 by default; frames count steps, and the probes that print seconds assume 60 except LAB_START.
-// LAB_WORLD_GRAVITY=x,y sets the world's gravity.
+// LAB_WORLD_GRAVITY=x,y sets the world's gravity. LAB_PULL steps the runs at 3 and 12 workers, or the one run, through
+// b2World_BeginStep and b2World_ContinueStep (PullStep).
 #include "scene.h"
 
 #include "box2d/math_functions.h"
@@ -472,6 +473,37 @@ static void PrintSeams( b2FluidId fluid, const LabScene* scene, float spacing, i
 	printf( " | top near %.4f away %.4f\n", nearColumns > 0 ? nearTop / nearColumns : 0.0, awayColumns > 0 ? awayTop / awayColumns : 0.0 );
 }
 
+// Steps through the pull model on this thread: each batch's tasks in reverse order, so the solver's orchestrator is its
+// last task rather than its first, and the deferred tree rebuild held back until a later batch joins it. Returns false
+// if the step ended with that task never joined.
+static bool PullStep( b2WorldId worldId, float timeStep, int subStepCount )
+{
+	bool holding = false;
+	b2TaskBatch batch = b2World_BeginStep( worldId, timeStep, subStepCount );
+	while ( batch.count > 0 )
+	{
+		for ( int i = batch.count - 1; i >= 0; --i )
+		{
+			const b2Task* task = batch.tasks + i;
+			if ( task->deferred )
+			{
+				holding = true;
+				continue;
+			}
+			task->fcn( task->context );
+		}
+
+		for ( int i = 0; i < batch.joinCount; ++i )
+		{
+			batch.joinTasks[i].fcn( batch.joinTasks[i].context );
+			holding = false;
+		}
+
+		batch = b2World_ContinueStep( worldId );
+	}
+	return holding == false;
+}
+
 int main( int argc, char** argv )
 {
 	int frames = argc > 1 ? atoi( argv[1] ) : 300;
@@ -492,6 +524,7 @@ int main( int argc, char** argv )
 		b2WorldDef worldDef = b2DefaultWorldDef();
 		worldDef.workerCount = onlyWorkers > 0 ? onlyWorkers : workerCounts[w];
 		b2WorldId worldId = b2CreateWorld( &worldDef );
+		bool pull = getenv( "LAB_PULL" ) != NULL && ( oneRun || w % 2 == 1 );
 
 		LabScene scene = LabDefaultScene( getenv( "LAB_SCENE" ) ? atoi( getenv( "LAB_SCENE" ) ) : lab_tank );
 		if ( getenv( "LAB_CONTROL" ) )
@@ -627,7 +660,16 @@ int main( int argc, char** argv )
 			}
 
 			uint64_t stepTicks = b2GetTicks();
-			b2World_Step( worldId, 1.0f / hz, getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : ( scene.subSteps > 0 ? scene.subSteps : 4 ) );
+			int subStepCount = getenv( "LAB_SUBSTEPS" ) ? atoi( getenv( "LAB_SUBSTEPS" ) ) : ( scene.subSteps > 0 ? scene.subSteps : 4 );
+			if ( pull == false )
+			{
+				b2World_Step( worldId, 1.0f / hz, subStepCount );
+			}
+			else if ( PullStep( worldId, 1.0f / hz, subStepCount ) == false )
+			{
+				printf( "step %d: the deferred task was never joined\n", i );
+				failures += 1;
+			}
 			float stepTime = b2GetMilliseconds( stepTicks );
 			b2FluidProfile p = b2Fluid_GetProfile( fluid );
 
@@ -1085,8 +1127,8 @@ int main( int argc, char** argv )
 		}
 
 		float f = (float)frames;
-		printf( "workers=%2d n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f prepare %.2f sizes %.2f) top=%.2f hash=%016llx\n",
-				worldDef.workerCount, n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, sum.prepare / f, sum.sizes / f, top,
+		printf( "workers=%2d%s n=%d %6.2f ms/frame | fluid %6.2f (sort %.2f density %.2f collide %.2f prepare %.2f sizes %.2f) top=%.2f hash=%016llx\n",
+				worldDef.workerCount, pull ? " pull" : "", n, ms, sum.total / f, sum.sort / f, sum.density / f, sum.collide / f, sum.prepare / f, sum.sizes / f, top,
 				(unsigned long long)hash );
 		printf( "  leaked %d, measure %.3f ms/frame, capacity %d\n", scene.leaked, measureSum / f, b2Fluid_GetCapacity( fluid ) );
 		if ( w == ( oneRun ? 2u : 0u ) )

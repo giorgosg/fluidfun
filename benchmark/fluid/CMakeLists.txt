@@ -37,6 +37,11 @@ foreach(index RANGE ${FLUID_LAST_SCENE})
 	set_tests_properties(fluid_${name} PROPERTIES ENVIRONMENT "LAB_SCENE=${index};LAB_CHECK=1")
 endforeach()
 
+# Hole And Slopes through the pull model (LAB_PULL) at 3 and 12 workers, against b2World_Step at 1 and 6. Its bodies
+# sleep for most of the run, so both of the solver's ways of running the fluid are covered.
+add_test(NAME fluid_pull_hole COMMAND fluid_headless 300)
+set_tests_properties(fluid_pull_hole PROPERTIES ENVIRONMENT "LAB_SCENE=1;LAB_PULL=1;LAB_CHECK=1")
+
 # The same with uniform sizes, which take their own paths through the solver
 foreach(index 0 2 4 10)
 	list(GET FLUID_SCENES ${index} name)
