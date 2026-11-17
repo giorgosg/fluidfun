@@ -18,8 +18,8 @@
 //   wakes at once, since the body may move into it, and none there falls asleep (B2F_WAKE_HELD). Its sleep time keeps
 //   running, so a body at rest in still liquid can sleep, and then the liquid round it. Asleep particles near an
 //   awake body wake before the substep moves anything, and are filed with the awake ones.
-// - Both ends of a spring work it out alike, so particles joined by springs, directly or through others, sleep and wake
-//   as one group (b2fSpringGroups): a group falls asleep in the substep its last particle has been slow for
+// - A spring is worked out once, for both its ends, and particles joined by springs, directly or through others, sleep
+//   and wake as one group (b2fSpringGroups): a group falls asleep in the substep its last particle has been slow for
 //   B2_TIME_TO_SLEEP, and when any of it wakes, for whatever reason, all of it wakes before the next spring pass.
 //   While both ends are asleep a spring is skipped, and springs neither form nor go at asleep particles. The size
 //   pass sizes the asleep particles of the shell as the awake ones, and one whose size changes wakes; the others keep
@@ -290,12 +290,11 @@ static int GroupRoot( int* parent, int i )
 	return i;
 }
 
-// The groups are the particles of liquids with springs joined through the springs either end holds, found by union
-// and find over the springs once, on one thread, which takes no ordering between workers. That runs only when a group
-// may change state: when some particle is ready to fall asleep, or the count of asleep ones has changed since the last
-// call, since then something has woken (falling asleep happens only here). A spring forms only between awake
-// particles, and the spring pass ends one that is held by an awake particle alone and whose other end is asleep, so
-// the springs held at the start of the substep are the groups' springs.
+// The groups are the particles of liquids with springs joined through the spring table, found by union and find over
+// the springs once, on one thread, which takes no ordering between workers. That runs only when a group may change
+// state: when some particle is ready to fall asleep, or the count of asleep ones has changed since the last call, since
+// then something has woken (falling asleep happens only here). A spring forms only between awake particles, so a group
+// is never joined to another while one of them is asleep.
 void b2fSpringGroups( b2fFluid* f, bool settle )
 {
 	uint32_t springLiquids = f->springLiquids;
@@ -321,26 +320,22 @@ void b2fSpringGroups( b2fFluid* f, bool settle )
 		parent[i] = i;
 		group[i] = 0;
 	}
-	for ( int i = 0; i < n; ++i )
+	// Every spring once, for its pair. A spring whose end has gone, or is of another liquid, joins nothing: the next
+	// spring pass removes it without working it out.
+	const b2fSpring* springs = f->springs.data;
+	for ( int s = 0; s < f->springs.count; ++s )
 	{
-		if ( ( springLiquids >> f->liquid[i] & 1u ) == 0 )
+		int i = springs[s].rest >= 0.0f ? b2fFindParticle( f, springs[s].a ) : -1;
+		int j = i >= 0 ? b2fFindParticle( f, springs[s].b ) : -1;
+		if ( j < 0 || f->liquid[i] != f->liquid[j] )
 		{
 			continue;
 		}
-		const b2fSprings* sp = f->springs + i;
-		for ( int s = 0; s < sp->count; ++s )
+		int a = GroupRoot( parent, i ), b = GroupRoot( parent, j );
+		if ( a != b )
 		{
-			int j = sp->rest[s] >= 0.0f ? b2fFindParticle( f, sp->id[s] ) : -1;
-			if ( j < 0 )
-			{
-				continue;
-			}
-			int a = GroupRoot( parent, i ), b = GroupRoot( parent, j );
-			if ( a != b )
-			{
-				// The lower index is the root, though which is does not change the groups
-				parent[a > b ? a : b] = a < b ? a : b;
-			}
+			// The lower index is the root, though which is does not change the groups
+			parent[a > b ? a : b] = a < b ? a : b;
 		}
 	}
 

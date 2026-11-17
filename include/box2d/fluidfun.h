@@ -91,8 +91,9 @@ typedef struct b2LiquidDef
 	/// Springs between neighbouring particles, which make the liquid elastic, after Clavet et al. 2005. Stiffness per
 	/// unit mass in 1/s^2, so the square of the angular frequency of a spring holding one particle; zero turns springs
 	/// off. A spring forms between two particles of this liquid closer than the interaction radius, at their distance
-	/// then, and is written so that it acts the same whatever the substep count. It weakens as its rest length grows
-	/// towards the interaction radius, and goes once it gets there.
+	/// then, while each takes part in fewer than 16 springs, and is written so that it acts the same whatever the
+	/// substep count. Each spring is one for the pair, with one rest length, pulling both ends alike. It weakens as its
+	/// rest length grows towards the interaction radius, and goes once it gets there.
 	float springStiffness;
 	/// How fast a spring's rest length follows its length once stretched or squeezed past the yield ratio, per second.
 	/// Zero keeps every spring's rest length; with formSpringsAfterSpawn off that makes an elastic solid, which pulls
@@ -147,15 +148,16 @@ typedef struct b2FluidDef
 	/// and does not change how the liquid moves. The default of 4096 is about 2 MB, and a scene with more grows into
 	/// it once.
 	int capacity;
-	/// The most particles the fluid will grow to hold. Each particle of room takes 519 bytes with uniform sizes, 549
-	/// once some liquid has adaptive sizes, as the default liquid does, and 557 once one also has adaptiveSpeed;
-	/// springs add 280 to 296, and a build for large worlds 32 more. So the default of 1,000,000 is up to 0.56 GB, or
-	/// 0.85 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above this is kept as
-	/// the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it. Its scratch
-	/// within a step comes from the world's arena (b2Capacity::arenaByteCount): about 16 bytes a particle while spawned
-	/// liquid settles, plus about 5 (6 for large worlds) with liquid outside the bulk its grid covers, or up to 64 KB
-	/// with liquid in parts far apart. The arena keeps the room it grew to until the world is destroyed, also after the
-	/// fluid is.
+	/// The most particles the fluid will grow to hold. Each particle of room takes 288 bytes with uniform sizes, 318
+	/// once some liquid has adaptive sizes, as the default liquid does, and 326 once one also has adaptiveSpeed;
+	/// springs add 28 to 44, and a build for large worlds 32 more. Springs themselves take 12 bytes each, and 24 more
+	/// for the scratch steps work them out in, which is kept, so about 220 bytes for each particle of jelly, which has
+	/// about 6. So the default of 1,000,000 is up to 0.33 GB, or 0.37 GB with springs and about 0.6 GB full of jelly.
+	/// While it doubles it briefly holds the old arrays as well. A capacity above this is kept as the most. The fluid
+	/// allocates through Box2D, so b2SetAllocator and b2GetByteCount include it. Its scratch within a step comes from
+	/// the world's arena (b2Capacity::arenaByteCount): about 16 bytes a particle while spawned liquid settles, plus
+	/// about 5 (6 for large worlds) with liquid outside the bulk its grid covers, or up to 64 KB with liquid in parts
+	/// far apart. The arena keeps the room it grew to until the world is destroyed, also after the fluid is.
 	int maxCapacity;
 	/// Let still liquid fall asleep, as bodies do: a particle slower than 3 cm/s for half a second holds still and
 	/// costs much less until something wakes it. Bodies in liquid that is asleep around them may sleep too. It also

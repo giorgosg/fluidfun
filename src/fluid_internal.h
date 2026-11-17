@@ -107,8 +107,8 @@ static inline float b2fLatticeSize( float size )
 #define B2F_BLOCK_SHIFT 2
 #define B2F_BLOCK_CELLS ( 1 << B2F_BLOCK_SHIFT )
 
-// Neighbours the density pass keeps per particle. A particle with more keeps the first this many, which AddSprings
-// takes springs from, and its pairCount is -1, so the move pass scans the grid for it instead.
+// Neighbours the density pass keeps per particle. A particle with more keeps the first this many, which OfferSprings
+// offers springs to, and its pairCount is -1, so the move pass scans the grid for it instead.
 #define B2F_PAIRS_PER_PARTICLE 32
 
 // The most one density pass may move a particle, as a fraction of the interaction radius. Effective stiffness
@@ -199,20 +199,35 @@ static inline float b2fLatticeSize( float size )
 #define B2F_WAKE_NOW 2u
 #define B2F_WAKE_CALM 8u
 
-// Springs a particle holds, each to a partner by id, since indices change with every sort, with removals between
-// steps, and with merges and splits at the end of each. The spring pass finds each partner in an id table it builds
-// every substep. Both ends hold the same spring, and work it out the same way, so it stays the same at both.
+// A spring, after Clavet et al. 2005 section 5: one for each pair of particles it joins, with one rest length, kept in
+// a table of its own (b2fFluid::springs). Its ends are particle ids, the lower first, since indices change with every
+// sort, with removals between steps, and with merges and splits at the end of each; the spring pass finds them in an id
+// table it builds every substep. A spring whose end has gone, by a removal or a merge, goes in the next spring pass.
+typedef struct b2fSpring
+{
+	int a, b;
+	float rest;
+} b2fSpring;
+
+b2DeclareArray( b2fSpring );
+
+// The most springs a particle takes part in. A spring forms only between two particles below it.
 #define B2F_SPRINGS_PER_PARTICLE 16
 
-typedef struct b2fSprings
+// A spring in this substep (b2fRelaxSprings): where its ends are, a of -1 for a spring that went without pulling, and
+// what it moves its first end by, per unit of that end's inverse mass; its second end moves the opposite way
+typedef struct b2fSpringWork
 {
-	int id[B2F_SPRINGS_PER_PARTICLE];
-	float rest[B2F_SPRINGS_PER_PARTICLE];
-	int count;
-	// Set at the end of the particle's first substep. In a liquid without b2LiquidDef::formSpringsAfterSpawn, only
-	// particles not yet formed make springs, to any neighbour, and formed ones take springs only from those.
-	bool formed;
-} b2fSprings;
+	int a, b;
+	float moveX, moveY;
+} b2fSpringWork;
+
+b2DeclareArray( b2fSpringWork );
+
+// A particle field only springs use, made once some liquid has springs, and then sorted, copied and cleared with the
+// particle fields: whether the particle has had its first substep, set at the end of it. In a liquid without
+// b2LiquidDef::formSpringsAfterSpawn a spring forms only where one end has not.
+#define B2F_SPRING_FIELDS( X ) X( bool, springFormed )
 
 // Where a particle id is this substep, for finding spring partners
 typedef struct b2fIdSlot
@@ -628,11 +643,13 @@ struct b2fFluid
 
 	B2F_PARTICLE_FIELDS( B2F_DECLARE_FIELD )
 	B2F_SPEED_FIELDS( B2F_DECLARE_FIELD )
+	B2F_SPRING_FIELDS( B2F_DECLARE_FIELD )
 	// The same fields in the order the next sort writes, swapped in afterwards
 	struct
 	{
 		B2F_PARTICLE_FIELDS( B2F_DECLARE_FIELD )
 		B2F_SPEED_FIELDS( B2F_DECLARE_FIELD )
+		B2F_SPRING_FIELDS( B2F_DECLARE_FIELD )
 	} sorted;
 	B2F_WORK_FIELDS( B2F_DECLARE_FIELD )
 	// The particles a call is about to remove, a bit each (b2fRemoveMarked). Not a particle field: every call that
@@ -643,13 +660,24 @@ struct b2fFluid
 	B2F_ADAPT_FIELDS( B2F_DECLARE_FIELD )
 	b2fContact* contacts;
 
-	// Only made once some liquid has springs, and then sorted, copied and cleared with the particle fields
-	b2fSprings* springs;
-	b2fSprings* sortedSprings;
+	// Every spring, once for its pair (b2fSpring), in the order they formed. Only the spring pass removes springs, and
+	// only the pass that forms them adds them, both on one thread, so the order does not depend on worker count.
+	b2Array( b2fSpring ) springs;
+	// Scratch for the spring pass and the density pass after it in the same substep: each spring's ends and move
+	// (b2fSpringWork), in table order as the spring pass found it; and the springs of each awake particle, as indices
+	// into that, from springStart[i] to springStart[i + 1], for gathering moves and for finding the springs a particle
+	// already has. Grown as needed and never shrunk.
+	b2Array( b2fSpringWork ) springWork;
+	b2Array( int ) springStart;
+	b2Array( int ) springList;
+	// Made with springFormed, a byte or word for each particle of room. springCount is how many springs each particle
+	// takes part in, by index, from the spring pass of this substep and the springs formed since. springOffers marks,
+	// a bit for each of a particle's first 32 pairs, the springs the density pass offers to form (FormSprings).
+	unsigned char* springCount;
+	uint32_t* springOffers;
 	b2fIdSlot* idMap;
 	int idMapMask, idMapShift;
 	bool springy;	 // some liquid has springs
-	bool checkSprings;	 // the first substep of a step, which checks both ends hold each spring
 	// Scratch for b2fSpringGroups, made with the spring arrays: each particle's parent in the union of its springs,
 	// and what the group at each root holds
 	int* springParent;
@@ -680,10 +708,11 @@ struct b2fFluid
 	// to find the shell
 	b2Array( int ) cellAwake;
 	// The pairs the density pass finds, B2F_PAIRS_PER_PARTICLE a particle it covers: the awake particles at their own
-	// index, then the shell in its order. AddSprings and ShellWakes read them in the same pass, ShellWakes the index
-	// only, and the move pass in the next. They live for one b2fRelaxDensity call, which grows the array when it covers
-	// more particles than it has room for, to a quarter more than it needs and at most B2F_PAIRS_PER_PARTICLE for each
-	// particle of capacity (GrowPairs). The array never shrinks, as the particles' room does not.
+	// index, then the shell in its order. OfferSprings and ShellWakes read them in the same pass, ShellWakes the index
+	// only, FormSprings after it, and the move pass after that. They live for one b2fRelaxDensity call, which grows the
+	// array when it covers more particles than it has room for, to a quarter more than it needs and at most
+	// B2F_PAIRS_PER_PARTICLE for each particle of capacity (GrowPairs). The array never shrinks, as the particles'
+	// room does not.
 	b2Array( b2fPair ) pairs;
 	// The cells near an awake body this substep are those marked with holdSerial, when holdMarked
 	b2Array( int ) cellHold;
@@ -771,11 +800,11 @@ static inline void b2fCopyParticle( b2fFluid* f, int to, int from )
 	{
 		B2F_SPEED_FIELDS( B2F_COPY_FIELD )
 	}
-#undef B2F_COPY_FIELD
-	if ( f->springs != NULL )
+	if ( f->springFormed != NULL )
 	{
-		f->springs[to] = f->springs[from];
+		B2F_SPRING_FIELDS( B2F_COPY_FIELD )
 	}
+#undef B2F_COPY_FIELD
 }
 
 static inline void b2fClearParticle( b2fFluid* f, int i )
@@ -786,12 +815,11 @@ static inline void b2fClearParticle( b2fFluid* f, int i )
 	{
 		B2F_SPEED_FIELDS( B2F_CLEAR_FIELD )
 	}
-#undef B2F_CLEAR_FIELD
-	if ( f->springs != NULL )
+	if ( f->springFormed != NULL )
 	{
-		f->springs[i].count = 0;
-		f->springs[i].formed = false;
+		B2F_SPRING_FIELDS( B2F_CLEAR_FIELD )
 	}
+#undef B2F_CLEAR_FIELD
 }
 
 // Every particle in the square of cells within reach cells of particle i's in the grid of awake particles, itself

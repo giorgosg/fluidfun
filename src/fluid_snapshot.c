@@ -9,9 +9,10 @@
 // - Liquids and emitters, whole, and the cohesion between liquids; the pair table, liquidSees, liveLiquids,
 //   liquidsFiltered, adaptive and springy rebuilt by b2fUpdateLiquids from them.
 // - Each particle's position, velocity, size, density, id and liquid, its sleep time, smoothed velocity (or density
-//   to wake by) and whether it is asleep, its speedMemory and springs where those arrays have been made, in the
+//   to wake by) and whether it is asleep, its speedMemory and springFormed where those arrays have been made, in the
 //   fluid's order, which the next sort keeps within a cell. prev is set at the start of every substep before anything
 //   reads it, so it is not written.
+// - The spring table, in its order, springs to particles that have gone included: the next spring pass removes them.
 // - maxRadius, which the last sort of a step set from sizes that the size pass has changed since, and which the next
 //   step's gather reads before it sorts.
 // - The shapes and bodies the last step gathered, as its last substep left them: a spawn's coarsening at the start of
@@ -29,7 +30,7 @@
 #include "recording.h"
 
 #define B2F_SNAP_MAGIC 0x444C4646u // 'FFLD'
-#define B2F_SNAP_VERSION 3u
+#define B2F_SNAP_VERSION 4u
 
 // The structs written whole. A change to any of them changes this, and an image of another layout is refused.
 static uint32_t FluidLayoutHash( void )
@@ -43,7 +44,7 @@ static uint32_t FluidLayoutHash( void )
 	MIX( sizeof( b2EmitterDef ) )
 	MIX( sizeof( b2fLiquid ) )
 	MIX( sizeof( b2fEmitter ) )
-	MIX( sizeof( b2fSprings ) )
+	MIX( sizeof( b2fSpring ) )
 	MIX( sizeof( b2fShape ) )
 	MIX( sizeof( b2fBody ) )
 	MIX( sizeof( b2fBodyRecord ) )
@@ -51,7 +52,6 @@ static uint32_t FluidLayoutHash( void )
 	MIX( sizeof( b2Pos ) )
 	MIX( B2F_MAX_LIQUIDS )
 	MIX( B2F_MAX_EMITTERS )
-	MIX( B2F_SPRINGS_PER_PARTICLE )
 #undef MIX
 	return h;
 }
@@ -106,7 +106,7 @@ void b2fSerializeFluid( const b2World* world, b2RecBuffer* buf )
 
 	// Which of the optional arrays have been made: they stay once made, and a made spring array is carried by every
 	// sort, so the restored fluid makes the same ones
-	uint8_t made[3] = { f->adaptMass != NULL, f->speedMemory != NULL, f->springs != NULL };
+	uint8_t made[3] = { f->adaptMass != NULL, f->speedMemory != NULL, f->springFormed != NULL };
 	W( buf, made, sizeof( made ) );
 
 	size_t n = (size_t)f->count;
@@ -124,18 +124,11 @@ void b2fSerializeFluid( const b2World* world, b2RecBuffer* buf )
 	{
 		W( buf, f->speedMemory, n * sizeof( float ) );
 	}
-	if ( f->springs != NULL )
+	if ( f->springFormed != NULL )
 	{
-		// Only the springs each particle holds
-		for ( int i = 0; i < f->count; ++i )
-		{
-			const b2fSprings* s = f->springs + i;
-			// The top bit says whether the particle has formed its springs (b2LiquidDef::formSpringsAfterSpawn)
-			uint8_t count = (uint8_t)s->count, head = (uint8_t)( count | ( s->formed ? 0x80u : 0u ) );
-			W( buf, &head, 1 );
-			W( buf, s->id, (size_t)count * sizeof( int ) );
-			W( buf, s->rest, (size_t)count * sizeof( float ) );
-		}
+		W( buf, f->springFormed, n * sizeof( bool ) );
+		WI( buf, f->springs.count );
+		W( buf, f->springs.data, (size_t)f->springs.count * sizeof( b2fSpring ) );
 	}
 
 	// Gathered by the last step, read by the next step's coarsening before it gathers. The body state pointer is only
@@ -322,22 +315,14 @@ bool b2fDeserializeFluid( b2World* world, const uint8_t* data, int size, int* cu
 	}
 	if ( made[2] )
 	{
-		for ( int i = 0; i < count && r->ok; ++i )
+		R( r, f->springFormed, n * sizeof( bool ) );
+		for ( int i = 0; i < count; ++i )
 		{
-			b2fSprings* s = f->springs + i;
-			uint8_t springs = 0;
-			R( r, &springs, 1 );
-			s->formed = ( springs & 0x80u ) != 0;
-			springs = (uint8_t)( springs & 0x7Fu );
-			if ( springs > B2F_SPRINGS_PER_PARTICLE )
-			{
-				r->ok = false;
-				break;
-			}
-			s->count = springs;
-			R( r, s->id, (size_t)springs * sizeof( int ) );
-			R( r, s->rest, (size_t)springs * sizeof( float ) );
+			r->ok = r->ok && ( (const unsigned char*)f->springFormed )[i] <= 1u;
 		}
+		int springCount = RCount( r, INT_MAX / (int)sizeof( b2fSpring ), sizeof( b2fSpring ) );
+		b2Array_Resize( f->springs, springCount );
+		R( r, f->springs.data, (size_t)springCount * sizeof( b2fSpring ) );
 	}
 
 	int shapeCount = RCount( r, INT_MAX / (int)sizeof( b2fShape ), sizeof( b2fShape ) );
@@ -458,16 +443,11 @@ uint64_t b2fHashFluid( const b2World* world, uint64_t hash, bool deep )
 	{
 		hash = MixBits( hash, f->speedMemory, (size_t)f->count * sizeof( float ) );
 	}
-	if ( f->springs != NULL )
+	if ( f->springFormed != NULL )
 	{
-		for ( int i = 0; i < f->count; ++i )
-		{
-			const b2fSprings* s = f->springs + i;
-			hash = MixBits( hash, &s->count, sizeof( int ) );
-			hash = MixBits( hash, &s->formed, sizeof( bool ) );
-			hash = MixBits( hash, s->id, (size_t)s->count * sizeof( int ) );
-			hash = MixBits( hash, s->rest, (size_t)s->count * sizeof( float ) );
-		}
+		hash = MixBits( hash, f->springFormed, (size_t)f->count * sizeof( bool ) );
+		hash = MixBits( hash, &f->springs.count, sizeof( int ) );
+		hash = MixBits( hash, f->springs.data, (size_t)f->springs.count * sizeof( b2fSpring ) );
 	}
 	for ( int l = 0; l < f->liquidCount; ++l )
 	{

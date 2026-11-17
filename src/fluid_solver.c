@@ -4,6 +4,8 @@
 // separate pull. Liquids with springs get Clavet's springs and plasticity in a pass of their own before it.
 #include "fluid_internal.h"
 
+#include "platform.h"
+
 // The density excess that pressure acts on. Below rest density only the tensile share of it pulls.
 static inline float TensileClamp( float excess, float tensile )
 {
@@ -70,61 +72,75 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 	}
 }
 
-// After the density pass found a particle's neighbours, drops the springs the spring pass marked as gone, and adds one
-// at the current distance to each neighbour of the same liquid it has none to. The neighbour does the same from its
-// side. Clavet's Algorithm 4 starts a spring at the interaction radius, where it has no force until plasticity
-// shortens it; starting at the distance instead lets an elastic liquid, with no plasticity, hold the shape it had.
-static void AddSprings( b2fFluid* f, int i, const b2fPair* pairs )
+// After the density pass found a particle's neighbours, offers a spring to each neighbour of its liquid it has none
+// with, which FormSprings makes once the pass is done: a spring forms in one place, with one rest length, for the pair.
+// Of the two ends only the one with the lower id offers, so a pair is offered once. Clavet's Algorithm 4 starts a
+// spring at the interaction radius, where it has no force until plasticity shortens it; FormSprings starts it at the
+// current distance instead, which lets an elastic liquid, with no plasticity, hold the shape it had. The pass writes
+// only this particle's offers, and reads springCount and the springs of the spring pass, which nothing changes in it.
+static void OfferSprings( b2fFluid* f, int i, const b2fPair* pairs )
 {
-	b2fSprings* sp = f->springs + i;
-	if ( f->liquids[f->liquid[i]].def.springStiffness <= 0.0f )
-	{
-		sp->count = 0;
-		return;
-	}
-	// Asleep in the shell, its springs stay as they fell asleep; none forms between an asleep and an awake particle,
-	// which would join an awake group to an asleep one
-	if ( f->asleep[i] != 0 )
+	// The shell is asleep and forms nothing, and FormSprings reads only the awake particles' offers
+	if ( i >= f->activeCount )
 	{
 		return;
 	}
-
-	int kept = 0;
-	for ( int s = 0; s < sp->count; ++s )
+	uint32_t offers = 0;
+	const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
+	// Asleep, its springs stay as they fell asleep; none forms between an asleep and an awake particle, which would
+	// join an awake group to an asleep one
+	if ( def->springStiffness > 0.0f && f->asleep[i] == 0 && f->springCount[i] < B2F_SPRINGS_PER_PARTICLE )
 	{
-		if ( sp->rest[s] >= 0.0f )
+		// A particle with more neighbours than the list holds (pairCount -1) offers to the ones the list has
+		int n = f->pairCount[i] >= 0 ? f->pairCount[i] : B2F_PAIRS_PER_PARTICLE;
+		// A liquid without formSpringsAfterSpawn forms springs only where one end is new
+		bool forming = def->formSpringsAfterSpawn || f->springFormed[i] == false;
+		int id = f->id[i], first = f->springStart.data[i], last = f->springStart.data[i + 1];
+		const int* list = f->springList.data;
+		const b2fSpringWork* work = f->springWork.data;
+		for ( int p = 0; p < n; ++p )
 		{
-			sp->id[kept] = sp->id[s];
-			sp->rest[kept] = sp->rest[s];
-			kept += 1;
+			int j = pairs[p].j;
+			if ( f->id[j] < id || f->liquid[j] != f->liquid[i] || f->asleep[j] != 0 ||
+				 f->springCount[j] >= B2F_SPRINGS_PER_PARTICLE || ( forming == false && f->springFormed[j] ) )
+			{
+				continue;
+			}
+			// Its springs between awake ends are all listed, since the spring pass worked them out
+			bool found = false;
+			for ( int e = first; e < last && found == false; ++e )
+			{
+				found = work[list[e]].a == j || work[list[e]].b == j;
+			}
+			offers |= found ? 0u : 1u << p;
 		}
 	}
-	sp->count = kept;
+	f->springOffers[i] = offers;
+}
 
-	// A particle with more neighbours than the list holds (pairCount -1) takes springs from the ones the list has,
-	// which are more than it can hold springs to
-	int n = f->pairCount[i] >= 0 ? f->pairCount[i] : B2F_PAIRS_PER_PARTICLE;
-	// A liquid without formSpringsAfterSpawn forms springs only where one end is new. Both ends read the flags the
-	// last substep left, so they agree.
-	bool forming = f->liquids[f->liquid[i]].def.formSpringsAfterSpawn || sp->formed == false;
-	for ( int p = 0; p < n && sp->count < B2F_SPRINGS_PER_PARTICLE; ++p )
+_Static_assert( B2F_PAIRS_PER_PARTICLE <= 32, "a spring offer is a bit of a 32-bit word for each pair" );
+
+// The springs the density pass offered, made on one thread in particle order and each particle's pairs in order, so the
+// table and its order do not depend on worker count. A spring forms only while both ends take part in fewer than
+// B2F_SPRINGS_PER_PARTICLE springs, at the distance the pass found, the same for both ends.
+static void FormSprings( b2fFluid* f )
+{
+	for ( int i = 0; i < f->activeCount; ++i )
 	{
-		int j = pairs[p].j, id = f->id[j];
-		if ( f->liquid[j] != f->liquid[i] || f->asleep[j] != 0 || ( forming == false && f->springs[j].formed ) )
+		uint32_t offers = f->springOffers[i];
+		const b2fPair* pairs = f->pairs.data + B2F_PAIRS_PER_PARTICLE * i;
+		while ( offers != 0 && f->springCount[i] < B2F_SPRINGS_PER_PARTICLE )
 		{
-			continue;
-		}
-
-		bool found = false;
-		for ( int s = 0; s < sp->count && found == false; ++s )
-		{
-			found = sp->id[s] == id;
-		}
-		if ( found == false )
-		{
-			sp->id[sp->count] = id;
-			sp->rest[sp->count] = pairs[p].l;
-			sp->count += 1;
+			int p = (int)b2CTZ32( offers );
+			offers &= offers - 1u;
+			int j = pairs[p].j;
+			if ( f->springCount[j] < B2F_SPRINGS_PER_PARTICLE )
+			{
+				b2fSpring spring = { f->id[i], f->id[j], pairs[p].l };
+				b2Array_Push( f->springs, spring );
+				f->springCount[i] += 1;
+				f->springCount[j] += 1;
+			}
 		}
 	}
 }
@@ -298,7 +314,7 @@ static void DensityTask( int start, int end, int worker, void* context )
 			UniformDensity( f, i, pairs, f->rho + i, f->rhoNear + i );
 			if ( springy )
 			{
-				AddSprings( f, i, pairs );
+				OfferSprings( f, i, pairs );
 			}
 			if ( f->asleep[i] != 0 && ShellWakes( f, i, pairs ) )
 			{
@@ -320,7 +336,7 @@ static void DensityTask( int start, int end, int worker, void* context )
 		f->nearPressure[i] = def->tuning.nearStiffness * hi2 * f->rhoNear[i];
 		if ( springy )
 		{
-			AddSprings( f, i, pairs );
+			OfferSprings( f, i, pairs );
 		}
 		if ( f->asleep[i] != 0 && ShellWakes( f, i, pairs ) )
 		{
@@ -529,9 +545,9 @@ static void VelocityTask( int start, int end, int worker, void* context )
 		}
 		f->vx[i] = dx * inv;
 		f->vy[i] = dy * inv;
-		if ( f->springs != NULL )
+		if ( f->springFormed != NULL )
 		{
-			f->springs[i].formed = true;
+			f->springFormed[i] = true;
 		}
 
 		// Slow for B2_TIME_TO_SLEEP, by its velocity smoothed over B2F_CALM_TIME, and touching no awake body, it falls
@@ -561,95 +577,163 @@ static void VelocityTask( int start, int end, int worker, void* context )
 	}
 }
 
-// Springs, Clavet et al. 2005 sections 5.1 and 5.2. Each particle moves by its share of each spring's stretch,
-// w_i / (w_i + w_j + 1 / (k dt^2)) as in one iteration of XPBD (Macklin et al. 2016), so a spring is as stiff at any
-// substep count. w is the inverse of a particle's mass in finest particles, and k the liquid's spring stiffness
-// times Clavet's 1 - L / h, which weakens springs as their rest length L nears the interaction radius h. Then the
-// rest length follows the length by Clavet's equation 8, past the yield ratio, and a spring whose rest length
-// reaches h is marked gone, as is one whose partner has gone, holds no spring back, or is now another liquid.
-// Both ends read the same positions and rest length, so they work a spring out the same way.
+// Springs, Clavet et al. 2005 sections 5.1 and 5.2, a spring at a time. Each end moves by its share of the spring's
+// stretch, w_i / (w_a + w_b + 1 / (k dt^2)) as in one iteration of XPBD (Macklin et al. 2016), so a spring is as stiff
+// at any substep count. w is the inverse of a particle's mass in finest particles, and k the liquid's spring stiffness
+// times Clavet's 1 - L / h, which weakens springs as their rest length L nears the interaction radius h. Then the rest
+// length follows the length by Clavet's equation 8, past the yield ratio, and a spring whose rest length reaches h
+// goes, after pulling this once. One whose end has gone, or is of another liquid, or of one without springs, goes at
+// once. Each task writes only its own springs, and the moves are summed per particle afterwards (SpringApplyTask).
 //
 // A spring with both ends asleep is skipped: neither moves, so neither its pull nor its rest length would change.
 // Particles joined by springs fall asleep and wake together (b2fSpringGroups), so the ends of a spring are never one
-// asleep and one awake, which would work the spring from one side only and let the two copies part.
+// asleep and one awake; if they were, it would be skipped too.
 static void SpringTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
 	float dt = f->h, fine = f->def.particleSpacing;
-	bool check = f->checkSprings;
-	for ( int i = start; i < end; ++i )
+	b2fSpring* springs = f->springs.data;
+	b2fSpringWork* work = f->springWork.data;
+	for ( int s = start; s < end; ++s )
 	{
-		float moveX = 0.0f, moveY = 0.0f;
-		b2fSprings* sp = f->springs + i;
-		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
-		if ( def->springStiffness > 0.0f && f->asleep[i] == 0 )
+		b2fSpring* spring = springs + s;
+		int a = b2fFindParticle( f, spring->a ), b = b2fFindParticle( f, spring->b );
+		const b2LiquidDef* def = a >= 0 ? &f->liquids[f->liquid[a]].def : NULL;
+		if ( b < 0 || def == NULL || f->liquid[b] != f->liquid[a] || def->springStiffness <= 0.0f )
 		{
-			b2fCoord x = f->pos[i].x, y = f->pos[i].y;
-			float si = f->size[i], wi = fine * fine / ( si * si );
-			int self = f->id[i];
-			for ( int s = 0; s < sp->count; ++s )
-			{
-				float L = sp->rest[s];
-				int j = L >= 0.0f ? b2fFindParticle( f, sp->id[s] ) : -1;
-				// Only the first substep of a step checks the partner holds the spring too, which costs as much as
-				// the rest. A spring held at one end comes from a partner with no free slot, and lasts one step.
-				// The partner asleep with this end awake can only be a spring it does not hold, which goes, since
-				// those it holds would have woken it
-				bool mutual = j >= 0 && f->liquid[j] == f->liquid[i] && f->asleep[j] == 0 && check == false;
-				if ( j >= 0 && f->liquid[j] == f->liquid[i] && f->asleep[j] == 0 && check )
-				{
-					const b2fSprings* other = f->springs + j;
-					for ( int t = 0; t < other->count && mutual == false; ++t )
-					{
-						mutual = other->id[t] == self;
-					}
-				}
-				if ( mutual == false )
-				{
-					sp->rest[s] = -1.0f;
-					continue;
-				}
-
-				float sj = f->size[j], h = b2fLatticeSize( si + sj );
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), r = sqrtf( dx * dx + dy * dy );
-				float k = def->springStiffness * ( 1.0f - L / h );
-				if ( k > 0.0f && r > 1e-6f )
-				{
-					float wj = fine * fine / ( sj * sj );
-					float share = wi / ( wi + wj + 1.0f / ( k * dt * dt ) );
-					float move = share * ( r - L ) / r;
-					moveX += move * dx;
-					moveY += move * dy;
-				}
-
-				float yield = def->yieldRatio * L;
-				if ( r > L + yield )
-				{
-					L += dt * def->plasticity * ( r - L - yield );
-				}
-				else if ( r < L - yield )
-				{
-					L -= dt * def->plasticity * ( L - yield - r );
-				}
-				sp->rest[s] = L < h ? L : -1.0f;
-			}
+			spring->rest = -1.0f;
+			work[s] = ( b2fSpringWork ){ -1, -1, 0.0f, 0.0f };
+			continue;
 		}
-		f->dx[i] = moveX;
-		f->dy[i] = moveY;
+		work[s] = ( b2fSpringWork ){ a, b, 0.0f, 0.0f };
+		if ( f->asleep[a] != 0 || f->asleep[b] != 0 )
+		{
+			continue;
+		}
+
+		float sa = f->size[a], sb = f->size[b], h = b2fLatticeSize( sa + sb );
+		float dx = (float)( f->pos[b].x - f->pos[a].x ), dy = (float)( f->pos[b].y - f->pos[a].y );
+		float r = sqrtf( dx * dx + dy * dy );
+		float L = spring->rest;
+		float k = def->springStiffness * ( 1.0f - L / h );
+		if ( k > 0.0f && r > 1e-6f )
+		{
+			float wa = fine * fine / ( sa * sa ), wb = fine * fine / ( sb * sb );
+			float move = ( r - L ) / ( r * ( wa + wb + 1.0f / ( k * dt * dt ) ) );
+			work[s].moveX = move * dx;
+			work[s].moveY = move * dy;
+		}
+
+		float yield = def->yieldRatio * L;
+		if ( r > L + yield )
+		{
+			L += dt * def->plasticity * ( r - L - yield );
+		}
+		else if ( r < L - yield )
+		{
+			L -= dt * def->plasticity * ( L - yield - r );
+		}
+		spring->rest = L < h ? L : -1.0f;
 	}
 }
 
+// On one thread, after SpringTask: removes the springs that went from the table, keeping the order of the rest; counts
+// the springs each particle takes part in, for the offers of the density pass; and lists, for each awake particle, the
+// springs that pulled it in this substep, in table order, so that its moves are summed in an order that does not depend
+// on worker count. The list counts into springStart shifted by two and is filled shifted by one, which leaves particle
+// i's springs from springStart[i] to springStart[i + 1].
+static void ListSprings( b2fFluid* f )
+{
+	int active = f->activeCount, count = f->springs.count;
+	memset( f->springCount, 0, (size_t)f->count );
+	b2fArray_ResizeGrow( f->springStart, active + 2 );
+	int* start = f->springStart.data;
+	memset( start, 0, (size_t)( active + 2 ) * sizeof( int ) );
+	b2fSpring* springs = f->springs.data;
+	const b2fSpringWork* work = f->springWork.data;
+	int kept = 0;
+	for ( int s = 0; s < count; ++s )
+	{
+		int a = work[s].a, b = work[s].b;
+		if ( a < 0 )
+		{
+			continue;
+		}
+		// An end at or past activeCount, awake there since its group woke in place, has no entry in springStart: the
+		// list covers only the awake particles first, which are all the spring pass moves
+		if ( f->asleep[a] == 0 && f->asleep[b] == 0 )
+		{
+			if ( a < active )
+			{
+				start[a + 2] += 1;
+			}
+			if ( b < active )
+			{
+				start[b + 2] += 1;
+			}
+		}
+		if ( springs[s].rest >= 0.0f )
+		{
+			springs[kept] = springs[s];
+			kept += 1;
+			f->springCount[a] += 1;
+			f->springCount[b] += 1;
+		}
+	}
+	f->springs.count = kept;
+
+	for ( int i = 2; i < active + 2; ++i )
+	{
+		start[i] += start[i - 1];
+	}
+	b2fArray_ResizeGrow( f->springList, start[active + 1] );
+	int* list = f->springList.data;
+	for ( int s = 0; s < count; ++s )
+	{
+		int a = work[s].a, b = work[s].b;
+		if ( a >= 0 && f->asleep[a] == 0 && f->asleep[b] == 0 )
+		{
+			if ( a < active )
+			{
+				list[start[a + 1]++] = s;
+			}
+			if ( b < active )
+			{
+				list[start[b + 1]++] = s;
+			}
+		}
+	}
+}
+
+// Sums each particle's moves from its springs, its first end's move times its inverse mass and its second end's the
+// opposite, and moves it by them, capped as density's moves are. Nothing here reads another particle's position.
 static void SpringApplyTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
+	float fine = f->def.particleSpacing;
+	const int* first = f->springStart.data;
+	const int* list = f->springList.data;
+	const b2fSpringWork* work = f->springWork.data;
 	for ( int i = start; i < end; ++i )
 	{
-		float cap = B2F_MOVE_LIMIT * 2.0f * b2fLatticeSize( f->size[i] );
-		float d2 = f->dx[i] * f->dx[i] + f->dy[i] * f->dy[i], scale = d2 > cap * cap ? cap / sqrtf( d2 ) : 1.0f;
-		f->pos[i].x += scale * f->dx[i];
-		f->pos[i].y += scale * f->dy[i];
+		if ( first[i] == first[i + 1] )
+		{
+			continue;
+		}
+		float si = f->size[i], wi = fine * fine / ( si * si ), moveX = 0.0f, moveY = 0.0f;
+		for ( int e = first[i]; e < first[i + 1]; ++e )
+		{
+			const b2fSpringWork* w = work + list[e];
+			float share = w->a == i ? wi : -wi;
+			moveX += share * w->moveX;
+			moveY += share * w->moveY;
+		}
+		float cap = B2F_MOVE_LIMIT * 2.0f * b2fLatticeSize( si );
+		float d2 = moveX * moveX + moveY * moveY, scale = d2 > cap * cap ? cap / sqrtf( d2 ) : 1.0f;
+		f->pos[i].x += scale * moveX;
+		f->pos[i].y += scale * moveY;
 	}
 }
 
@@ -687,8 +771,17 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 		b2fSpringGroups( f, false );
 		f->profile.sleep += b2GetMilliseconds( ticks );
 	}
-	b2SubStep_ParallelFor( context, SpringTask, f->activeCount, 256, f );
-	b2SubStep_ParallelFor( context, SpringApplyTask, f->activeCount, 2048, f );
+	// With no awake particle there is nothing to pull, and the density pass and FormSprings after it read no spring
+	// scratch, since only awake particles offer. A spring whose end has gone stays in the table, which every reader
+	// allows for, until a substep with awake particles removes it.
+	if ( f->activeCount == 0 )
+	{
+		return;
+	}
+	b2fArray_ResizeGrow( f->springWork, f->springs.count );
+	b2SubStep_ParallelFor( context, SpringTask, f->springs.count, 512, f );
+	ListSprings( f );
+	b2SubStep_ParallelFor( context, SpringApplyTask, f->activeCount, 1024, f );
 }
 
 void b2fPredict( b2fFluid* f, b2SubStepContext* context )
@@ -722,6 +815,10 @@ void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 {
 	GrowPairs( f );
 	b2SubStep_ParallelFor( context, DensityTask, f->activeCount + f->shellCount, 256, f );
+	if ( f->springy )
+	{
+		FormSprings( f );
+	}
 	b2SubStep_ParallelFor( context, AccumulateTask, f->activeCount, 256, f );
 	b2SubStep_ParallelFor( context, ApplyTask, f->activeCount, 2048, f );
 }
