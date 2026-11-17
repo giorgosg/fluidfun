@@ -417,19 +417,23 @@ void b2FreeFluid( b2fFluid* f )
 		b2Free( f->springParent, n * sizeof( int ) );
 		b2Free( f->springGroup, n * sizeof( unsigned char ) );
 	}
-	b2Free( f->cellStart, (size_t)f->gridCapacity * sizeof( int ) );
-	b2Free( f->blockSize, (size_t)f->blockCapacity * sizeof( float ) );
-	b2Free( f->blockReach, (size_t)f->blockCapacity * sizeof( float ) );
+	b2fGrid* grids[2] = { &f->grid, &f->sleepGrid };
+	for ( int i = 0; i < 2; ++i )
+	{
+		b2Free( grids[i]->start, (size_t)grids[i]->capacity * sizeof( int ) );
+		b2Free( grids[i]->blockSize, (size_t)grids[i]->blockCapacity * sizeof( float ) );
+		b2Free( grids[i]->blockReach, (size_t)grids[i]->blockCapacity * sizeof( float ) );
+	}
+	b2Free( f->cellAwake, (size_t)f->cellAwakeCapacity * sizeof( int ) );
 	b2Free( f->shapes, (size_t)f->shapeCapacity * sizeof( b2fShape ) );
 	b2Free( f->gatherMark, (size_t)f->gatherMarkCapacity * sizeof( int ) );
 	b2Free( f->bodies, (size_t)f->bodyCapacity * sizeof( b2fBody ) );
 	b2Free( f->bodyOfIndex, (size_t)f->bodyOfIndexCapacity * sizeof( int ) );
 	b2Free( f->reactions, (size_t)f->reactionCapacity * sizeof( b2fReaction ) );
 	b2Free( f->patches, (size_t)f->patchCapacity * sizeof( b2fPatch ) );
-	b2Free( f->cellAwake, (size_t)f->cellAwakeCapacity * sizeof( int ) );
 	b2Free( f->cellHold, (size_t)f->cellHoldCapacity * sizeof( int ) );
-	b2fShapeBins* bins[2] = { &f->shapeBins, &f->fixedBins };
-	for ( int i = 0; i < 2; ++i )
+	b2fShapeBins* bins[3] = { &f->shapeBins, &f->fixedBins, &f->sleepBins };
+	for ( int i = 0; i < 3; ++i )
 	{
 		b2Free( bins[i]->start, (size_t)bins[i]->startCapacity * sizeof( int ) );
 		b2Free( bins[i]->shapes, (size_t)bins[i]->shapeCapacity * sizeof( int ) );
@@ -444,6 +448,7 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f->boxWeight, boxes * sizeof( double ) );
 	b2Free( f->boxMixed, boxes * sizeof( double ) );
 	b2Free( f->boxLiquid, boxes );
+	b2Free( f->boxNeeded, boxes );
 	b2Free( f->boxPressure, boxes * sizeof( float ) );
 	b2Free( f->boxDepth, boxes * sizeof( float ) );
 	b2Free( f->boxFlow, boxes * sizeof( float ) );
@@ -616,6 +621,15 @@ int b2fRemoveMarked( b2fFluid* f )
 	}
 	f->count = kept;
 	f->gridStale = f->gridStale || kept < n;
+	// The awake particles still come first, fewer by those removed among them, and they and the asleep ones are filed
+	// again before the next substep
+	int active = f->activeCount < n ? f->activeCount : n, removed = 0;
+	for ( int i = 0; i < active; ++i )
+	{
+		removed += f->marked[i] ? 1 : 0;
+	}
+	f->activeCount = active - removed;
+	f->settledCount = kept - f->activeCount < f->settledCount ? kept - f->activeCount : f->settledCount;
 	return n - kept;
 }
 
@@ -958,25 +972,46 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFl
 
 	uint64_t start = b2GetTicks();
 	uint64_t ticks = start;
+	float sleepStart = f->profile.sleep;
 
 	// Gravity cannot change during a step, so it is still the one b2PrepareFluid read
 	f->h = h;
 
 	b2fUpdateBodies( f );
-	if ( f->asleepCount == f->count && f->gridStale == false )
+	bool awakeBody = false;
+	for ( int i = 0; i < f->bodyCount && awakeBody == false; ++i )
 	{
-		// All asleep, nothing has moved since the last sort, so its grid holds. Only shapes and bodies can wake the
-		// liquid, and they change only between steps, apart from awake bodies, which move in every substep. So the
-		// first substep of a step looks for them, and the rest only while some body near the liquid is awake.
-		bool awakeBody = false;
-		for ( int i = 0; i < f->bodyCount && awakeBody == false; ++i )
+		awakeBody = f->bodies[i].awake;
+	}
+
+	// Asleep particles are filed apart from the awake ones once some fall asleep or wake, and those near an awake body
+	// wake before anything moves, and are filed with the awake ones (fluid_sleep.c)
+	if ( b2fNeedsFiling( f ) )
+	{
+		b2fFileAsleep( f, context );
+	}
+	if ( awakeBody && f->settledCount > 0 )
+	{
+		uint64_t sleepTicks = b2GetTicks();
+		bool woke = b2fWakeHeld( f );
+		f->profile.sleep += b2GetMilliseconds( sleepTicks );
+		if ( woke )
 		{
-			awakeBody = f->bodies[i].awake;
+			b2fFileAsleep( f, context );
 		}
+	}
+
+	if ( f->activeCount == 0 )
+	{
+		b2fSortAwake( f, context );
+		// All asleep, and nothing has moved since they were filed. Only shapes and bodies can wake the liquid, and they
+		// change only between steps, apart from awake bodies, which move in every substep. So the first substep of a
+		// step looks for them, and the rest only while some body near the liquid is awake.
 		if ( subStepIndex > 0 && awakeBody == false )
 		{
 			float time = b2GetMilliseconds( start );
 			f->profile.total += time;
+			f->profile.sort += time - ( f->profile.sleep - sleepStart );
 			f->subStepTime += time;
 			return;
 		}
@@ -984,13 +1019,13 @@ void b2FluidSubStep( b2SubStepContext* context, int subStepIndex, float h, b2fFl
 	else
 	{
 		b2fPredict( f, context );
-		b2fSortParticles( f, context );
+		b2fSortAwake( f, context );
 	}
-	f->profile.sort += b2GetMillisecondsAndReset( &ticks );
+	f->profile.sort += b2GetMillisecondsAndReset( &ticks ) - ( f->profile.sleep - sleepStart );
 
 	// The sleep passes inside density and collide (b2fFindShell, b2fSpringGroups) time themselves into sleep
 	float sleepBefore = f->profile.sleep;
-	b2fFindContacts( f, context );
+	b2fFindContacts( f, context, subStepIndex == 0 );
 	if ( f->springy )
 	{
 		b2fRelaxSprings( f, context );

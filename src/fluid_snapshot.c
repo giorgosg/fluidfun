@@ -307,6 +307,10 @@ bool b2fDeserializeFluid( b2World* world, const uint8_t* data, int size, int* cu
 
 	size_t n = (size_t)count;
 	f->count = count;
+	// The particles are filed again, awake and asleep, before the next substep, as they were filed before this one
+	f->activeCount = count;
+	f->settledCount = 0;
+	f->gridStale = true;
 	R( r, f->pos, n * sizeof( b2Pos ) );
 	R( r, f->vx, n * sizeof( float ) );
 	R( r, f->vy, n * sizeof( float ) );

@@ -280,10 +280,11 @@ static bool ShellWakes( b2fFluid* f, int i )
 	return false;
 }
 
-// Asleep particles outside the shell skip the density pass, and keep the density they last had
-static inline bool SkipsDensity( const b2fFluid* f, int i )
+// The density pass runs over the awake particles and then the shell; the other asleep particles skip it, and keep the
+// density they last had
+static inline int DensityParticle( const b2fFluid* f, int k )
 {
-	return f->asleep[i] != 0 && ( f->wake[i] & B2F_WAKE_SHELL ) == 0;
+	return k < f->activeCount ? k : f->shell[k - f->activeCount];
 }
 
 // Each particle's pressure and near pressure, from its own liquid's settings, scale with its size squared
@@ -294,12 +295,9 @@ static void DensityTask( int start, int end, int worker, void* context )
 	bool springy = f->springy;
 	if ( UsesUniformPasses( f ) )
 	{
-		for ( int i = start; i < end; ++i )
+		for ( int k = start; k < end; ++k )
 		{
-			if ( SkipsDensity( f, i ) )
-			{
-				continue;
-			}
+			int i = DensityParticle( f, k );
 			UniformDensity( f, i, f->rho + i, f->rhoNear + i );
 			if ( springy )
 			{
@@ -314,12 +312,9 @@ static void DensityTask( int start, int end, int worker, void* context )
 	}
 
 	float rest = f->restDensity;
-	for ( int i = start; i < end; ++i )
+	for ( int k = start; k < end; ++k )
 	{
-		if ( SkipsDensity( f, i ) )
-		{
-			continue;
-		}
+		int i = DensityParticle( f, k );
 		Density( f, i, f->rho + i, f->rhoNear + i );
 		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 		float hi = 2.0f * b2fLatticeSize( f->size[i] ), hi2 = hi * hi;
@@ -482,6 +477,26 @@ static void PredictTask( int start, int end, int worker, void* context )
 		f->prev[i].y = f->pos[i].y;
 		f->pos[i].x += h * f->vx[i];
 		f->pos[i].y += h * f->vy[i];
+	}
+}
+
+// At the end of the substep the shell's particles that fell asleep in the last one are no longer new, and those to wake
+// wake. One woken by touching an awake body (ContactTask) is awake already, and takes part from the next substep.
+static void ShellEndTask( int start, int end, int worker, void* context )
+{
+	(void)worker;
+	b2fFluid* f = context;
+	for ( int k = start; k < end; ++k )
+	{
+		int i = f->shell[k];
+		if ( f->asleep[i] != 0 )
+		{
+			f->asleep[i] = (unsigned char)( f->asleep[i] & ~B2F_ASLEEP_NEW );
+			if ( f->wake[i] & B2F_WAKE_NOW )
+			{
+				b2fWakeParticle( f, i );
+			}
+		}
 	}
 }
 
@@ -674,29 +689,28 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 		b2fSpringGroups( f, false );
 		f->profile.sleep += b2GetMilliseconds( ticks );
 	}
-	b2SubStep_ParallelFor( context, SpringTask, f->count, 512, f );
-	b2SubStep_ParallelFor( context, SpringApplyTask, f->count, 2048, f );
+	b2SubStep_ParallelFor( context, SpringTask, f->activeCount, 256, f );
+	b2SubStep_ParallelFor( context, SpringApplyTask, f->activeCount, 2048, f );
 }
 
 void b2fPredict( b2fFluid* f, b2SubStepContext* context )
 {
-	b2SubStep_ParallelFor( context, PredictTask, f->count, 1024, f );
+	// Just filed, the awake particles are not yet first
+	b2SubStep_ParallelFor( context, PredictTask, f->filePending ? f->count : f->activeCount, 1024, f );
 }
 
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 {
-	uint64_t ticks = b2GetTicks();
-	b2fFindShell( f, context );
-	f->profile.sleep += b2GetMilliseconds( ticks );
-	b2SubStep_ParallelFor( context, DensityTask, f->count, 512, f );
-	b2SubStep_ParallelFor( context, AccumulateTask, f->count, 512, f );
-	b2SubStep_ParallelFor( context, ApplyTask, f->count, 2048, f );
+	b2SubStep_ParallelFor( context, DensityTask, f->activeCount + f->shellCount, 256, f );
+	b2SubStep_ParallelFor( context, AccumulateTask, f->activeCount, 256, f );
+	b2SubStep_ParallelFor( context, ApplyTask, f->activeCount, 2048, f );
 }
 
 void b2fUpdateVelocities( b2fFluid* f, b2SubStepContext* context )
 {
-	b2SubStep_ParallelFor( context, VelocityTask, f->count, 2048, f );
+	b2SubStep_ParallelFor( context, VelocityTask, f->activeCount, 2048, f );
 	uint64_t ticks = b2GetTicks();
+	b2SubStep_ParallelFor( context, ShellEndTask, f->shellCount, 2048, f );
 	// Groups whose particles are all ready fall asleep together, and those of which some woke in this substep wake
 	// together, before the next substep works out their springs
 	if ( f->springy && ( f->sleepOn || f->springAsleep != 0 ) )

@@ -8,15 +8,15 @@
 // size of the block. A particle's reach is then its own size plus the larger of its own and its block's, which finds
 // every neighbour, so pairs are always found from both sides.
 // Points k blocks apart are at least k - 1 blocks apart, so a size reaches ceil( 2 size / block ) blocks.
-static void SpreadBlockSizes( b2fFluid* f, int bw, int bh )
+static void SpreadBlockSizes( b2fGrid* grid, int bw, int bh )
 {
-	memset( f->blockReach, 0, (size_t)( bw * bh ) * sizeof( float ) );
-	float blockLength = B2F_BLOCK_CELLS * f->gridCell;
+	memset( grid->blockReach, 0, (size_t)( bw * bh ) * sizeof( float ) );
+	float blockLength = B2F_BLOCK_CELLS * grid->cell;
 	for ( int by = 0; by < bh; ++by )
 	{
 		for ( int bx = 0; bx < bw; ++bx )
 		{
-			float size = f->blockSize[by * bw + bx];
+			float size = grid->blockSize[by * bw + bx];
 			if ( size <= 0.0f )
 			{
 				continue;
@@ -29,7 +29,7 @@ static void SpreadBlockSizes( b2fFluid* f, int bw, int bh )
 			{
 				for ( int x = x0; x <= x1; ++x )
 				{
-					float* reach = f->blockReach + y * bw + x;
+					float* reach = grid->blockReach + y * bw + x;
 					*reach = *reach > size ? *reach : size;
 				}
 			}
@@ -58,6 +58,9 @@ static bool GridFits( const b2fBox* box, float cell, int border, int64_t limit )
 	return width <= B2F_GRID_SIDE && height <= B2F_GRID_SIDE && (int64_t)width * height <= limit;
 }
 
+// The particles of a run: those listed from first to last, or with no list the particles first to last themselves
+#define FOR_RUN( list, first, last, i ) for ( int k_ = ( first ), i = 0; k_ < ( last ) && ( i = ( list ) != NULL ? ( list )[k_] : k_, true ); ++k_ )
+
 static inline b2fCoord Along( const b2fFluid* f, int i, int axis )
 {
 	return axis == 0 ? f->pos[i].x : f->pos[i].y;
@@ -72,7 +75,7 @@ static inline b2fCoord Along( const b2fFluid* f, int i, int axis )
 // which every particle is in at first: bounds of the particles in the run of bins that fits in length and holds the
 // most, the first such run. Where the bins are too coarse to place it well, the histogram is taken again over the run
 // that holds the most, two bins longer than what fits, which narrows the range by at least B2F_BULK_BINS / 66 a time.
-static void DensestRun( const b2fFluid* f, int axis, double length, b2fCoord* lo, b2fCoord* hi )
+static void DensestRun( const b2fFluid* f, const int* list, int first, int last, int axis, double length, b2fCoord* lo, b2fCoord* hi )
 {
 	int counts[B2F_BULK_BINS];
 	b2fCoord a = *lo, b = *hi;
@@ -80,7 +83,7 @@ static void DensestRun( const b2fFluid* f, int axis, double length, b2fCoord* lo
 	{
 		double bin = (double)( b - a ) / B2F_BULK_BINS;
 		memset( counts, 0, sizeof( counts ) );
-		for ( int i = 0; i < f->count; ++i )
+		FOR_RUN( list, first, last, i )
 		{
 			b2fCoord v = Along( f, i, axis );
 			if ( a <= v && v <= b )
@@ -115,7 +118,7 @@ static void DensestRun( const b2fFluid* f, int axis, double length, b2fCoord* lo
 
 	// The particles in the stretch, from their own bounds
 	b2fCoord low = b, high = a;
-	for ( int i = 0; i < f->count; ++i )
+	FOR_RUN( list, first, last, i )
 	{
 		b2fCoord v = Along( f, i, axis );
 		if ( a <= v && v <= b )
@@ -130,7 +133,8 @@ static void DensestRun( const b2fFluid* f, int axis, double length, b2fCoord* lo
 
 // Sets the bulk along one axis to the stretch of all that holds the most particles within cells cells of the grid's
 // side, border included. Returns false if that leaves no room.
-static bool Widen( const b2fFluid* f, int axis, int64_t cells, float cell, int border, const b2fBox* all, b2fBox* bulk )
+static bool Widen( const b2fFluid* f, const int* list, int first, int last, int axis, int64_t cells, float cell, int border, const b2fBox* all,
+				   b2fBox* bulk )
 {
 	int64_t room = ( cells < B2F_GRID_SIDE ? cells : B2F_GRID_SIDE ) - 2 - 2 * border;
 	if ( room < 1 )
@@ -141,14 +145,15 @@ static bool Widen( const b2fFluid* f, int axis, int64_t cells, float cell, int b
 	b2fCoord* hi = axis == 0 ? &bulk->maxX : &bulk->maxY;
 	*lo = axis == 0 ? all->minX : all->minY;
 	*hi = axis == 0 ? all->maxX : all->maxY;
-	DensestRun( f, axis, (double)cell * (double)room, lo, hi );
+	DensestRun( f, list, first, last, axis, (double)cell * (double)room, lo, hi );
 	return true;
 }
 
-bool b2fFindBulk( const b2fFluid* f, float cell, int border, b2fBox* all, b2fBox* bulk )
+bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk )
 {
-	b2fBox box = { f->pos[0].x, f->pos[0].y, f->pos[0].x, f->pos[0].y };
-	for ( int i = 1; i < f->count; ++i )
+	int i0 = list != NULL ? list[first] : first;
+	b2fBox box = { f->pos[i0].x, f->pos[i0].y, f->pos[i0].x, f->pos[i0].y };
+	FOR_RUN( list, first + 1, last, i )
 	{
 		box.minX = box.minX < f->pos[i].x ? box.minX : f->pos[i].x;
 		box.maxX = box.maxX > f->pos[i].x ? box.maxX : f->pos[i].x;
@@ -157,7 +162,7 @@ bool b2fFindBulk( const b2fFluid* f, float cell, int border, b2fBox* all, b2fBox
 	}
 	*all = box;
 	*bulk = box;
-	int64_t limit = CellLimit( f->count );
+	int64_t limit = CellLimit( last - first );
 	if ( GridFits( &box, cell, border, limit ) )
 	{
 		return false;
@@ -168,9 +173,10 @@ bool b2fFindBulk( const b2fFluid* f, float cell, int border, b2fBox* all, b2fBox
 	// within the height that width leaves, so a long pool is not cut short. Each run's bounds are its particles', which
 	// leaves the other axis all the room it can have. Two cells short of each limit, for rounding.
 	int64_t square = (int64_t)sqrt( (double)limit );
-	if ( Widen( f, 0, square, cell, border, &box, bulk ) == false || Widen( f, 1, square, cell, border, &box, bulk ) == false ||
-		 Widen( f, 0, limit / CellsAcross( bulk->minY, bulk->maxY, cell, border ), cell, border, &box, bulk ) == false ||
-		 Widen( f, 1, limit / CellsAcross( bulk->minX, bulk->maxX, cell, border ), cell, border, &box, bulk ) == false )
+	if ( Widen( f, list, first, last, 0, square, cell, border, &box, bulk ) == false ||
+		 Widen( f, list, first, last, 1, square, cell, border, &box, bulk ) == false ||
+		 Widen( f, list, first, last, 0, limit / CellsAcross( bulk->minY, bulk->maxY, cell, border ), cell, border, &box, bulk ) == false ||
+		 Widen( f, list, first, last, 1, limit / CellsAcross( bulk->minX, bulk->maxX, cell, border ), cell, border, &box, bulk ) == false )
 	{
 		*bulk = box;
 		return false;
@@ -184,12 +190,12 @@ bool b2fFindBulk( const b2fFluid* f, float cell, int border, b2fBox* all, b2fBox
 	// Liquid split into parts of similar size has no bulk: filed into edge cells, the rest would cost more than larger
 	// cells do
 	int outside = 0;
-	for ( int i = 0; i < f->count; ++i )
+	FOR_RUN( list, first, last, i )
 	{
 		b2Pos p = f->pos[i];
 		outside += p.x < bulk->minX || p.x > bulk->maxX || p.y < bulk->minY || p.y > bulk->maxY ? 1 : 0;
 	}
-	if ( outside > f->count / B2F_BULK_OUTSIDE )
+	if ( outside > ( last - first ) / B2F_BULK_OUTSIDE )
 	{
 		*bulk = box;
 		return false;
@@ -197,19 +203,43 @@ bool b2fFindBulk( const b2fFluid* f, float cell, int border, b2fBox* all, b2fBox
 	return true;
 }
 
-static void BuildGrid( b2fFluid* f )
+
+// The largest particle any liquid can have, on the solver's lattice: adaptive sizes merge up to adaptiveRatio times the
+// finest. The sleep grid's border makes room for it, so an awake particle grown since the grid was made still finds
+// its neighbours there.
+static float LargestPossible( const b2fFluid* f )
+{
+	float largest = 0.5f * f->radius;
+	if ( f->adaptive )
+	{
+		for ( int l = 0; l < f->liquidCount; ++l )
+		{
+			float ratio = f->liquids[l].def.tuning.adaptiveRatio;
+			float size = b2fLatticeSize( ratio * f->def.particleSpacing );
+			largest = f->liquids[l].alive && size > largest ? size : largest;
+		}
+	}
+	return largest;
+}
+
+// Lays a grid over the particles first to last and counts them into its cells: their cells in sortCell, and in
+// permutation, from first on, the particle each sorted place takes. The border makes room for particles as large as
+// room, as well as the largest in the run.
+static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, int last, float room )
 {
 	bool adaptive = f->adaptive;
 	float largest = 0.5f * f->radius;
 	if ( adaptive )
 	{
-		for ( int i = 0; i < f->count; ++i )
+		FOR_RUN( list, first, last, i )
 		{
 			float size = b2fLatticeSize( f->size[i] );
 			largest = largest > size ? largest : size;
 		}
-		f->maxRadius = 2.0f * largest;
 	}
+	grid->sizeLargest = largest;
+	largest = largest > room ? largest : room;
+	grid->largest = largest;
 
 	// The border holds the widest search: a reach of at most twice the largest size, and one more cell for the merge
 	// search, which runs after particles have moved. Uniform sizes keep one border cell.
@@ -221,9 +251,9 @@ static void BuildGrid( b2fFluid* f )
 	// bulk that fits, gets larger cells, so the grid stays in proportion to the particle count.
 	float cs = f->cellSize;
 	int border = adaptive ? (int)ceilf( 2.0f * largest / cs ) + 1 : 1;
-	b2fBox all, box;
-	f->gridBulkOnly = b2fFindBulk( f, cs, border, &all, &box );
-	int64_t cellLimit = CellLimit( f->count );
+	b2fBox box;
+	grid->bulkOnly = b2fFindBulk( f, list, first, last, cs, border, &grid->all, &box );
+	int64_t cellLimit = CellLimit( last - first );
 	int width, height;
 	while ( true )
 	{
@@ -236,90 +266,141 @@ static void BuildGrid( b2fFluid* f )
 		}
 		cs *= 2.0f;
 	}
-	f->gridBulk = box;
-	f->gridCell = cs;
-	f->gridBorder = border;
-	f->uniformWindow = adaptive ? 0 : (int)ceilf( f->radius / cs );
-	f->gridX = box.minX - border * cs;
-	f->gridY = box.minY - border * cs;
-	f->gridWidth = width;
-	f->gridHeight = height;
+	grid->bulk = box;
+	grid->cell = cs;
+	grid->border = border;
+	grid->uniformWindow = adaptive ? 0 : (int)ceilf( f->radius / cs );
+	grid->x = box.minX - border * cs;
+	grid->y = box.minY - border * cs;
+	grid->width = width;
+	grid->height = height;
 
 	int cellCount = width * height;
-	if ( cellCount + 2 > f->gridCapacity )
+	if ( cellCount + 2 > grid->capacity )
 	{
-		f->cellStart = b2fGrowArray( f->cellStart, f->gridCapacity, 2 * cellCount + 2, sizeof( int ) );
-		f->gridCapacity = 2 * cellCount + 2;
+		grid->start = b2fGrowArray( grid->start, grid->capacity, 2 * cellCount + 2, sizeof( int ) );
+		grid->capacity = 2 * cellCount + 2;
 	}
-	memset( f->cellStart, 0, ( (size_t)cellCount + 2 ) * sizeof( int ) );
+	int* start = grid->start;
+	memset( start, 0, ( (size_t)cellCount + 2 ) * sizeof( int ) );
 
 	int bw = ( width + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT, bh = ( height + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT;
 	if ( adaptive )
 	{
-		if ( bw * bh > f->blockCapacity )
+		if ( bw * bh > grid->blockCapacity )
 		{
-			f->blockSize = b2fGrowArray( f->blockSize, f->blockCapacity, 2 * bw * bh, sizeof( float ) );
-			f->blockReach = b2fGrowArray( f->blockReach, f->blockCapacity, 2 * bw * bh, sizeof( float ) );
-			f->blockCapacity = 2 * bw * bh;
+			grid->blockSize = b2fGrowArray( grid->blockSize, grid->blockCapacity, 2 * bw * bh, sizeof( float ) );
+			grid->blockReach = b2fGrowArray( grid->blockReach, grid->blockCapacity, 2 * bw * bh, sizeof( float ) );
+			grid->blockCapacity = 2 * bw * bh;
 		}
-		memset( f->blockSize, 0, (size_t)( bw * bh ) * sizeof( float ) );
+		memset( grid->blockSize, 0, (size_t)( bw * bh ) * sizeof( float ) );
 	}
 
 	// Clamped in float before the conversion, so a particle however far out is in range
 	float inv = 1.0f / cs;
 	float firstCell = (float)border, lastX = (float)( width - 1 - border ), lastY = (float)( height - 1 - border );
-	for ( int i = 0; i < f->count; ++i )
+	FOR_RUN( list, first, last, i )
 	{
-		float tx = (float)( f->pos[i].x - f->gridX ) * inv, ty = (float)( f->pos[i].y - f->gridY ) * inv;
+		float tx = (float)( f->pos[i].x - grid->x ) * inv, ty = (float)( f->pos[i].y - grid->y ) * inv;
 		int cx = (int)( tx > firstCell ? ( tx < lastX ? tx : lastX ) : firstCell );
 		int cy = (int)( ty > firstCell ? ( ty < lastY ? ty : lastY ) : firstCell );
 		int c = cy * width + cx;
 		f->sortCell[i] = c;
-		f->cellStart[c + 1] += 1;
+		start[c + 1] += 1;
 		if ( adaptive )
 		{
 			int b = ( cy >> B2F_BLOCK_SHIFT ) * bw + ( cx >> B2F_BLOCK_SHIFT );
 			f->sortBlock[i] = b;
 			float size = b2fLatticeSize( f->size[i] );
-			f->blockSize[b] = f->blockSize[b] > size ? f->blockSize[b] : size;
+			grid->blockSize[b] = grid->blockSize[b] > size ? grid->blockSize[b] : size;
 		}
 	}
 
+	start[0] = first;
 	for ( int c = 0; c < cellCount; ++c )
 	{
-		f->cellStart[c + 1] += f->cellStart[c];
+		start[c + 1] += start[c];
 	}
 
 	// Counting sort, keeping the previous order within a cell
-	for ( int i = 0; i < f->count; ++i )
+	FOR_RUN( list, first, last, i )
 	{
-		f->permutation[f->cellStart[f->sortCell[i]]++] = i;
+		f->permutation[start[f->sortCell[i]]++] = i;
 	}
 	for ( int c = cellCount; c > 0; --c )
 	{
-		f->cellStart[c] = f->cellStart[c - 1];
+		start[c] = start[c - 1];
 	}
-	f->cellStart[0] = 0;
+	start[0] = first;
 
 	if ( adaptive )
 	{
-		SpreadBlockSizes( f, bw, bh );
+		SpreadBlockSizes( grid, bw, bh );
 	}
 }
 
-// Moves each particle to its sorted place, and gives it its cell and, with sizes that vary, how many cells around it
-// to search
+// How many cells each side of its own a particle of this size in this block searches in a grid: its own size plus the
+// larger of its own and the largest whose reach touches the block
+static inline int GridWindow( const b2fGrid* grid, int block, float size )
+{
+	float near = grid->blockReach[block], s = b2fLatticeSize( size ), reach = s + ( near > s ? near : s );
+	return (int)ceilf( reach / grid->cell );
+}
+
+// A particle's cell and window in the sleep grid, from where it is. One far enough outside the asleep particles that
+// it can reach none of them searches no cells there. The window never passes the border, which made room for the
+// largest particle any liquid can have; one larger than that, which the next sort files again for, finds only those
+// within the border's reach for a substep.
+static void FindSleepCell( b2fFluid* f, int i, b2Pos p, float size )
+{
+	const b2fGrid* grid = &f->sleepGrid;
+	float s = b2fLatticeSize( size ), reach = s + ( grid->largest > s ? grid->largest : s ) + grid->cell;
+	if ( p.x < grid->all.minX - reach || p.x > grid->all.maxX + reach || p.y < grid->all.minY - reach || p.y > grid->all.maxY + reach )
+	{
+		f->sleepCell[i] = grid->border * grid->width + grid->border;
+		f->sleepWindow[i] = -1;
+		return;
+	}
+
+	float inv = 1.0f / grid->cell;
+	float firstCell = (float)grid->border, lastX = (float)( grid->width - 1 - grid->border ), lastY = (float)( grid->height - 1 - grid->border );
+	float tx = (float)( p.x - grid->x ) * inv, ty = (float)( p.y - grid->y ) * inv;
+	int cx = (int)( tx > firstCell ? ( tx < lastX ? tx : lastX ) : firstCell );
+	int cy = (int)( ty > firstCell ? ( ty < lastY ? ty : lastY ) : firstCell );
+	f->sleepCell[i] = cy * grid->width + cx;
+	int window = grid->uniformWindow;
+	if ( window == 0 )
+	{
+		int bw = ( grid->width + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT;
+		window = GridWindow( grid, ( cy >> B2F_BLOCK_SHIFT ) * bw + ( cx >> B2F_BLOCK_SHIFT ), size );
+		window = window < grid->border - 1 ? window : grid->border - 1;
+	}
+	f->sleepWindow[i] = window;
+}
+
+typedef struct b2fReorder
+{
+	b2fFluid* f;
+	int first;
+	bool sleepFields;
+} b2fReorder;
+
+// Moves each particle of a run to its sorted place. Awake particles take their cells in both grids and, with sizes that
+// vary, how many cells around them to search in the grid of awake ones; asleep ones their cells in the sleep grid.
 static void ReorderTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
-	b2fFluid* f = context;
-	float inverse = 1.0f / f->gridCell;
-	for ( int i = start; i < end; ++i )
+	b2fReorder* reorder = context;
+	b2fFluid* f = reorder->f;
+	bool sleepFields = reorder->sleepFields;
+	int active = f->activeCount;
+	for ( int k = start; k < end; ++k )
 	{
+		int i = reorder->first + k;
 		int p = f->permutation[i];
 #define B2F_REORDER_FIELD( type, name ) f->sorted.name[i] = f->name[p];
 		B2F_CORE_FIELDS( B2F_REORDER_FIELD )
-		if ( f->sleepOn )
+		if ( sleepFields )
 		{
 			B2F_SLEEP_FIELDS( B2F_REORDER_FIELD )
 		}
@@ -333,46 +414,171 @@ static void ReorderTask( int start, int end, int worker, void* context )
 			f->sortedSprings[i] = f->springs[p];
 		}
 
-		f->cell[i] = f->sortCell[p];
-		if ( f->uniformWindow == 0 )
+		if ( i < active )
 		{
-			float near = f->blockReach[f->sortBlock[p]];
-			float s = b2fLatticeSize( f->size[p] ), reach = s + ( near > s ? near : s );
-			f->window[i] = (int)ceilf( reach * inverse );
+			f->cell[i] = f->sortCell[p];
+			if ( f->grid.uniformWindow == 0 )
+			{
+				f->window[i] = GridWindow( &f->grid, f->sortBlock[p], f->size[p] );
+			}
+			if ( f->settledCount > 0 )
+			{
+				FindSleepCell( f, i, f->pos[p], f->size[p] );
+			}
+		}
+		else
+		{
+			// It holds still where it is, as prediction holds an asleep particle among the awake
+			const b2fGrid* grid = &f->sleepGrid;
+			f->sorted.prev[i] = f->pos[p];
+			f->sleepCell[i] = f->sortCell[p];
+			f->sleepWindow[i] = grid->uniformWindow > 0 ? grid->uniformWindow : GridWindow( grid, f->sortBlock[p], f->size[p] );
 		}
 	}
 }
 
-static void SwapArrays( b2fFluid* f )
+// After a reorder of the run first to last: the sorted arrays hold it, and take the place of the others when the run is
+// every particle. Otherwise the run is copied back, so the particles outside it, which the sorted arrays do not hold,
+// stay as they are.
+static void FinishReorder( b2fFluid* f, int first, int last, bool sleepFields )
 {
+	if ( first == 0 && last == f->count )
+	{
 #define B2F_SWAP_FIELD( type, name )                                                                                   \
 	{                                                                                                                  \
 		type* t = f->name;                                                                                             \
 		f->name = f->sorted.name;                                                                                      \
 		f->sorted.name = t;                                                                                            \
 	}
-	B2F_CORE_FIELDS( B2F_SWAP_FIELD )
-	if ( f->sleepOn )
+		B2F_CORE_FIELDS( B2F_SWAP_FIELD )
+		if ( sleepFields )
+		{
+			B2F_SLEEP_FIELDS( B2F_SWAP_FIELD )
+		}
+		if ( f->speedMemory != NULL )
+		{
+			B2F_SPEED_FIELDS( B2F_SWAP_FIELD )
+		}
+#undef B2F_SWAP_FIELD
+		if ( f->springs != NULL )
+		{
+			b2fSprings* t = f->springs;
+			f->springs = f->sortedSprings;
+			f->sortedSprings = t;
+		}
+		return;
+	}
+
+	size_t n = (size_t)( last - first );
+#define B2F_COPY_BACK( type, name ) memcpy( f->name + first, f->sorted.name + first, n * sizeof( type ) );
+	B2F_CORE_FIELDS( B2F_COPY_BACK )
+	if ( sleepFields )
 	{
-		B2F_SLEEP_FIELDS( B2F_SWAP_FIELD )
+		B2F_SLEEP_FIELDS( B2F_COPY_BACK )
 	}
 	if ( f->speedMemory != NULL )
 	{
-		B2F_SPEED_FIELDS( B2F_SWAP_FIELD )
+		B2F_SPEED_FIELDS( B2F_COPY_BACK )
 	}
-#undef B2F_SWAP_FIELD
+#undef B2F_COPY_BACK
 	if ( f->springs != NULL )
 	{
-		b2fSprings* t = f->springs;
-		f->springs = f->sortedSprings;
-		f->sortedSprings = t;
+		memcpy( f->springs + first, f->sortedSprings + first, n * sizeof( b2fSprings ) );
+	}
+}
+
+static void Reorder( b2fFluid* f, b2SubStepContext* context, int first, int last, bool sleepFields )
+{
+	b2fReorder reorder = { f, first, sleepFields };
+	b2SubStep_ParallelFor( context, ReorderTask, last - first, 1024, &reorder );
+	FinishReorder( f, first, last, sleepFields );
+}
+
+bool b2fNeedsFiling( const b2fFluid* f )
+{
+	return f->gridStale || f->asleepActive > 0 || f->awakeSettled > 0 || f->activeCount + f->settledCount != f->count;
+}
+
+// The order filing puts the particles in, awake ones first, in order, and asleep ones after, sorted into the sleep grid,
+// takes effect with the next sort of the awake particles, which moves every particle once (b2fSortAwake). Until then
+// order lists the particles, as they still are, in that order, and the sleep grid holds them by where they will be:
+// particle order[k] is to go to k.
+void b2fFileAsleep( b2fFluid* f, b2SubStepContext* context )
+{
+	(void)context;
+	int n = f->count;
+	f->gridStale = false;
+	f->asleepActive = 0;
+	f->awakeSettled = 0;
+	f->shellCount = 0;
+
+	int awake = 0;
+	for ( int i = 0; i < n; ++i )
+	{
+		awake += f->asleep[i] == 0 ? 1 : 0;
+	}
+	f->asleepCount = n - awake;
+	f->activeCount = awake;
+	f->settledCount = n - awake;
+	f->filedNow = awake < n;
+	if ( awake == n )
+	{
+		// None asleep: they are in order already
+		f->filePending = false;
+		return;
+	}
+
+	for ( int i = 0, a = 0, k = awake; i < n; ++i )
+	{
+		f->order[f->asleep[i] == 0 ? a++ : k++] = i;
+	}
+	BuildGrid( f, &f->sleepGrid, f->order, awake, n, LargestPossible( f ) );
+	f->filePending = true;
+}
+
+void b2fSortAwake( b2fFluid* f, b2SubStepContext* context )
+{
+	int a = f->activeCount, n = f->count;
+	bool pending = f->filePending;
+	f->filePending = false;
+	if ( a == 0 )
+	{
+		if ( pending )
+		{
+			Reorder( f, context, 0, n, true );
+		}
+		return;
+	}
+
+	// The border makes room for the asleep particles that search this grid too, the shell
+	bool asleep = f->settledCount > 0;
+	BuildGrid( f, &f->grid, pending ? f->order : NULL, 0, a, asleep ? f->sleepGrid.sizeLargest : 0.0f );
+	if ( f->adaptive )
+	{
+		f->maxRadius = 2.0f * f->grid.largest;
+	}
+	if ( pending )
+	{
+		Reorder( f, context, 0, n, true );
+	}
+	else
+	{
+		Reorder( f, context, 0, a, f->sleepOn );
+	}
+
+	// One grown larger than the sleep grid made room for has the asleep particles filed again with room for it
+	if ( asleep )
+	{
+		f->gridStale = f->gridStale || f->grid.sizeLargest > f->sleepGrid.largest;
 	}
 }
 
 void b2fSortParticles( b2fFluid* f, b2SubStepContext* context )
 {
-	BuildGrid( f );
-	b2SubStep_ParallelFor( context, ReorderTask, f->count, 1024, f );
-	SwapArrays( f );
-	f->gridStale = false;
+	b2fCountAsleep( f );
+	if ( b2fNeedsFiling( f ) )
+	{
+		b2fFileAsleep( f, context );
+	}
+	b2fSortAwake( f, context );
 }

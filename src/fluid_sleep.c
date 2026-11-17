@@ -5,22 +5,30 @@
 // its velocity smoothed over B2F_CALM_TIME, so that liquid which only jitters or rings within a step does not keep
 // waking. In each substep:
 //
-// - Prediction, the move pass, the push out of shapes and the velocity pass skip asleep particles, so they hold still
-//   at zero velocity. Every particle is still sorted, and still finds the shapes in its reach. Once all are asleep
-//   and none was added or removed, the substep skips the sort too, and runs only in the first substep of a step and
-//   while a body near the liquid is awake (b2FluidSubStep); the size pass does not run.
-// - An asleep particle that touches an awake body, or lies in the cells near one (MarkHeld in fluid_boundary.c),
+// - Asleep particles are kept apart from the awake ones, as Box2D keeps sleeping islands out of its awake set: the awake
+//   come first in the particle arrays, activeCount of them, and the asleep after them, filed by cell in a grid of their
+//   own, the sleep grid, which is made when they are filed and kept while none of them wakes (b2fFileAsleep in
+//   fluid_grid.c). Particles are filed again, in the substep after, once some fall asleep or wake, or are added or
+//   removed. The substep predicts, sorts, moves, pushes out of shapes and works out velocities for the awake particles
+//   alone, so they hold still at zero velocity, and the asleep ones cost nothing there. Awake particles find their
+//   asleep neighbours in the sleep grid, from their cell there, which the sort gives them. Once all are asleep, the
+//   substep runs only in the first substep of a step and while a body near the liquid is awake (b2FluidSubStep); the
+//   size pass does not run.
+// - An asleep particle that touches an awake body, or lies near one (MarkHeld in fluid_boundary.c, b2fWakeHeld here),
 //   wakes at once, since the body may move into it, and none there falls asleep (B2F_WAKE_HELD). Its sleep time keeps
-//   running, so a body at rest in still liquid can sleep, and then the liquid round it.
+//   running, so a body at rest in still liquid can sleep, and then the liquid round it. Asleep particles near an
+//   awake body wake before the substep moves anything, and are filed with the awake ones.
 // - Both ends of a spring work it out alike, so particles joined by springs, directly or through others, sleep and wake
 //   as one group (b2fSpringGroups): a group falls asleep in the substep its last particle has been slow for
 //   B2_TIME_TO_SLEEP, and when any of it wakes, for whatever reason, all of it wakes before the next spring pass.
 //   While both ends are asleep a spring is skipped, and springs neither form nor go at asleep particles. The size
-//   pass sizes asleep particles as the rest, and one whose size changes wakes.
-// - The shell is the asleep particles with an awake particle within their search window, found from the cells
-//   (b2fFindShell), and those against a shape. Shell particles work out their density and pressure, which their
-//   awake neighbours read; deep asleep particles skip the density pass as well, apart from those that fell asleep in
-//   the last substep (B2F_ASLEEP_NEW). A shell particle wakes at the end of the substep if its density has moved
+//   pass sizes the asleep particles of the shell as the awake ones, and one whose size changes wakes; the others keep
+//   their sizes, and the depth boxes cover only the particles sized and their reach (fluid_adapt.c).
+// - The shell is the asleep particles in the cells of the sleep grid that awake particles search (b2fFindShell), those
+//   that fell asleep in the last substep (B2F_ASLEEP_NEW), and in the first substep of a step those against a shape.
+//   Shell particles find their contacts and work out their density and pressure, which their awake neighbours read,
+//   and the size pass sizes them; the other asleep particles skip all of it, and find their contacts only in the
+//   first substep of a step, which is when shapes can have changed under them. A shell particle wakes at the end of the substep if its density has moved
 //   B2F_WAKE_DENSITY of rest from what it was in its first substep asleep, or if an awake neighbour is faster than
 //   B2F_WAKE_SPEED in this substep, as Goswami wakes the neighbours of fast particles; smoothed, the speed lagged a
 //   splash so far that a third of a pool slept on through the waves of a crate dropped into it. The density test catches what speed
@@ -54,6 +62,8 @@ void b2fWakeAll( b2fFluid* f )
 	memset( f->sleepTime, 0, (size_t)f->count * sizeof( float ) );
 	memset( f->calm, 0, (size_t)f->count * sizeof( b2Vec2 ) );
 	f->asleepCount = 0;
+	f->asleepActive = 0;
+	f->awakeSettled = f->settledCount;
 	f->springAsleep = 0;
 }
 
@@ -79,81 +89,200 @@ void b2fPrepareSleep( b2fFluid* f, b2Vec2 gravity )
 	b2fCountAsleep( f );
 }
 
+// Over the asleep flags alone, a byte a particle, so it costs little beside anything else a substep does
 void b2fCountAsleep( b2fFluid* f )
 {
-	int count = 0;
-	for ( int i = 0; i < f->count; ++i )
+	int n = f->count, active = f->activeCount < n ? f->activeCount : n;
+	int asleepActive = 0, asleepSettled = 0;
+	for ( int i = 0; i < active; ++i )
 	{
-		count += f->asleep[i] != 0 ? 1 : 0;
+		asleepActive += f->asleep[i] != 0 ? 1 : 0;
 	}
-	f->asleepCount = count;
+	for ( int i = active; i < n; ++i )
+	{
+		asleepSettled += f->asleep[i] != 0 ? 1 : 0;
+	}
+	f->asleepCount = asleepActive + asleepSettled;
+	f->asleepActive = asleepActive;
+	f->awakeSettled = n - active - asleepSettled;
 }
 
-// For each row of cells, a running count of the cells holding an awake particle
+// An asleep particle's cell in the grid of awake particles, clamped as the sort clamps theirs, and how far it searches
+// there
+static void FindAwakeCell( b2fFluid* f, int i )
+{
+	const b2fGrid* grid = &f->grid;
+	float inv = 1.0f / grid->cell;
+	float firstCell = (float)grid->border, lastX = (float)( grid->width - 1 - grid->border ), lastY = (float)( grid->height - 1 - grid->border );
+	float tx = (float)( f->pos[i].x - grid->x ) * inv, ty = (float)( f->pos[i].y - grid->y ) * inv;
+	int cx = (int)( tx > firstCell ? ( tx < lastX ? tx : lastX ) : firstCell );
+	int cy = (int)( ty > firstCell ? ( ty < lastY ? ty : lastY ) : firstCell );
+	f->cell[i] = cy * grid->width + cx;
+	if ( grid->uniformWindow == 0 )
+	{
+		int bw = ( grid->width + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT;
+		float near = grid->blockReach[( cy >> B2F_BLOCK_SHIFT ) * bw + ( cx >> B2F_BLOCK_SHIFT )];
+		float size = b2fLatticeSize( f->size[i] ), reach = size + ( near > size ? near : size );
+		f->window[i] = (int)ceilf( reach * inv );
+	}
+}
+
+void b2fAddShell( b2fFluid* f, int i )
+{
+	f->inShell[i] = 1;
+	f->shell[f->shellCount++] = i;
+	if ( f->activeCount > 0 )
+	{
+		FindAwakeCell( f, i );
+	}
+}
+
+// For each row of the awake particles' grid, a running count of the cells holding a particle
 static void CellRowTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	int width = f->gridWidth, stride = width + 1;
+	const b2fGrid* grid = &f->grid;
+	int width = grid->width, stride = width + 1;
 	for ( int row = start; row < end; ++row )
 	{
 		int* counts = f->cellAwake + row * stride;
+		const int* cells = grid->start + row * width;
 		int sum = 0;
 		counts[0] = 0;
 		for ( int x = 0; x < width; ++x )
 		{
-			int c = row * width + x;
-			int awake = 0;
-			for ( int i = f->cellStart[c], last = f->cellStart[c + 1]; i < last && awake == 0; ++i )
-			{
-				awake = f->asleep[i] == 0;
-			}
-			sum += awake;
+			sum += cells[x + 1] > cells[x] ? 1 : 0;
 			counts[x + 1] = sum;
 		}
 	}
 }
 
-// An asleep particle is in the shell if any cell of its search window holds an awake particle, which covers every
-// awake particle within its reach, since the window finds pairs from both sides, or if it is against a shape
+// An asleep particle is in the shell if some cell of its search window in the awake particles' grid holds a particle,
+// which takes in every awake particle within its reach, since the window finds pairs from both sides. One outside the
+// bounds of the awake particles by more than any reach is not.
 static void ShellTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
 	b2fFluid* f = context;
-	int width = f->gridWidth, stride = width + 1;
-	for ( int i = start; i < end; ++i )
+	const b2fGrid* grid = &f->grid;
+	int width = grid->width, stride = width + 1, a = f->activeCount;
+	bool filed = f->filedNow;
+	b2fBox box = grid->all;
+	for ( int k = start; k < end; ++k )
 	{
-		if ( f->asleep[i] == 0 )
+		int i = a + k;
+		bool shell = filed && ( f->asleep[i] & B2F_ASLEEP_NEW ) != 0;
+		b2Pos p = f->pos[i];
+		float s = b2fLatticeSize( f->size[i] ), reach = s + ( grid->largest > s ? grid->largest : s ) + grid->cell;
+		if ( a > 0 && p.x >= box.minX - reach && p.x <= box.maxX + reach && p.y >= box.minY - reach && p.y <= box.maxY + reach )
 		{
-			continue;
+			FindAwakeCell( f, i );
+			int r = grid->uniformWindow > 0 ? grid->uniformWindow : f->window[i];
+			int cx = f->cell[i] % width, cy = f->cell[i] / width;
+			for ( int row = cy - r; row <= cy + r && shell == false; ++row )
+			{
+				const int* counts = f->cellAwake + row * stride;
+				shell = counts[cx + r + 1] > counts[cx - r];
+			}
 		}
-		bool shell = ( f->asleep[i] & ( B2F_ASLEEP_SHAPE | B2F_ASLEEP_NEW ) ) != 0;
-		int reach = f->uniformWindow > 0 ? f->uniformWindow : f->window[i];
-		int cx = f->cell[i] % width, cy = f->cell[i] / width;
-		for ( int row = cy - reach; row <= cy + reach && shell == false; ++row )
-		{
-			const int* counts = f->cellAwake + row * stride;
-			shell = counts[cx + reach + 1] > counts[cx - reach];
-		}
-		f->wake[i] |= shell ? B2F_WAKE_SHELL : 0u;
+		f->inShell[i] = shell ? 1 : 0;
 	}
 }
 
+// On every worker over the asleep particles, and then listed on one thread in particle order, so the list is the same
+// at any worker count
 void b2fFindShell( b2fFluid* f, b2SubStepContext* context )
 {
-	if ( f->asleepCount == 0 )
+	int a = f->activeCount, n = f->count;
+	f->shellCount = 0;
+	if ( f->settledCount == 0 )
 	{
+		f->filedNow = false;
 		return;
 	}
 
-	int needed = f->gridHeight * ( f->gridWidth + 1 );
-	if ( needed > f->cellAwakeCapacity )
+	if ( a > 0 )
 	{
-		f->cellAwake = b2fGrowArray( f->cellAwake, f->cellAwakeCapacity, 2 * needed, sizeof( int ) );
-		f->cellAwakeCapacity = 2 * needed;
+		int needed = f->grid.height * ( f->grid.width + 1 );
+		if ( needed > f->cellAwakeCapacity )
+		{
+			f->cellAwake = b2fGrowArray( f->cellAwake, f->cellAwakeCapacity, 2 * needed, sizeof( int ) );
+			f->cellAwakeCapacity = 2 * needed;
+		}
+		b2SubStep_ParallelFor( context, CellRowTask, f->grid.height, 16, f );
 	}
-	b2SubStep_ParallelFor( context, CellRowTask, f->gridHeight, 16, f );
-	b2SubStep_ParallelFor( context, ShellTask, f->count, 1024, f );
+	b2SubStep_ParallelFor( context, ShellTask, n - a, 512, f );
+	f->filedNow = false;
+	for ( int i = a; i < n; ++i )
+	{
+		if ( f->inShell[i] )
+		{
+			f->shell[f->shellCount++] = i;
+		}
+	}
+}
+
+// Asleep particles round an awake body that forces or a motion move wake before the substep moves anything, since the
+// body may move into them: those within its shapes' bounds grown by half their larger side. MarkHeld holds awake the
+// awake particles in the cells those bounds touch, which takes in all of these, so none woken here falls asleep again
+// while the body is near. The grid's cells only gather candidates, so that particles far off along its edge, clamped
+// into its cells, stay asleep.
+bool b2fWakeHeld( b2fFluid* f )
+{
+	if ( f->settledCount == 0 || f->sleepOn == false )
+	{
+		return false;
+	}
+
+	const b2fGrid* grid = &f->sleepGrid;
+	int width = grid->width, height = grid->height, woke = 0;
+	float inverse = 1.0f / grid->cell;
+	for ( int si = 0; si < f->shapeCount; ++si )
+	{
+		const b2fShape* s = f->shapes + si;
+		if ( f->bodies[s->bodyIndex].awake == false )
+		{
+			continue;
+		}
+
+		float grow = 0.5f * (float)( s->maxX - s->minX > s->maxY - s->minY ? s->maxX - s->minX : s->maxY - s->minY );
+		b2fCoord minX = s->minX - grow, maxX = s->maxX + grow, minY = s->minY - grow, maxY = s->maxY + grow;
+		if ( maxX < grid->all.minX || maxY < grid->all.minY || minX > grid->all.maxX || minY > grid->all.maxY )
+		{
+			continue;
+		}
+		// Clamped as the particles' cells are, so every particle inside the bounds is in a cell of the range
+		float x0 = (float)( minX - grid->x ) * inverse, x1 = (float)( maxX - grid->x ) * inverse;
+		float y0 = (float)( minY - grid->y ) * inverse, y1 = (float)( maxY - grid->y ) * inverse;
+		float lo = (float)grid->border, hiX = (float)( width - 1 - grid->border ), hiY = (float)( height - 1 - grid->border );
+		int cx0 = (int)( x0 > lo ? ( x0 < hiX ? x0 : hiX ) : lo ), cx1 = (int)( x1 > lo ? ( x1 < hiX ? x1 : hiX ) : lo );
+		int cy0 = (int)( y0 > lo ? ( y0 < hiY ? y0 : hiY ) : lo ), cy1 = (int)( y1 > lo ? ( y1 < hiY ? y1 : hiY ) : lo );
+		for ( int y = cy0; y <= cy1; ++y )
+		{
+			for ( int c = y * width + cx0, last = y * width + cx1; c <= last; ++c )
+			{
+				for ( int k = grid->start[c]; k < grid->start[c + 1]; ++k )
+				{
+					// Just filed, the grid holds where particles are to go
+					int i = f->filePending ? f->order[k] : k;
+					b2Pos p = f->pos[i];
+					if ( f->asleep[i] != 0 && minX <= p.x && p.x <= maxX && minY <= p.y && p.y <= maxY )
+					{
+						// Its sleep time starts again. With these bounds grown by a cell more than MarkHeld's, a particle
+						// woken outside the cells it holds that kept its sleep time fell asleep again at the end of the
+						// substep, and woke in the next: mercury round a stone ball flickered so, and held the ball
+						// rocking in its shaft.
+						b2fWakeParticle( f, i );
+						woke += 1;
+					}
+				}
+			}
+		}
+	}
+	f->awakeSettled += woke;
+	f->asleepCount -= woke;
+	return woke > 0;
 }
 
 // What a spring group holds, at its root
