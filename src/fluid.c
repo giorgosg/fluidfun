@@ -376,7 +376,7 @@ b2fFluid* b2fMakeFluid( b2World* world, const b2FluidDef* def, int capacity )
 #undef B2F_ALLOC_FIELD
 #undef B2F_ALLOC_SORTED
 	f->contacts = b2AllocZero( n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
-	f->pairs = b2Alloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
+	f->pairs = b2Alloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( int ) );
 	f->marked = b2CreateBitSet( (uint32_t)n );
 	f->axisBits[0] = b2CreateBitSet( 1024 );
 	f->axisBits[1] = b2CreateBitSet( 1024 );
@@ -419,7 +419,7 @@ void b2FreeFluid( b2fFluid* f )
 #undef B2F_FREE_FIELD
 #undef B2F_FREE_SORTED
 	b2Free( f->contacts, n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
-	b2Free( f->pairs, n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
+	b2Free( f->pairs, n * B2F_PAIRS_PER_PARTICLE * sizeof( int ) );
 	b2DestroyBitSet( &f->marked );
 	if ( f->springs != NULL )
 	{
@@ -596,7 +596,7 @@ bool b2fGrow( b2fFluid* f, int needed )
 #undef B2F_GROW_FIELD
 #undef B2F_GROW_SORTED
 	f->contacts = Resize( f->contacts, old, capacity, B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ), true );
-	f->pairs = Resize( f->pairs, old, capacity, B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ), false );
+	f->pairs = Resize( f->pairs, old, capacity, B2F_PAIRS_PER_PARTICLE * sizeof( int ), false );
 
 	// The spring arrays, made once some liquid has springs, and the id table, which is cleared before each use
 	if ( f->springs != NULL )

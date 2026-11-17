@@ -521,14 +521,6 @@ typedef struct b2fContact
 	float share;
 } b2fContact;
 
-// A neighbour within reach, found by the density pass. Nothing moves before the move pass reads it, so the
-// distance is exact there.
-typedef struct b2fPair
-{
-	int j;
-	float l;
-} b2fPair;
-
 // What the liquid gives a body in a substep, and the mass of the liquid within reach that moves with it, with its
 // first and second moments about the body's centre of mass
 typedef struct b2fReaction
@@ -640,7 +632,10 @@ struct b2fFluid
 	B2F_CARRIED_FIELDS( B2F_DECLARE_FIELD )
 	B2F_ADAPT_FIELDS( B2F_DECLARE_FIELD )
 	b2fContact* contacts;
-	b2fPair* pairs;
+	// Each particle's neighbours within reach, B2F_PAIRS_PER_PARTICLE a particle, found by the density pass and read
+	// by the spring forming and move passes of the same substep. Only the index is kept: nothing moves between the two
+	// passes, so the distance the readers work out from the positions is the one the density pass had, bit for bit.
+	int* pairs;
 
 	// Only made once some liquid has springs, and then sorted, copied and cleared with the particle fields
 	b2fSprings* springs;
