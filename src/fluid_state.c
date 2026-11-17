@@ -453,7 +453,7 @@ static void MeasureSensors( b2fFluid* f )
 		return;
 	}
 
-	b2fSensorShape* shapes = b2Alloc( (size_t)count * sizeof( b2fSensorShape ) );
+	b2fSensorShape* shapes = b2StackAlloc( &f->world->stack, count * (int)sizeof( b2fSensorShape ), "sensor shapes" );
 	int shapeCount = 0;
 	b2fCoord minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
 	for ( int i = 0; i < f->sensors.count; ++i )
@@ -499,14 +499,13 @@ static void MeasureSensors( b2fFluid* f )
 	{
 		f->sensors.data[shapes[k].sensor].area = (float)shapes[k].area;
 	}
-	b2Free( shapes, (size_t)count * sizeof( b2fSensorShape ) );
+	b2StackFree( &f->world->stack, shapes );
 }
 
 static void UpdateSensors( b2fFluid* f )
 {
 	// A destroyed sensor that held liquid ends now. What is left held liquid last step or is near it now.
-	int heldCount = f->sensors.count > 0 ? f->sensors.count : 1;
-	bool* held = b2Alloc( (size_t)heldCount * sizeof( bool ) );
+	bool* held = b2StackAlloc( &f->world->stack, f->sensors.count * (int)sizeof( bool ), "sensors held" );
 	for ( int i = 0; i < f->sensors.count; )
 	{
 		b2fSensor* sensor = f->sensors.data + i;
@@ -546,7 +545,7 @@ static void UpdateSensors( b2fFluid* f )
 		}
 	}
 	f->sensors.count = kept;
-	b2Free( held, (size_t)heldCount * sizeof( bool ) );
+	b2StackFree( &f->world->stack, held );
 }
 
 void b2fFinishStep( b2fFluid* f )

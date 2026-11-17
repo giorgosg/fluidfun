@@ -1543,6 +1543,9 @@ static int FluidMemory( void )
 {
 	size_t start = b2GetByteCount();
 	b2WorldDef worldDef = b2DefaultWorldDef();
+	// The fluid's scratch comes from the world's arena, which keeps the room it grows to until the world goes, so the
+	// arena starts with room for it
+	worldDef.capacity.arenaByteCount = 1 << 20;
 	b2WorldId worldId = b2CreateWorld( &worldDef );
 	b2BodyDef bodyDef = b2DefaultBodyDef();
 	b2BodyId groundId = b2CreateBody( worldId, &bodyDef );
