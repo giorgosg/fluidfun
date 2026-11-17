@@ -1725,9 +1725,9 @@ static int FluidThinWall( void )
 	return 0;
 }
 
-// A drop far from the rest of the liquid neither makes the grid's cells larger nor misses the floor under it. The
-// grid covers the pool, and the drop is filed into a cell on its edge. Shapes are gathered around the pool and around
-// the drop, so a wall reaching both is taken once and the boxes in between not at all.
+// A drop far from the rest of the liquid neither makes the grid's cells larger nor misses the floor under it. The 3 km
+// between them is cut out of the grid's y axis, which then has a stretch for each. Shapes are gathered around the pool
+// and around the drop, so a wall reaching both is taken once and the boxes in between not at all.
 static int FluidFarStray( void )
 {
 	b2WorldDef worldDef = b2DefaultWorldDef();
@@ -1766,9 +1766,9 @@ static int FluidFarStray( void )
 	}
 
 	const b2fFluid* f = b2GetWorld( worldId.index1 - 1 )->fluid;
-	ENSURE( f->grid.bulkOnly );
+	ENSURE( f->grid.cut && f->grid.bulkOnly == false );
 	ENSURE( f->grid.cell == f->cellSize );
-	ENSURE( f->grid.bulk.minY > -1.0f );
+	ENSURE( f->grid.ax.count == 1 && f->grid.ay.count == 2 );
 	ENSURE( f->shapeCount == 5 );
 
 	int far = 0;

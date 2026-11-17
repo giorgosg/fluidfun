@@ -2,6 +2,8 @@
 // Creating a liquid, its settings, what it reports, and the order of passes in each substep.
 #include "fluid_internal.h"
 
+#include "bitset.h"
+
 #include "core.h"
 #include "fluid.h"
 #include "physics_world.h"
@@ -348,6 +350,11 @@ b2fFluid* b2fMakeFluid( b2World* world, const b2FluidDef* def, int capacity )
 	b2fFluid* f = b2AllocZero( sizeof( b2fFluid ) );
 	f->world = world;
 	f->def = *def;
+	// Each grid's axes have a stretch from the start, as its corner and cell do, until the first sort lays them out
+	b2fPlainAxis( &f->grid.ax, 0.0f, 1.0f );
+	b2fPlainAxis( &f->grid.ay, 0.0f, 1.0f );
+	b2fPlainAxis( &f->sleepGrid.ax, 0.0f, 1.0f );
+	b2fPlainAxis( &f->sleepGrid.ay, 0.0f, 1.0f );
 	f->capacity = capacity;
 	f->spacing = b2fLatticeSize( def->particleSpacing );
 	f->radius = 2.0f * f->spacing;
@@ -423,6 +430,8 @@ void b2FreeFluid( b2fFluid* f )
 		b2Free( grids[i]->start, (size_t)grids[i]->capacity * sizeof( int ) );
 		b2Free( grids[i]->blockSize, (size_t)grids[i]->blockCapacity * sizeof( float ) );
 		b2Free( grids[i]->blockReach, (size_t)grids[i]->blockCapacity * sizeof( float ) );
+		b2fFreeAxis( &grids[i]->ax );
+		b2fFreeAxis( &grids[i]->ay );
 	}
 	b2Free( f->cellAwake, (size_t)f->cellAwakeCapacity * sizeof( int ) );
 	b2Free( f->shapes, (size_t)f->shapeCapacity * sizeof( b2fShape ) );
@@ -452,6 +461,18 @@ void b2FreeFluid( b2fFluid* f )
 	b2Free( f->boxPressure, boxes * sizeof( float ) );
 	b2Free( f->boxDepth, boxes * sizeof( float ) );
 	b2Free( f->boxFlow, boxes * sizeof( float ) );
+	b2Free( f->partList, (size_t)f->partListCapacity * sizeof( int ) );
+	b2Free( f->partOf, (size_t)f->partListCapacity * sizeof( int ) );
+	b2Free( f->partStart, (size_t)f->partStartCapacity * sizeof( int ) );
+	for ( int i = 0; i < 2; ++i )
+	{
+		b2fFreeAxis( f->partAxes + i );
+		if ( f->axisBits[i] != NULL )
+		{
+			b2DestroyBitSet( f->axisBits[i] );
+			b2Free( f->axisBits[i], sizeof( b2BitSet ) );
+		}
+	}
 	b2fFreeState( f );
 	b2Free( f, sizeof( b2fFluid ) );
 }

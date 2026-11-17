@@ -3,6 +3,9 @@
 // particles, and each particle searches as many cells around its own as its largest possible neighbour needs.
 #include "fluid_internal.h"
 
+#include "bitset.h"
+#include "platform.h"
+
 // Particles i and j interact closer than s_i + s_j, with sizes on the solver's lattice, as everywhere in this file. If
 // j is the larger, they are closer than 2 s_j, so each block takes the size of the largest particle within twice its
 // size of the block. A particle's reach is then its own size plus the larger of its own and its block's, which finds
@@ -58,8 +61,123 @@ static bool GridFits( const b2fBox* box, float cell, int border, int64_t limit )
 	return width <= B2F_GRID_SIDE && height <= B2F_GRID_SIDE && (int64_t)width * height <= limit;
 }
 
-// The particles of a run: those listed from first to last, or with no list the particles first to last themselves
-#define FOR_RUN( list, first, last, i ) for ( int k_ = ( first ), i = 0; k_ < ( last ) && ( i = ( list ) != NULL ? ( list )[k_] : k_, true ); ++k_ )
+static void ReserveStretches( b2fAxis* axis, int count )
+{
+	if ( count > axis->capacity )
+	{
+		int capacity = axis->capacity == 0 ? 8 : 2 * axis->capacity;
+		capacity = capacity > count ? capacity : count;
+		axis->origin = b2fGrowArray( axis->origin, axis->capacity, capacity, sizeof( b2fCoord ) );
+		axis->first = b2fGrowArray( axis->first, axis->capacity, capacity, sizeof( int ) );
+		axis->capacity = capacity;
+	}
+}
+
+void b2fPlainAxis( b2fAxis* axis, b2fCoord origin, float inverse )
+{
+	ReserveStretches( axis, 1 );
+	axis->origin[0] = origin;
+	axis->first[0] = 0;
+	axis->count = 1;
+	axis->inverse = inverse;
+}
+
+void b2fFreeAxis( b2fAxis* axis )
+{
+	b2Free( axis->origin, (size_t)axis->capacity * sizeof( b2fCoord ) );
+	b2Free( axis->first, (size_t)axis->capacity * sizeof( int ) );
+	*axis = ( b2fAxis ){ 0 };
+}
+
+// Bins of this many cells mark where particles are along an axis, coarser when the axis is long, so there are at most
+// B2F_AXIS_BINS of them: 2^22 bits, 512 KB, which at the default spacing reaches over 10,000 km
+#define B2F_AXIS_BIN_CELLS 8
+#define B2F_AXIS_BINS ( 1u << 22 )
+
+void b2fBeginAxis( b2fFluid* f, int which, b2fAxisLayout* layout, b2fCoord lo, b2fCoord hi, float cell )
+{
+	if ( f->axisBits[which] == NULL )
+	{
+		f->axisBits[which] = b2Alloc( sizeof( b2BitSet ) );
+		*f->axisBits[which] = b2CreateBitSet( 1024 );
+	}
+	int binCells = B2F_AXIS_BIN_CELLS;
+	double extent = (double)( hi - lo );
+	while ( extent / ( (double)binCells * (double)cell ) >= (double)( B2F_AXIS_BINS - 1 ) )
+	{
+		binCells *= 2;
+	}
+	*layout = ( b2fAxisLayout ){
+		.lo = lo,
+		.hi = hi,
+		.cell = cell,
+		.binCells = binCells,
+		.inverseBin = 1.0 / ( (double)binCells * (double)cell ),
+		.binCount = (uint32_t)( extent / ( (double)binCells * (double)cell ) ) + 1,
+		.bits = f->axisBits[which],
+	};
+	b2SetBitCountAndClear( layout->bits, layout->binCount );
+}
+
+uint32_t b2fAxisBin( const b2fAxisLayout* layout, b2fCoord v )
+{
+	double t = (double)( v - layout->lo ) * layout->inverseBin;
+	return t > 0.0 ? ( t < (double)( layout->binCount - 1 ) ? (uint32_t)t : layout->binCount - 1 ) : 0;
+}
+
+void b2fMarkAxis( b2fAxisLayout* layout, b2fCoord v )
+{
+	b2SetBit( layout->bits, b2fAxisBin( layout, v ) );
+}
+
+// Walks the marked bins in order. A stretch starts at the liquid's first bin, border cells into the grid, and runs while
+// the empty space between marked bins is no more than gap cells. Past that the next marked bin starts a stretch gap
+// cells after the last one's end. Within a stretch cells are a cell size apart in the world, as in a grid of one stretch,
+// and the map from coordinates to cells keeps their order and never moves two apart (b2fAxis). The last bin past a
+// stretch's end is where its particles end; rounding can put one a cell further, which the next stretch's first cell
+// still holds off.
+int b2fFinishAxis( b2fAxis* axis, const b2fAxisLayout* layout, int border, int gap, int limit )
+{
+	float cell = layout->cell;
+	double binLength = (double)layout->binCells * (double)cell;
+	b2fPlainAxis( axis, layout->lo - (b2fCoord)border * cell, 1.0f / cell );
+
+	// The current stretch's first cell and first bin; the first stretch's bins start at the border
+	int64_t stretchFirst = border, stretchBin = 0, previous = -1;
+	const b2BitSet* bits = layout->bits;
+	for ( uint32_t block = 0; block < bits->blockCount; ++block )
+	{
+		uint64_t word = bits->bits[block];
+		while ( word != 0 )
+		{
+			int64_t bin = (int64_t)block * 64 + b2CTZ64( word );
+			word &= word - 1;
+			if ( previous >= 0 && ( bin - previous - 1 ) * layout->binCells > gap )
+			{
+				int64_t end = stretchFirst + ( previous + 1 - stretchBin ) * layout->binCells;
+				int64_t start = end + gap;
+				if ( start > limit )
+				{
+					return limit + 1;
+				}
+				ReserveStretches( axis, axis->count + 1 );
+				axis->origin[axis->count] = layout->lo + (b2fCoord)( (double)bin * binLength );
+				axis->first[axis->count] = (int)start;
+				axis->count += 1;
+				stretchFirst = start;
+				stretchBin = bin;
+			}
+			previous = bin;
+		}
+	}
+
+	float last = b2fAxisCoord( axis, layout->hi );
+	if ( last + 1.0f + (float)border > (float)limit )
+	{
+		return limit + 1;
+	}
+	return (int)last + 1 + border;
+}
 
 static inline b2fCoord Along( const b2fFluid* f, int i, int axis )
 {
@@ -149,7 +267,7 @@ static bool Widen( const b2fFluid* f, const int* list, int first, int last, int 
 	return true;
 }
 
-bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk )
+static b2fBox Bounds( const b2fFluid* f, const int* list, int first, int last )
 {
 	int i0 = list != NULL ? list[first] : first;
 	b2fBox box = { f->pos[i0].x, f->pos[i0].y, f->pos[i0].x, f->pos[i0].y };
@@ -160,6 +278,12 @@ bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float
 		box.minY = box.minY < f->pos[i].y ? box.minY : f->pos[i].y;
 		box.maxY = box.maxY > f->pos[i].y ? box.maxY : f->pos[i].y;
 	}
+	return box;
+}
+
+bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk )
+{
+	b2fBox box = Bounds( f, list, first, last );
 	*all = box;
 	*bulk = box;
 	int64_t limit = CellLimit( last - first );
@@ -204,6 +328,101 @@ bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float
 }
 
 
+// The most parts b2fFindParts lists: stretches along x times stretches along y
+#define B2F_MAX_PARTS 4096
+
+int b2fFindParts( b2fFluid* f, float cell, int gap )
+{
+	int n = f->count;
+	if ( n == 0 )
+	{
+		return 1;
+	}
+	b2fBox box = Bounds( f, NULL, 0, n );
+	if ( (float)( box.maxX - box.minX ) / cell <= (float)gap && (float)( box.maxY - box.minY ) / cell <= (float)gap )
+	{
+		return 1;
+	}
+
+	b2fAxisLayout layouts[2];
+	b2fBeginAxis( f, 0, layouts, box.minX, box.maxX, cell );
+	b2fBeginAxis( f, 1, layouts + 1, box.minY, box.maxY, cell );
+	for ( int i = 0; i < n; ++i )
+	{
+		b2fMarkAxis( layouts, f->pos[i].x );
+		b2fMarkAxis( layouts + 1, f->pos[i].y );
+	}
+	b2fFinishAxis( f->partAxes, layouts, 0, gap, INT_MAX / 2 );
+	b2fFinishAxis( f->partAxes + 1, layouts + 1, 0, gap, INT_MAX / 2 );
+	int nx = f->partAxes[0].count, ny = f->partAxes[1].count;
+	if ( nx * ny == 1 || (int64_t)nx * ny > B2F_MAX_PARTS )
+	{
+		return 1;
+	}
+
+	int parts = nx * ny;
+	if ( parts + 1 > f->partStartCapacity )
+	{
+		f->partStart = b2fGrowArray( f->partStart, f->partStartCapacity, 2 * ( parts + 1 ), sizeof( int ) );
+		f->partStartCapacity = 2 * ( parts + 1 );
+	}
+	if ( n > f->partListCapacity )
+	{
+		f->partList = b2fGrowArray( f->partList, f->partListCapacity, 2 * n, sizeof( int ) );
+		f->partOf = b2fGrowArray( f->partOf, f->partListCapacity, 2 * n, sizeof( int ) );
+		f->partListCapacity = 2 * n;
+	}
+	memset( f->partStart, 0, (size_t)( parts + 1 ) * sizeof( int ) );
+
+	// A particle's stretch goes by its bin, as the marks did, so one on the edge of a bin is in the stretch of that bin
+	for ( int i = 0; i < n; ++i )
+	{
+		int s[2];
+		for ( int a = 0; a < 2; ++a )
+		{
+			const b2fAxis* axis = f->partAxes + a;
+			const b2fAxisLayout* layout = layouts + a;
+			uint32_t bin = b2fAxisBin( layout, a == 0 ? f->pos[i].x : f->pos[i].y );
+			int lo = 0, hi = axis->count - 1;
+			while ( lo < hi )
+			{
+				int mid = ( lo + hi + 1 ) >> 1;
+				if ( b2fAxisBin( layout, axis->origin[mid] ) <= bin )
+				{
+					lo = mid;
+				}
+				else
+				{
+					hi = mid - 1;
+				}
+			}
+			s[a] = lo;
+		}
+		int part = s[1] * nx + s[0];
+		f->partOf[i] = part;
+		f->partStart[part + 1] += 1;
+	}
+	for ( int p = 0; p < parts; ++p )
+	{
+		f->partStart[p + 1] += f->partStart[p];
+	}
+	for ( int i = 0; i < n; ++i )
+	{
+		f->partList[f->partStart[f->partOf[i]]++] = i;
+	}
+	for ( int p = parts; p > 0; --p )
+	{
+		f->partStart[p] = f->partStart[p - 1];
+	}
+	f->partStart[0] = 0;
+	return parts;
+}
+
+bool b2fFitsGrid( const b2fBox* box, float cell, int border, int count )
+{
+	return GridFits( box, cell, border, CellLimit( count ) );
+}
+
 // The largest particle any liquid can have, on the solver's lattice: adaptive sizes merge up to adaptiveRatio times the
 // finest. The sleep grid's border makes room for it, so an awake particle grown since the grid was made still finds
 // its neighbours there.
@@ -220,6 +439,26 @@ static float LargestPossible( const b2fFluid* f )
 		}
 	}
 	return largest;
+}
+
+// Lays out the grid's axes over the particles first to last at this cell, with the empty space between parts of the
+// liquid cut to a gap one cell wider than the border, so no search window reaches across it. Returns whether the grid
+// fits its limits, and its size.
+static bool CutGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, int last, float cell, int border, int64_t limit, int* width,
+					 int* height )
+{
+	b2fAxisLayout lx, ly;
+	b2fBeginAxis( f, 0, &lx, grid->all.minX, grid->all.maxX, cell );
+	b2fBeginAxis( f, 1, &ly, grid->all.minY, grid->all.maxY, cell );
+	FOR_RUN( list, first, last, i )
+	{
+		b2fMarkAxis( &lx, f->pos[i].x );
+		b2fMarkAxis( &ly, f->pos[i].y );
+	}
+	int gap = border + 1;
+	*width = b2fFinishAxis( &grid->ax, &lx, border, gap, B2F_GRID_SIDE );
+	*height = b2fFinishAxis( &grid->ay, &ly, border, gap, B2F_GRID_SIDE );
+	return *width <= B2F_GRID_SIDE && *height <= B2F_GRID_SIDE && (int64_t)*width * *height <= limit;
 }
 
 // Lays a grid over the particles first to last and counts them into its cells: their cells in sortCell, and in
@@ -249,29 +488,50 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 	// is still right: it finds no neighbours. Clamping keeps the order of coordinates, and moves two points no further
 	// apart in cells, so particles out there still find each other. Liquid spread thinly over a wide area, with no
 	// bulk that fits, gets larger cells, so the grid stays in proportion to the particle count.
+	//
+	// When the liquid is in parts far apart, the empty space between them along each axis is cut out first, which keeps
+	// the smallest cell however far apart the parts are (b2fAxis). Only where that does not fit either, as with spray
+	// over a wide area, does the grid fall back to the bulk and to larger cells.
 	float cs = f->cellSize;
 	int border = adaptive ? (int)ceilf( 2.0f * largest / cs ) + 1 : 1;
-	b2fBox box;
-	grid->bulkOnly = b2fFindBulk( f, list, first, last, cs, border, &grid->all, &box );
 	int64_t cellLimit = CellLimit( last - first );
-	int width, height;
-	while ( true )
+	b2fBox box = Bounds( f, list, first, last );
+	grid->all = box;
+	grid->bulkOnly = false;
+	grid->cut = false;
+	int width = 0, height = 0;
+	if ( GridFits( &box, cs, border, cellLimit ) == false && CutGrid( f, grid, list, first, last, cs, border, cellLimit, &width, &height ) )
 	{
-		border = adaptive ? (int)ceilf( 2.0f * largest / cs ) + 1 : 1;
-		width = CellsAcross( box.minX, box.maxX, cs, border );
-		height = CellsAcross( box.minY, box.maxY, cs, border );
-		if ( width <= B2F_GRID_SIDE && height <= B2F_GRID_SIDE && (int64_t)width * height <= cellLimit )
+		grid->cut = true;
+		grid->x = grid->ax.origin[0];
+		grid->y = grid->ay.origin[0];
+	}
+	else
+	{
+		if ( GridFits( &box, cs, border, cellLimit ) == false )
 		{
-			break;
+			grid->bulkOnly = b2fFindBulk( f, list, first, last, cs, border, &grid->all, &box );
 		}
-		cs *= 2.0f;
+		while ( true )
+		{
+			border = adaptive ? (int)ceilf( 2.0f * largest / cs ) + 1 : 1;
+			width = CellsAcross( box.minX, box.maxX, cs, border );
+			height = CellsAcross( box.minY, box.maxY, cs, border );
+			if ( width <= B2F_GRID_SIDE && height <= B2F_GRID_SIDE && (int64_t)width * height <= cellLimit )
+			{
+				break;
+			}
+			cs *= 2.0f;
+		}
+		grid->x = box.minX - border * cs;
+		grid->y = box.minY - border * cs;
+		b2fPlainAxis( &grid->ax, grid->x, 1.0f / cs );
+		b2fPlainAxis( &grid->ay, grid->y, 1.0f / cs );
 	}
 	grid->bulk = box;
 	grid->cell = cs;
 	grid->border = border;
 	grid->uniformWindow = adaptive ? 0 : (int)ceilf( f->radius / cs );
-	grid->x = box.minX - border * cs;
-	grid->y = box.minY - border * cs;
 	grid->width = width;
 	grid->height = height;
 
@@ -296,12 +556,26 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 		memset( grid->blockSize, 0, (size_t)( bw * bh ) * sizeof( float ) );
 	}
 
-	// Clamped in float before the conversion, so a particle however far out is in range
+	// A grid that is not cut keeps its corner and cell in locals, as stores to the cells and blocks could otherwise
+	// change them for the compiler: reading them through the axes for every particle made the Tank's sort 7% slower.
+	// Clamped in float before the conversion, so a particle however far out is in range.
+	bool cut = grid->cut;
+	b2fCoord gx = grid->x, gy = grid->y;
 	float inv = 1.0f / cs;
 	float firstCell = (float)border, lastX = (float)( width - 1 - border ), lastY = (float)( height - 1 - border );
 	FOR_RUN( list, first, last, i )
 	{
-		float tx = (float)( f->pos[i].x - grid->x ) * inv, ty = (float)( f->pos[i].y - grid->y ) * inv;
+		float tx, ty;
+		if ( cut )
+		{
+			tx = b2fAxisCoord( &grid->ax, f->pos[i].x );
+			ty = b2fAxisCoord( &grid->ay, f->pos[i].y );
+		}
+		else
+		{
+			tx = (float)( f->pos[i].x - gx ) * inv;
+			ty = (float)( f->pos[i].y - gy ) * inv;
+		}
 		int cx = (int)( tx > firstCell ? ( tx < lastX ? tx : lastX ) : firstCell );
 		int cy = (int)( ty > firstCell ? ( ty < lastY ? ty : lastY ) : firstCell );
 		int c = cy * width + cx;
@@ -362,12 +636,8 @@ static void FindSleepCell( b2fFluid* f, int i, b2Pos p, float size )
 		return;
 	}
 
-	float inv = 1.0f / grid->cell;
-	float firstCell = (float)grid->border, lastX = (float)( grid->width - 1 - grid->border ), lastY = (float)( grid->height - 1 - grid->border );
-	float tx = (float)( p.x - grid->x ) * inv, ty = (float)( p.y - grid->y ) * inv;
-	int cx = (int)( tx > firstCell ? ( tx < lastX ? tx : lastX ) : firstCell );
-	int cy = (int)( ty > firstCell ? ( ty < lastY ? ty : lastY ) : firstCell );
-	f->sleepCell[i] = cy * grid->width + cx;
+	int cx, cy;
+	f->sleepCell[i] = b2fGridCell( grid, p, &cx, &cy );
 	int window = grid->uniformWindow;
 	if ( window == 0 )
 	{

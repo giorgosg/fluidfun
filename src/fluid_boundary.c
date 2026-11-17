@@ -256,16 +256,32 @@ static b2ShapeProxy ShapeProxy( const b2fShape* s )
 // The square a coordinate falls in along one side of a grid of count squares, clamped to the grid. Clamping in float
 // before the conversion keeps any coordinate in range, and keeps the order of coordinates, so bounds that overlap
 // get squares that overlap.
-static inline int BinIndex( b2fCoord v, b2fCoord origin, float inverse, int count )
+// Bins over the blocks of a grid whose axes are cut go by those axes, a block every B2F_BLOCK_CELLS cells.
+static inline int BinIndex( const b2fAxis* cut, b2fCoord v, b2fCoord origin, float inverse, int count )
 {
-	float t = (float)( v - origin ) * inverse, last = (float)( count - 1 );
+	float t = cut != NULL ? b2fAxisCoord( cut, v ) * ( 1.0f / B2F_BLOCK_CELLS ) : (float)( v - origin ) * inverse, last = (float)( count - 1 );
 	t = t > 0.0f ? ( t < last ? t : last ) : 0.0f;
 	return (int)t;
 }
 
+static inline const b2fAxis* CutAxis( const b2fShapeBins* bins, int axis )
+{
+	return bins->grid != NULL && bins->grid->cut ? ( axis == 0 ? &bins->grid->ax : &bins->grid->ay ) : NULL;
+}
+
+static inline int BinX( const b2fShapeBins* bins, b2fCoord x )
+{
+	return BinIndex( CutAxis( bins, 0 ), x, bins->x, bins->inverse, bins->width );
+}
+
+static inline int BinY( const b2fShapeBins* bins, b2fCoord y )
+{
+	return BinIndex( CutAxis( bins, 1 ), y, bins->y, bins->inverse, bins->height );
+}
+
 static inline int BinOf( const b2fShapeBins* bins, b2fCoord x, b2fCoord y )
 {
-	return BinIndex( y, bins->y, bins->inverse, bins->height ) * bins->width + BinIndex( x, bins->x, bins->inverse, bins->width );
+	return BinY( bins, y ) * bins->width + BinX( bins, x );
 }
 
 // Sorts the shapes into the bins, whose grid the caller has set, by the bounds in the shapes: every shape, or only
@@ -291,8 +307,8 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 		{
 			continue;
 		}
-		int x0 = BinIndex( s->minX, bins->x, bins->inverse, bins->width ), x1 = BinIndex( s->maxX, bins->x, bins->inverse, bins->width );
-		int y0 = BinIndex( s->minY, bins->y, bins->inverse, bins->height ), y1 = BinIndex( s->maxY, bins->y, bins->inverse, bins->height );
+		int x0 = BinX( bins, s->minX ), x1 = BinX( bins, s->maxX );
+		int y0 = BinY( bins, s->minY ), y1 = BinY( bins, s->maxY );
 		for ( int y = y0; y <= y1; ++y )
 		{
 			for ( int x = x0; x <= x1; ++x )
@@ -322,8 +338,8 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 		{
 			continue;
 		}
-		int x0 = BinIndex( s->minX, bins->x, bins->inverse, bins->width ), x1 = BinIndex( s->maxX, bins->x, bins->inverse, bins->width );
-		int y0 = BinIndex( s->minY, bins->y, bins->inverse, bins->height ), y1 = BinIndex( s->maxY, bins->y, bins->inverse, bins->height );
+		int x0 = BinX( bins, s->minX ), x1 = BinX( bins, s->maxX );
+		int y0 = BinY( bins, s->minY ), y1 = BinY( bins, s->maxY );
 		for ( int y = y0; y <= y1; ++y )
 		{
 			for ( int x = x0; x <= x1; ++x )
@@ -344,6 +360,7 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 // Blocks of 1 or 2 cells a side measured no faster in the Tank, the Boat or 100 crates over a chain of 500 segments.
 static void BinShapes( b2fFluid* f, b2fShapeBins* bins, const b2fGrid* grid )
 {
+	bins->grid = grid;
 	bins->x = grid->x;
 	bins->y = grid->y;
 	bins->inverse = 1.0f / ( B2F_BLOCK_CELLS * grid->cell );
@@ -454,6 +471,7 @@ static int BinFixedShapes( b2fFluid* f, float range )
 	side = side > along ? side : along;
 	side = side > range ? side : range;
 	b2fShapeBins* bins = &f->fixedBins;
+	bins->grid = NULL;
 	bins->x = minX;
 	bins->y = minY;
 	bins->inverse = 1.0f / side;
@@ -493,8 +511,8 @@ static void FindPatches( b2fFluid* f )
 		{
 			const b2fShape* shape = f->shapes + f->bodyShapes[body->firstShape + k];
 			b2fCoord minX = shape->minX - reach, minY = shape->minY - reach, maxX = shape->maxX + reach, maxY = shape->maxY + reach;
-			int x0 = BinIndex( minX, bins->x, bins->inverse, bins->width ), x1 = BinIndex( maxX, bins->x, bins->inverse, bins->width );
-			int y0 = BinIndex( minY, bins->y, bins->inverse, bins->height ), y1 = BinIndex( maxY, bins->y, bins->inverse, bins->height );
+			int x0 = BinX( bins, minX ), x1 = BinX( bins, maxX );
+			int y0 = BinY( bins, minY ), y1 = BinY( bins, maxY );
 
 			// Each shape once, though it may be in several squares, and in order
 			query += 1;
@@ -668,6 +686,37 @@ static b2AABB* GatherBoxes( const b2fFluid* f, const b2fBox* bulk, float grow, i
 	return boxes;
 }
 
+// Boxes to gather shapes in when liquid is in parts far apart: the bounds of each part's particles, grown by grow, in
+// part order. The caller frees room for as many as there could be parts.
+static b2AABB* PartBoxes( const b2fFluid* f, int parts, float grow, int* boxCount )
+{
+	b2AABB* boxes = b2Alloc( (size_t)parts * sizeof( b2AABB ) );
+	int count = 0;
+	for ( int p = 0; p < parts; ++p )
+	{
+		int first = f->partStart[p], last = f->partStart[p + 1];
+		if ( first == last )
+		{
+			continue;
+		}
+		b2Pos q = f->pos[f->partList[first]];
+		b2fBox box = { q.x, q.y, q.x, q.y };
+		for ( int k = first + 1; k < last; ++k )
+		{
+			b2Pos r = f->pos[f->partList[k]];
+			box.minX = box.minX < r.x ? box.minX : r.x;
+			box.maxX = box.maxX > r.x ? box.maxX : r.x;
+			box.minY = box.minY < r.y ? box.minY : r.y;
+			box.maxY = box.maxY > r.y ? box.maxY : r.y;
+		}
+		b2Pos corner = { box.minX, box.minY };
+		b2AABB around = { { -grow, -grow }, { (float)( box.maxX - box.minX ) + grow, (float)( box.maxY - box.minY ) + grow } };
+		boxes[count++] = b2OffsetAABB( around, corner );
+	}
+	*boxCount = count;
+	return boxes;
+}
+
 // Shapes near the liquid, gathered once a step
 void b2fGatherShapes( b2fFluid* f )
 {
@@ -682,25 +731,45 @@ void b2fGatherShapes( b2fFluid* f )
 	if ( f->count > 0 )
 	{
 		float maxSpeed2 = 0.0f;
+		b2fBox all = { f->pos[0].x, f->pos[0].y, f->pos[0].x, f->pos[0].y };
 		for ( int i = 0; i < f->count; ++i )
 		{
 			float speed2 = f->vx[i] * f->vx[i] + f->vy[i] * f->vy[i];
 			maxSpeed2 = maxSpeed2 > speed2 ? maxSpeed2 : speed2;
+			b2Pos p = f->pos[i];
+			all.minX = all.minX < p.x ? all.minX : p.x;
+			all.maxX = all.maxX > p.x ? all.maxX : p.x;
+			all.minY = all.minY < p.y ? all.minY : p.y;
+			all.maxY = all.maxY > p.y ? all.maxY : p.y;
 		}
 
 		// The reach of the coarsest particle, and a generous margin, since bodies and particles both move during the
 		// step: a metre in the caller's units
 		float grow = f->maxRadius + 0.1f * sqrtf( maxSpeed2 ) + b2_lengthUnitsPerMeter;
 
-		// One box over all the liquid, or with liquid outside the bulk the grid would cover, one over the bulk and one
-		// over the liquid in each square outside it that has some, so the shapes between are not gathered
-		b2fBox all, bulk;
+		// One box over all the liquid, or with liquid in parts far apart, one over each part (b2fFindParts), or with
+		// liquid outside the bulk the grid would cover, one over the bulk and one over the liquid in each square outside
+		// it that has some, so the shapes between are not gathered. Parts come first, as the grid cuts the space between
+		// them first.
+		b2fBox bulk = all;
 		int border = f->adaptive ? (int)ceilf( f->maxRadius / f->cellSize ) + 1 : 1;
-		bool bulkOnly = b2fFindBulk( f, NULL, 0, f->count, f->cellSize, border, &all, &bulk );
-		int boxCount = 1;
+		int boxCount = 1, boxCapacity = 0;
 		b2AABB single;
 		b2AABB* boxes = &single;
-		if ( bulkOnly == false )
+		int parts = 1;
+		bool bulkOnly = false;
+		if ( b2fFitsGrid( &all, f->cellSize, border, f->count ) == false )
+		{
+			// Boxes over parts more than two margins apart do not overlap
+			parts = b2fFindParts( f, f->cellSize, (int)ceilf( 2.0f * grow / f->cellSize ) + 1 );
+			bulkOnly = parts == 1 && b2fFindBulk( f, NULL, 0, f->count, f->cellSize, border, &all, &bulk );
+		}
+		if ( parts > 1 )
+		{
+			boxes = PartBoxes( f, parts, grow, &boxCount );
+			boxCapacity = parts;
+		}
+		else if ( bulkOnly == false )
 		{
 			b2Pos origin = { all.minX, all.minY };
 			b2AABB aabb = { { -grow, -grow }, { (float)( all.maxX - all.minX ) + grow, (float)( all.maxY - all.minY ) + grow } };
@@ -709,6 +778,7 @@ void b2fGatherShapes( b2fFluid* f )
 		else
 		{
 			boxes = GatherBoxes( f, &bulk, grow, &boxCount );
+			boxCapacity = f->count;
 		}
 
 		// Every shape, in the order b2World_OverlapAABB would give them: the trees of static, kinematic and dynamic
@@ -724,9 +794,9 @@ void b2fGatherShapes( b2fFluid* f )
 			}
 		}
 		f->gatherMarking = false;
-		if ( bulkOnly )
+		if ( boxCapacity > 0 )
 		{
-			b2Free( boxes, (size_t)f->count * sizeof( b2AABB ) );
+			b2Free( boxes, (size_t)boxCapacity * sizeof( b2AABB ) );
 		}
 	}
 
@@ -1651,8 +1721,22 @@ static void MarkHeld( b2fFluid* f )
 		}
 
 		float grow = 0.5f * (float)( s->maxX - s->minX > s->maxY - s->minY ? s->maxX - s->minX : s->maxY - s->minY );
-		float x0 = (float)( s->minX - f->grid.x ) * inverse - grow * inverse, x1 = (float)( s->maxX - f->grid.x ) * inverse + grow * inverse;
-		float y0 = (float)( s->minY - f->grid.y ) * inverse - grow * inverse, y1 = (float)( s->maxY - f->grid.y ) * inverse + grow * inverse;
+		float x0, x1, y0, y1;
+		if ( f->grid.cut )
+		{
+			// Grown in the world, so the range does not reach across a cut gap into liquid far away
+			x0 = b2fAxisCoord( &f->grid.ax, s->minX - grow );
+			x1 = b2fAxisCoord( &f->grid.ax, s->maxX + grow );
+			y0 = b2fAxisCoord( &f->grid.ay, s->minY - grow );
+			y1 = b2fAxisCoord( &f->grid.ay, s->maxY + grow );
+		}
+		else
+		{
+			x0 = (float)( s->minX - f->grid.x ) * inverse - grow * inverse;
+			x1 = (float)( s->maxX - f->grid.x ) * inverse + grow * inverse;
+			y0 = (float)( s->minY - f->grid.y ) * inverse - grow * inverse;
+			y1 = (float)( s->maxY - f->grid.y ) * inverse + grow * inverse;
+		}
 		if ( x1 < 0.0f || y1 < 0.0f || x0 >= (float)width || y0 >= (float)height )
 		{
 			continue;
