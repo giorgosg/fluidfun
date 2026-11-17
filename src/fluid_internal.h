@@ -681,8 +681,9 @@ struct b2fFluid
 	b2Array( int ) cellAwake;
 	// The pairs the density pass finds, B2F_PAIRS_PER_PARTICLE a particle it covers: the awake particles at their own
 	// index, then the shell in its order. AddSprings and ShellWakes read them in the same pass, ShellWakes the index
-	// only, and the move pass in the next. They live for one b2fRelaxDensity call, which grows the array to what it
-	// covers; it keeps the largest size it has grown to, not room for every particle of capacity.
+	// only, and the move pass in the next. They live for one b2fRelaxDensity call, which grows the array when it covers
+	// more particles than it has room for, to a quarter more than it needs and at most B2F_PAIRS_PER_PARTICLE for each
+	// particle of capacity (GrowPairs). The array never shrinks, as the particles' room does not.
 	b2Array( b2fPair ) pairs;
 	// The cells near an awake body this substep are those marked with holdSerial, when holdMarked
 	b2Array( int ) cellHold;

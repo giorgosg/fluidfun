@@ -697,12 +697,30 @@ void b2fPredict( b2fFluid* f, b2SubStepContext* context )
 	b2SubStep_ParallelFor( context, PredictTask, f->filePending ? f->count : f->activeCount, 1024, f );
 }
 
+// Makes room for the pairs of the particles this call covers. Short of room, it frees the array, since nothing in it
+// is kept, and makes one a quarter larger than needed so that a slowly growing liquid does not make a new one every few
+// substeps, but never larger than the particles' room, B2F_PAIRS_PER_PARTICLE for each particle of capacity, which
+// follows the room as b2fGrow grows it. The array never shrinks, as the particles' room does not.
+static void GrowPairs( b2fFluid* f )
+{
+	int needed = B2F_PAIRS_PER_PARTICLE * ( f->activeCount + f->shellCount );
+	if ( needed > f->pairs.capacity )
+	{
+		int room = B2F_PAIRS_PER_PARTICLE * f->capacity;
+		int capacity = b2MaxInt( b2MinInt( needed + needed / 4, room ), needed );
+		b2Free( f->pairs.data, (size_t)f->pairs.capacity * sizeof( b2fPair ) );
+		f->pairs.data = b2Alloc( (size_t)capacity * sizeof( b2fPair ) );
+		f->pairs.capacity = capacity;
+	}
+	f->pairs.count = needed;
+}
+
 // The pairs are scratch for this call, grown here on the thread that runs the substep, outside the parallel loops. Not
 // on the world's arena: the substep runs inside the solver's tasks, while b2SplitIslandTask may be allocating from it on
 // another thread.
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 {
-	b2fArray_ResizeGrow( f->pairs, B2F_PAIRS_PER_PARTICLE * ( f->activeCount + f->shellCount ) );
+	GrowPairs( f );
 	b2SubStep_ParallelFor( context, DensityTask, f->activeCount + f->shellCount, 256, f );
 	b2SubStep_ParallelFor( context, AccumulateTask, f->activeCount, 256, f );
 	b2SubStep_ParallelFor( context, ApplyTask, f->activeCount, 2048, f );
