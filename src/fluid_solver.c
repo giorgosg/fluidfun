@@ -14,13 +14,12 @@ static inline float TensileClamp( float excess, float tensile )
 // uses the mean of the two sizes and weights the other particle by its area, which keeps moves equal and opposite in
 // momentum when sizes differ. A neighbour of a liquid this particle's liquid does not push on is not counted and not
 // kept, so no pair move, viscosity or cohesion acts between them either.
-static inline void Density( b2fFluid* f, int i, float* density, float* nearDensity )
+static inline void Density( b2fFluid* f, int i, b2fPair* pairs, float* density, float* nearDensity )
 {
 	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 	float si = f->size[i], a = 0.0f, b = 0.0f;
 	uint32_t sees = f->liquidSees[f->liquid[i]];
 	bool all = sees == UINT32_MAX;
-	int* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
 	int n = 0;
 	FOR_NEIGHBOURS( f, i, j )
 	{
@@ -33,7 +32,7 @@ static inline void Density( b2fFluid* f, int i, float* density, float* nearDensi
 			b += w * q * q * q;
 			if ( n < B2F_PAIRS_PER_PARTICLE )
 			{
-				pairs[n] = j;
+				pairs[n] = ( b2fPair ){ j, l };
 			}
 			n += 1;
 		}
@@ -75,7 +74,7 @@ static inline void ApplyWallMoves( b2fFluid* f, int i, float pressure, float nea
 // at the current distance to each neighbour of the same liquid it has none to. The neighbour does the same from its
 // side. Clavet's Algorithm 4 starts a spring at the interaction radius, where it has no force until plasticity
 // shortens it; starting at the distance instead lets an elastic liquid, with no plasticity, hold the shape it had.
-static void AddSprings( b2fFluid* f, int i )
+static void AddSprings( b2fFluid* f, int i, const b2fPair* pairs )
 {
 	b2fSprings* sp = f->springs + i;
 	if ( f->liquids[f->liquid[i]].def.springStiffness <= 0.0f )
@@ -105,14 +104,12 @@ static void AddSprings( b2fFluid* f, int i )
 	// A particle with more neighbours than the list holds (pairCount -1) takes springs from the ones the list has,
 	// which are more than it can hold springs to
 	int n = f->pairCount[i] >= 0 ? f->pairCount[i] : B2F_PAIRS_PER_PARTICLE;
-	const int* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
-	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 	// A liquid without formSpringsAfterSpawn forms springs only where one end is new. Both ends read the flags the
 	// last substep left, so they agree.
 	bool forming = f->liquids[f->liquid[i]].def.formSpringsAfterSpawn || sp->formed == false;
 	for ( int p = 0; p < n && sp->count < B2F_SPRINGS_PER_PARTICLE; ++p )
 	{
-		int j = pairs[p], id = f->id[j];
+		int j = pairs[p].j, id = f->id[j];
 		if ( f->liquid[j] != f->liquid[i] || f->asleep[j] != 0 || ( forming == false && f->springs[j].formed ) )
 		{
 			continue;
@@ -125,10 +122,8 @@ static void AddSprings( b2fFluid* f, int i )
 		}
 		if ( found == false )
 		{
-			// The distance the density pass found, from the same positions
-			float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y );
 			sp->id[sp->count] = id;
-			sp->rest[sp->count] = sqrtf( dx * dx + dy * dy );
+			sp->rest[sp->count] = pairs[p].l;
 			sp->count += 1;
 		}
 	}
@@ -137,12 +132,11 @@ static void AddSprings( b2fFluid* f, int i )
 // The same for one liquid with uniform sizes, where every pair's reach is the interaction radius and weighs 1. It
 // gives the same densities up to rounding, and is kept because it is faster: without it and its move pass below, the two passes
 // took 12% longer in the Tank and 17% longer in the Pool with uniform sizes.
-static inline void UniformDensity( b2fFluid* f, int i, float* density, float* nearDensity )
+static inline void UniformDensity( b2fFluid* f, int i, b2fPair* pairs, float* density, float* nearDensity )
 {
 	float h = f->radius, h2 = h * h, inv = 1.0f / h;
 	b2fCoord x = f->pos[i].x, y = f->pos[i].y;
 	float a = 0.0f, b = 0.0f;
-	int* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
 	int n = 0;
 	FOR_NEIGHBOURS( f, i, j )
 	{
@@ -155,7 +149,7 @@ static inline void UniformDensity( b2fFluid* f, int i, float* density, float* ne
 			b += q2 * q;
 			if ( n < B2F_PAIRS_PER_PARTICLE )
 			{
-				pairs[n] = j;
+				pairs[n] = ( b2fPair ){ j, l };
 			}
 			n += 1;
 		}
@@ -191,9 +185,9 @@ static void UniformAccumulate( b2fFluid* f, int start, int end )
 		float moveX = 0.0f, moveY = 0.0f;
 		float rhoI = f->rho[i], nearI = f->rhoNear[i], pressureI = TensileClamp( rhoI - single, tensile );
 		float vx = f->vx[i], vy = f->vy[i], dvx = 0.0f, dvy = 0.0f;
-#define B2F_UNIFORM_PAIR( j )                                                                                        \
+#define B2F_UNIFORM_PAIR( j, l )                                                                                     \
 	{                                                                                                                  \
-		float l = sqrtf( d2 ), q = 1.0f - l * inv;                                                                     \
+		float q = 1.0f - l * inv;                                                                                      \
 		float excess = clamped ? pressureI + TensileClamp( f->rho[j] - single, tensile ) : rhoI + f->rho[j] - rest;   \
 		float pull = pullScale * q * ( 1.0f - 2.0f * q );                                                              \
 		float d = 0.5f * ( scale * excess * q + nearScale * ( nearI + f->rhoNear[j] ) * q * q - pull ) / l;            \
@@ -210,14 +204,14 @@ static void UniformAccumulate( b2fFluid* f, int start, int end )
 		int n = f->pairCount[i];
 		if ( n >= 0 )
 		{
-			const int* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+			const b2fPair* pairs = f->pairs.data + B2F_PAIRS_PER_PARTICLE * i;
 			for ( int p = 0; p < n; ++p )
 			{
-				int j = pairs[p];
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
+				int j = pairs[p].j;
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
 				if ( d2 > 1e-12f )
 				{
-					B2F_UNIFORM_PAIR( j )
+					B2F_UNIFORM_PAIR( j, l )
 				}
 			}
 		}
@@ -228,7 +222,8 @@ static void UniformAccumulate( b2fFluid* f, int start, int end )
 				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
 				if ( d2 < h2 && d2 > 1e-12f && j != i )
 				{
-					B2F_UNIFORM_PAIR( j )
+					float l = sqrtf( d2 );
+					B2F_UNIFORM_PAIR( j, l )
 				}
 			}
 		}
@@ -242,7 +237,7 @@ static void UniformAccumulate( b2fFluid* f, int start, int end )
 
 // Whether a shell particle, asleep beside awake liquid or against a shape, should wake: its density has moved from what
 // it was in its first substep asleep, or an awake neighbour within reach is fast (fluid_sleep.c)
-static bool ShellWakes( b2fFluid* f, int i )
+static bool ShellWakes( b2fFluid* f, int i, const b2fPair* pairs )
 {
 	// Just asleep, this density is the one it wakes by. The bit goes at the end of the substep, since neighbours read
 	// asleep in this pass.
@@ -259,10 +254,9 @@ static bool ShellWakes( b2fFluid* f, int i )
 	int n = f->pairCount[i];
 	if ( n >= 0 )
 	{
-		const int* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
 		for ( int p = 0; p < n; ++p )
 		{
-			int j = pairs[p];
+			int j = pairs[p].j;
 			if ( f->asleep[j] == 0 && f->vx[j] * f->vx[j] + f->vy[j] * f->vy[j] > fast2 )
 			{
 				return true;
@@ -300,12 +294,13 @@ static void DensityTask( int start, int end, int worker, void* context )
 		for ( int k = start; k < end; ++k )
 		{
 			int i = DensityParticle( f, k );
-			UniformDensity( f, i, f->rho + i, f->rhoNear + i );
+			b2fPair* pairs = f->pairs.data + B2F_PAIRS_PER_PARTICLE * k;
+			UniformDensity( f, i, pairs, f->rho + i, f->rhoNear + i );
 			if ( springy )
 			{
-				AddSprings( f, i );
+				AddSprings( f, i, pairs );
 			}
-			if ( f->asleep[i] != 0 && ShellWakes( f, i ) )
+			if ( f->asleep[i] != 0 && ShellWakes( f, i, pairs ) )
 			{
 				f->wake[i] |= B2F_WAKE_NOW;
 			}
@@ -317,16 +312,17 @@ static void DensityTask( int start, int end, int worker, void* context )
 	for ( int k = start; k < end; ++k )
 	{
 		int i = DensityParticle( f, k );
-		Density( f, i, f->rho + i, f->rhoNear + i );
+		b2fPair* pairs = f->pairs.data + B2F_PAIRS_PER_PARTICLE * k;
+		Density( f, i, pairs, f->rho + i, f->rhoNear + i );
 		const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
 		float hi = 2.0f * b2fLatticeSize( f->size[i] ), hi2 = hi * hi;
 		f->pressure[i] = def->tuning.stiffness * hi2 * TensileClamp( f->rho[i] - rest, def->tuning.tensilePressure );
 		f->nearPressure[i] = def->tuning.nearStiffness * hi2 * f->rhoNear[i];
 		if ( springy )
 		{
-			AddSprings( f, i );
+			AddSprings( f, i, pairs );
 		}
-		if ( f->asleep[i] != 0 && ShellWakes( f, i ) )
+		if ( f->asleep[i] != 0 && ShellWakes( f, i, pairs ) )
 		{
 			f->wake[i] |= B2F_WAKE_NOW;
 		}
@@ -362,10 +358,10 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 		// scans the grid, and skips the others here
 		uint32_t sees = f->liquidSees[f->liquid[i]];
 		bool all = sees == UINT32_MAX;
-#define B2F_PAIR( j )                                                                                                \
+#define B2F_PAIR( j, l )                                                                                             \
 	{                                                                                                                  \
 		const b2fLiquidPair* pair = row + f->liquid[j];                                                                \
-		float sj = f->size[j], h = b2fLatticeSize( si + sj ), l = sqrtf( d2 );                                         \
+		float sj = f->size[j], h = b2fLatticeSize( si + sj );                                                          \
 		float q = 1.0f - l / h, mean = 0.5f * ( si + sj ), w = pair->weight * sj * sj / ( mean * mean );             \
 		float pull = pair->cohesion * h * h * q * ( 1.0f - 2.0f * q );                                                 \
 		float d = 0.5f * w * ( ( pressure + f->pressure[j] ) * q + ( nearPressure + f->nearPressure[j] ) * q * q - pull ) / ( h * l ); \
@@ -382,14 +378,14 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 		int n = f->pairCount[i];
 		if ( n >= 0 )
 		{
-			const int* pairs = f->pairs + B2F_PAIRS_PER_PARTICLE * i;
+			const b2fPair* pairs = f->pairs.data + B2F_PAIRS_PER_PARTICLE * i;
 			for ( int p = 0; p < n; ++p )
 			{
-				int j = pairs[p];
-				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy;
+				int j = pairs[p].j;
+				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, l = pairs[p].l;
 				if ( d2 > 1e-12f )
 				{
-					B2F_PAIR( j )
+					B2F_PAIR( j, l )
 				}
 			}
 		}
@@ -400,7 +396,8 @@ static void AccumulateTask( int start, int end, int worker, void* context )
 				float dx = (float)( f->pos[j].x - x ), dy = (float)( f->pos[j].y - y ), d2 = dx * dx + dy * dy, reach = b2fLatticeSize( si + f->size[j] );
 				if ( d2 < reach * reach && d2 > 1e-12f && j != i && ( all || ( sees >> f->liquid[j] & 1u ) != 0 ) )
 				{
-					B2F_PAIR( j )
+					float l = sqrtf( d2 );
+					B2F_PAIR( j, l )
 				}
 			}
 		}
@@ -700,8 +697,12 @@ void b2fPredict( b2fFluid* f, b2SubStepContext* context )
 	b2SubStep_ParallelFor( context, PredictTask, f->filePending ? f->count : f->activeCount, 1024, f );
 }
 
+// The pairs are scratch for this call, grown here on the thread that runs the substep, outside the parallel loops. Not
+// on the world's arena: the substep runs inside the solver's tasks, while b2SplitIslandTask may be allocating from it on
+// another thread.
 void b2fRelaxDensity( b2fFluid* f, b2SubStepContext* context )
 {
+	b2fArray_ResizeGrow( f->pairs, B2F_PAIRS_PER_PARTICLE * ( f->activeCount + f->shellCount ) );
 	b2SubStep_ParallelFor( context, DensityTask, f->activeCount + f->shellCount, 256, f );
 	b2SubStep_ParallelFor( context, AccumulateTask, f->activeCount, 256, f );
 	b2SubStep_ParallelFor( context, ApplyTask, f->activeCount, 2048, f );

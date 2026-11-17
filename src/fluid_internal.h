@@ -107,8 +107,8 @@ static inline float b2fLatticeSize( float size )
 #define B2F_BLOCK_SHIFT 2
 #define B2F_BLOCK_CELLS ( 1 << B2F_BLOCK_SHIFT )
 
-// Neighbours the density pass keeps per particle for the move pass. A particle with more keeps none, and the
-// move pass scans the grid for it as before.
+// Neighbours the density pass keeps per particle. A particle with more keeps the first this many, which AddSprings
+// takes springs from, and its pairCount is -1, so the move pass scans the grid for it instead.
 #define B2F_PAIRS_PER_PARTICLE 32
 
 // The most one density pass may move a particle, as a fraction of the interaction radius. Effective stiffness
@@ -521,6 +521,16 @@ typedef struct b2fContact
 	float share;
 } b2fContact;
 
+// A neighbour within reach, found by the density pass. Nothing moves before the move pass reads it, so the
+// distance is exact there.
+typedef struct b2fPair
+{
+	int j;
+	float l;
+} b2fPair;
+
+b2DeclareArray( b2fPair );
+
 // What the liquid gives a body in a substep, and the mass of the liquid within reach that moves with it, with its
 // first and second moments about the body's centre of mass
 typedef struct b2fReaction
@@ -632,10 +642,6 @@ struct b2fFluid
 	B2F_CARRIED_FIELDS( B2F_DECLARE_FIELD )
 	B2F_ADAPT_FIELDS( B2F_DECLARE_FIELD )
 	b2fContact* contacts;
-	// Each particle's neighbours within reach, B2F_PAIRS_PER_PARTICLE a particle, found by the density pass and read
-	// by the spring forming and move passes of the same substep. Only the index is kept: nothing moves between the two
-	// passes, so the distance the readers work out from the positions is the one the density pass had, bit for bit.
-	int* pairs;
 
 	// Only made once some liquid has springs, and then sorted, copied and cleared with the particle fields
 	b2fSprings* springs;
@@ -673,6 +679,11 @@ struct b2fFluid
 	// For each row of the awake particles' grid, how many of its cells up to each one hold a particle, width + 1 a row,
 	// to find the shell
 	b2Array( int ) cellAwake;
+	// The pairs the density pass finds, B2F_PAIRS_PER_PARTICLE a particle it covers: the awake particles at their own
+	// index, then the shell in its order. AddSprings and ShellWakes read them in the same pass, ShellWakes the index
+	// only, and the move pass in the next. They live for one b2fRelaxDensity call, which grows the array to what it
+	// covers; it keeps the largest size it has grown to, not room for every particle of capacity.
+	b2Array( b2fPair ) pairs;
 	// The cells near an awake body this substep are those marked with holdSerial, when holdMarked
 	b2Array( int ) cellHold;
 	int holdSerial;
