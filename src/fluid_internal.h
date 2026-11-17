@@ -2,6 +2,7 @@
 // Shared by the library's source files. Not part of the public API.
 #pragma once
 
+#include "bitset.h"
 #include "box2d/fluidfun.h"
 #include "container.h"
 #include "core.h"
@@ -148,18 +149,16 @@ static inline float b2fLatticeSize( float size )
 #define B2F_CARRIED_FIELDS( X )                                                                                         \
 	X( unsigned char, adaptClass ) X( float, adaptTarget )
 
-// Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. marked is
-// scratch for the calls that remove particles, and wake holds the B2F_WAKE_ bits of this substep. sleepCell and
-// sleepWindow are a particle's cell in the sleep grid and how many cells round it to search there (-1 for none), of
-// awake particles from each sort and of asleep ones from when they were filed; shell lists the asleep particles that
-// take part in this substep, those with inShell set (fluid_sleep.c). order is the order filing puts the particles in
-// (b2fFileAsleep).
+// Working values per particle, rebuilt every substep or every frame, so sorting does not carry them. wake holds the
+// B2F_WAKE_ bits of this substep. sleepCell and sleepWindow are a particle's cell in the sleep grid and how many cells
+// round it to search there (-1 for none), of awake particles from each sort and of asleep ones from when they were
+// filed; shell lists the asleep particles that take part in this substep, those with inShell set (fluid_sleep.c). order
+// is the order filing puts the particles in (b2fFileAsleep).
 #define B2F_WORK_FIELDS( X )                                                                                            \
 	X( float, dx ) X( float, dy ) X( float, viscX ) X( float, viscY ) X( float, rhoNear ) X( float, pressure )          \
 		X( float, nearPressure ) X( float, wallDensity ) X( float, wallNearDensity ) X( int, contactCount )             \
-			X( int, pairCount ) X( int, cell ) X( int, sortCell ) X( int, permutation ) X( unsigned char, marked )      \
-				X( unsigned char, wake ) X( int, sleepCell ) X( int, sleepWindow ) X( int, shell )                      \
-					X( unsigned char, inShell ) X( int, order )
+			X( int, pairCount ) X( int, cell ) X( int, sortCell ) X( int, permutation ) X( unsigned char, wake )        \
+				X( int, sleepCell ) X( int, sleepWindow ) X( int, shell ) X( unsigned char, inShell ) X( int, order )
 
 // Working values only adaptive sizes use: each particle's search window and grid block, which the sort fills when
 // sizes vary, and the size pass's measurements and scratch. Made with the carried fields once some liquid is
@@ -298,7 +297,7 @@ typedef struct b2fAxisLayout
 	int binCells;
 	double inverseBin;
 	uint32_t binCount;
-	struct b2BitSet* bits;
+	b2BitSet* bits;
 } b2fAxisLayout;
 
 // Cells over a run of particles sorted by cell along rows, so the particles of each cell are one run and each row of a
@@ -634,6 +633,9 @@ struct b2fFluid
 		B2F_SPEED_FIELDS( B2F_DECLARE_FIELD )
 	} sorted;
 	B2F_WORK_FIELDS( B2F_DECLARE_FIELD )
+	// The particles a call is about to remove, a bit each (b2fRemoveMarked). Not a particle field: every call that
+	// removes clears it, sets the bits and removes at once, on the main thread.
+	b2BitSet marked;
 	// Only made once some liquid is adaptive, and then kept, grown and freed with the rest; NULL until then
 	B2F_CARRIED_FIELDS( B2F_DECLARE_FIELD )
 	B2F_ADAPT_FIELDS( B2F_DECLARE_FIELD )
@@ -731,7 +733,7 @@ struct b2fFluid
 	b2Array( int ) partStart;
 	b2Array( int ) partOf;
 	// Scratch for laying out axes: which bins along x and along y hold particles
-	struct b2BitSet* axisBits[2];
+	b2BitSet axisBits[2];
 
 	b2FluidProfile profile;
 	// This step's substeps, which ran inside the solver's, for the world's profile
@@ -852,8 +854,11 @@ void b2fAllocateOptional( b2fFluid* f, bool adapt, bool speed, bool springs );
 // Makes room for at least needed particles, doubling, up to maxCapacity. Not during a substep.
 // Returns false if needed is past maxCapacity.
 bool b2fGrow( b2fFluid* f, int needed );
-// Removes the particles with their mark set, keeping the order of the rest. The particle fields and the carried fields
-// go with each particle; the grid of the last sort no longer holds. Not during a substep. Returns how many went.
+// Clears marked for the fluid's particles, for the caller to set the bits of those to remove
+void b2fClearMarks( b2fFluid* f );
+// Removes the particles with their bit set in marked, keeping the order of the rest. The particle fields and the
+// carried fields go with each particle; the grid of the last sort no longer holds. Not during a substep. Returns how
+// many went.
 int b2fRemoveMarked( b2fFluid* f );
 // The liquid's index in its fluid
 int b2fGetLiquid( b2LiquidId liquidId, b2fFluid** fluid );
