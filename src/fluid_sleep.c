@@ -202,7 +202,7 @@ void b2fFindShell( b2fFluid* f, b2SubStepContext* context )
 	if ( a > 0 )
 	{
 		int needed = f->grid.height * ( f->grid.width + 1 );
-		b2fArray_Resize( f->cellAwake, needed );
+		b2fArray_ResizeGrow( f->cellAwake, needed );
 		b2SubStep_ParallelFor( context, CellRowTask, f->grid.height, 16, f );
 	}
 	b2SubStep_ParallelFor( context, ShellTask, n - a, 512, f );

@@ -344,9 +344,9 @@ int b2fFindParts( b2fFluid* f, float cell, int gap )
 	}
 
 	int parts = nx * ny;
-	b2fArray_Resize( f->partStart, parts + 1 );
-	b2fArray_Resize( f->partList, n );
-	b2fArray_Resize( f->partOf, n );
+	b2fArray_ResizeGrow( f->partStart, parts + 1 );
+	b2fArray_ResizeGrow( f->partList, n );
+	b2fArray_ResizeGrow( f->partOf, n );
 	memset( f->partStart.data, 0, (size_t)( parts + 1 ) * sizeof( int ) );
 
 	// A particle's stretch goes by its bin, as the marks did, so one on the edge of a bin is in the stretch of that bin
@@ -511,15 +511,15 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 	grid->height = height;
 
 	int cellCount = width * height;
-	b2fArray_Resize( grid->start, cellCount + 2 );
+	b2fArray_ResizeGrow( grid->start, cellCount + 2 );
 	int* start = grid->start.data;
 	memset( start, 0, ( (size_t)cellCount + 2 ) * sizeof( int ) );
 
 	int bw = ( width + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT, bh = ( height + B2F_BLOCK_CELLS - 1 ) >> B2F_BLOCK_SHIFT;
 	if ( adaptive )
 	{
-		b2fArray_Resize( grid->blockSize, bw * bh );
-		b2fArray_Resize( grid->blockReach, bw * bh );
+		b2fArray_ResizeGrow( grid->blockSize, bw * bh );
+		b2fArray_ResizeGrow( grid->blockReach, bw * bh );
 		memset( grid->blockSize.data, 0, (size_t)( bw * bh ) * sizeof( float ) );
 	}
 

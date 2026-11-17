@@ -57,7 +57,7 @@ void b2fBuildWallTable( b2fFluid* f )
 static int FindBody( b2fFluid* f, int bodyId )
 {
 	// New entries name no body, so a lookup never reads an unset one
-	b2fCoverIndex( &f->bodyOfIndex, bodyId, -1 );
+	b2fGrowTable( &f->bodyOfIndex, bodyId, -1 );
 	int i = f->bodyOfIndex.data[bodyId];
 	if ( 0 <= i && i < f->bodies.count && f->bodies.data[i].id.index1 - 1 == bodyId )
 	{
@@ -91,7 +91,7 @@ static bool OverlapShape( int proxyId, uint64_t userData, void* context )
 	if ( f->gatherMarking )
 	{
 		int index = (int)userData;
-		b2fCoverIndex( &f->gatherMark, index, 0 );
+		b2fGrowTable( &f->gatherMark, index, 0 );
 		if ( f->gatherMark.data[index] == f->gatherSerial )
 		{
 			return true;
@@ -246,7 +246,7 @@ static inline int BinOf( const b2fShapeBins* bins, b2fCoord x, b2fCoord y )
 static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 {
 	int squares = bins->width * bins->height;
-	b2fArray_Resize( bins->start, squares + 1 );
+	b2fArray_ResizeGrow( bins->start, squares + 1 );
 	memset( bins->start.data, 0, ( (size_t)squares + 1 ) * sizeof( int ) );
 
 	int total = 0;
@@ -269,7 +269,7 @@ static void FillBins( b2fFluid* f, b2fShapeBins* bins, bool fixedOnly )
 		total += ( x1 - x0 + 1 ) * ( y1 - y0 + 1 );
 	}
 
-	b2fArray_Resize( bins->shapes, total );
+	b2fArray_ResizeGrow( bins->shapes, total );
 
 	for ( int q = 0; q < squares; ++q )
 	{
@@ -351,10 +351,14 @@ static void SetBounds( b2fShape* s, b2Pos origin, b2Rot rotation, float grow, b2
 // are those until b2fUpdateBodies sets them for the first substep. Returns how many shapes were binned.
 static int BinFixedShapes( b2fFluid* f, float range )
 {
-	b2fArray_Resize( f->bodyShapes, f->shapes.count );
-	b2fArray_Resize( f->shapeMark, f->shapes.count );
-	b2fArray_Resize( f->candidates, f->shapes.count );
-	memset( f->shapeMark.data, 0, (size_t)f->shapes.count * sizeof( int ) );
+	b2fArray_ResizeGrow( f->bodyShapes, f->shapes.count );
+	b2fArray_ResizeGrow( f->shapeMark, f->shapes.count );
+	b2fArray_ResizeGrow( f->candidates, f->shapes.count );
+	// With no shapes gathered the marks may never have been made, and memset may not take a null pointer
+	if ( f->shapes.count > 0 )
+	{
+		memset( f->shapeMark.data, 0, (size_t)f->shapes.count * sizeof( int ) );
+	}
 
 	for ( int b = 0; b < f->bodies.count; ++b )
 	{
@@ -737,7 +741,7 @@ void b2fGatherShapes( b2fFluid* f )
 	}
 
 	int needed = f->bodies.count * B2F_CHUNK_COUNT;
-	b2fArray_Resize( f->reactions, needed );
+	b2fArray_ResizeGrow( f->reactions, needed );
 
 	FindPatches( f );
 }
@@ -1642,7 +1646,7 @@ static void MarkHeld( b2fFluid* f )
 		}
 		if ( f->holdMarked == false )
 		{
-			b2fCoverIndex( &f->cellHold, cells - 1, 0 );
+			b2fGrowTable( &f->cellHold, cells - 1, 0 );
 			f->holdSerial += 1;
 			f->holdMarked = true;
 		}

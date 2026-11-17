@@ -36,9 +36,9 @@ static inline void* b2fGrowArray( void* array, int oldCount, int newCount, size_
 }
 
 // Sets an array's count, growing it to at least twice its capacity when it must grow, as b2Array_Push does, so an
-// array resized a little larger each step is not reallocated each step. What it held stays; the new part is not
-// cleared. n is read more than once.
-#define b2fArray_Resize( a, n )                                                                                         \
+// array resized a little larger each step is not reallocated each step. b2Array_Resize grows to exactly n instead.
+// What the array held stays; the new part is not cleared. n is read more than once.
+#define b2fArray_ResizeGrow( a, n )                                                                                     \
 	do                                                                                                                 \
 	{                                                                                                                  \
 		b2Array_Grow( a, n );                                                                                          \
@@ -46,25 +46,27 @@ static inline void* b2fGrowArray( void* array, int oldCount, int newCount, size_
 	}                                                                                                                  \
 	while ( 0 )
 
-// Makes a table looked up by index, such as a body's index in the world, long enough to hold index, grown as
-// b2fArray_Resize grows, with the new entries set to value. Its count is its capacity, so every entry below the count
-// is set.
-static inline void b2fCoverIndex( b2Array( int ) * table, int index, int value )
+// Makes a table looked up by index, such as a body's index in the world, long enough to hold index: its count becomes
+// index + 1 if it was shorter, the new entries set to value, and its capacity grows as b2fArray_ResizeGrow grows it.
+// Every entry below the count is set, so a lookup checks the index against the count.
+static inline void b2fGrowTable( b2Array( int ) * table, int index, int value )
 {
 	if ( index < table->count )
 	{
 		return;
 	}
-	int old = table->count;
 	b2Array_Grow( *table, index + 1 );
-	for ( int i = old; i < table->capacity; ++i )
+	for ( int i = table->count; i <= index; ++i )
 	{
 		table->data[i] = value;
 	}
-	table->count = table->capacity;
+	table->count = index + 1;
 }
 
-b2DeclareArrayNative( float );
+// A float array under the fluid's own name, so that a float array declared by Box2D's container.h one day does not
+// clash with it
+typedef float b2fFloat;
+b2DeclareArrayNative( b2fFloat );
 
 #define B2F_CHUNK_COUNT 64
 #define B2F_CONTACTS_PER_PARTICLE 4
@@ -320,8 +322,8 @@ typedef struct b2fGrid
 	b2fBox all, bulk;
 	bool bulkOnly;
 	// Largest particle in each block of cells, and the largest whose reach touches each block
-	b2Array( float ) blockSize;
-	b2Array( float ) blockReach;
+	b2Array( b2fFloat ) blockSize;
+	b2Array( b2fFloat ) blockReach;
 	// The largest particle in the grid, and the largest the border makes room for, on the solver's lattice
 	float sizeLargest, largest;
 } b2fGrid;
@@ -745,7 +747,7 @@ struct b2fFluid
 	b2Array( int ) recordOfBody;
 	b2Array( b2fSensor ) sensors;
 	// Mass of each liquid within reach of each body in the last substep, to find which liquid a body is in
-	b2Array( float ) bodyLiquidMass;
+	b2Array( b2fFloat ) bodyLiquidMass;
 	b2Array( b2FluidBodyBeginEvent ) bodyBeginEvents;
 	b2Array( b2FluidBodyEndEvent ) bodyEndEvents;
 	b2Array( b2FluidSensorBeginEvent ) sensorBeginEvents;

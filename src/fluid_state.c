@@ -32,7 +32,7 @@ static int FindRecord( const b2fFluid* f, b2BodyId id )
 static int AddRecord( b2fFluid* f, b2BodyId id )
 {
 	int k = id.index1 - 1;
-	b2fCoverIndex( &f->recordOfBody, k, 0 );
+	b2fGrowTable( &f->recordOfBody, k, 0 );
 	int r = f->records.count;
 	b2Array_Push( f->records, ( (b2fBodyRecord){ .id = id, .state = { .liquidId = b2_nullLiquidId } } ) );
 	f->recordOfBody.data[k] = r + 1;
@@ -106,7 +106,7 @@ static void FindLiquids( b2fFluid* f, int liveLiquids, int onlyLiquid )
 	{
 		return;
 	}
-	b2Array_Resize( f->bodyLiquidMass, needed );
+	b2fArray_ResizeGrow( f->bodyLiquidMass, needed );
 	memset( f->bodyLiquidMass.data, 0, (size_t)needed * sizeof( float ) );
 
 	// The awake particles and the shell found contacts in the last substep; other asleep particles' were found earlier,
