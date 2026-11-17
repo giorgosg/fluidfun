@@ -87,8 +87,8 @@ static void OfferSprings( b2fFluid* f, int i, const b2fPair* pairs )
 	}
 	uint32_t offers = 0;
 	const b2LiquidDef* def = &f->liquids[f->liquid[i]].def;
-	// Asleep, its springs stay as they fell asleep; none forms between an asleep and an awake particle, which would join
-	// an awake group to an asleep one
+	// Asleep, its springs stay as they fell asleep; none forms between an asleep and an awake particle, which would
+	// join an awake group to an asleep one
 	if ( def->springStiffness > 0.0f && f->asleep[i] == 0 && f->springCount[i] < B2F_SPRINGS_PER_PARTICLE )
 	{
 		// A particle with more neighbours than the list holds (pairCount -1) offers to the ones the list has
@@ -613,7 +613,8 @@ static void SpringTask( int start, int end, int worker, void* context )
 		}
 
 		float sa = f->size[a], sb = f->size[b], h = b2fLatticeSize( sa + sb );
-		float dx = (float)( f->pos[b].x - f->pos[a].x ), dy = (float)( f->pos[b].y - f->pos[a].y ), r = sqrtf( dx * dx + dy * dy );
+		float dx = (float)( f->pos[b].x - f->pos[a].x ), dy = (float)( f->pos[b].y - f->pos[a].y );
+		float r = sqrtf( dx * dx + dy * dy );
 		float L = spring->rest;
 		float k = def->springStiffness * ( 1.0f - L / h );
 		if ( k > 0.0f && r > 1e-6f )
@@ -659,10 +660,18 @@ static void ListSprings( b2fFluid* f )
 		{
 			continue;
 		}
+		// An end at or past activeCount, awake there since its group woke in place, has no entry in springStart: the
+		// list covers only the awake particles first, which are all the spring pass moves
 		if ( f->asleep[a] == 0 && f->asleep[b] == 0 )
 		{
-			start[a + 2] += a < active ? 1 : 0;
-			start[b + 2] += b < active ? 1 : 0;
+			if ( a < active )
+			{
+				start[a + 2] += 1;
+			}
+			if ( b < active )
+			{
+				start[b + 2] += 1;
+			}
 		}
 		if ( springs[s].rest >= 0.0f )
 		{
@@ -761,6 +770,13 @@ void b2fRelaxSprings( b2fFluid* f, b2SubStepContext* context )
 		uint64_t ticks = b2GetTicks();
 		b2fSpringGroups( f, false );
 		f->profile.sleep += b2GetMilliseconds( ticks );
+	}
+	// With no awake particle there is nothing to pull, and the density pass and FormSprings after it read no spring
+	// scratch, since only awake particles offer. A spring whose end has gone stays in the table, which every reader
+	// allows for, until a substep with awake particles removes it.
+	if ( f->activeCount == 0 )
+	{
+		return;
 	}
 	b2fArray_ResizeGrow( f->springWork, f->springs.count );
 	b2SubStep_ParallelFor( context, SpringTask, f->springs.count, 512, f );

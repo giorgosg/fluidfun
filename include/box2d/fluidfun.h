@@ -151,13 +151,13 @@ typedef struct b2FluidDef
 	/// The most particles the fluid will grow to hold. Each particle of room takes 288 bytes with uniform sizes, 318
 	/// once some liquid has adaptive sizes, as the default liquid does, and 326 once one also has adaptiveSpeed;
 	/// springs add 28 to 44, and a build for large worlds 32 more. Springs themselves take 12 bytes each, and 24 more
-	/// while a step works them out, so about 220 bytes for each particle of jelly, which has about 6. So the default of
-	/// 1,000,000 is up to 0.33 GB, or 0.37 GB with springs and about 0.6 GB full of jelly. While it doubles it briefly
-	/// holds the old arrays as well. A capacity above this is kept as the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it. Its scratch
-	/// within a step comes from the world's arena (b2Capacity::arenaByteCount): about 16 bytes a particle while spawned
-	/// liquid settles, plus about 5 (6 for large worlds) with liquid outside the bulk its grid covers, or up to 64 KB
-	/// with liquid in parts far apart. The arena keeps the room it grew to until the world is destroyed, also after the
-	/// fluid is.
+	/// for the scratch steps work them out in, which is kept, so about 220 bytes for each particle of jelly, which has
+	/// about 6. So the default of 1,000,000 is up to 0.33 GB, or 0.37 GB with springs and about 0.6 GB full of jelly.
+	/// While it doubles it briefly holds the old arrays as well. A capacity above this is kept as the most. The fluid
+	/// allocates through Box2D, so b2SetAllocator and b2GetByteCount include it. Its scratch within a step comes from
+	/// the world's arena (b2Capacity::arenaByteCount): about 16 bytes a particle while spawned liquid settles, plus
+	/// about 5 (6 for large worlds) with liquid outside the bulk its grid covers, or up to 64 KB with liquid in parts
+	/// far apart. The arena keeps the room it grew to until the world is destroyed, also after the fluid is.
 	int maxCapacity;
 	/// Let still liquid fall asleep, as bodies do: a particle slower than 3 cm/s for half a second holds still and
 	/// costs much less until something wakes it. Bodies in liquid that is asleep around them may sleep too. It also

@@ -10,9 +10,9 @@
 //   liquidsFiltered, adaptive and springy rebuilt by b2fUpdateLiquids from them.
 // - Each particle's position, velocity, size, density, id and liquid, its sleep time, smoothed velocity (or density
 //   to wake by) and whether it is asleep, its speedMemory and springFormed where those arrays have been made, in the
-//   fluid's order, which the next sort keeps within a cell.
-// - The spring table, in its order, springs to particles that have gone included: the next spring pass removes them. prev is set at the start of every substep before anything
+//   fluid's order, which the next sort keeps within a cell. prev is set at the start of every substep before anything
 //   reads it, so it is not written.
+// - The spring table, in its order, springs to particles that have gone included: the next spring pass removes them.
 // - maxRadius, which the last sort of a step set from sizes that the size pass has changed since, and which the next
 //   step's gather reads before it sorts.
 // - The shapes and bodies the last step gathered, as its last substep left them: a spawn's coarsening at the start of

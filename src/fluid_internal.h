@@ -199,8 +199,8 @@ static inline float b2fLatticeSize( float size )
 #define B2F_WAKE_NOW 2u
 #define B2F_WAKE_CALM 8u
 
-// A spring, after Clavet et al. 2005 section 5: one for each pair of particles it joins, with one rest length, kept in a
-// table of its own (b2fFluid::springs). Its ends are particle ids, the lower first, since indices change with every
+// A spring, after Clavet et al. 2005 section 5: one for each pair of particles it joins, with one rest length, kept in
+// a table of its own (b2fFluid::springs). Its ends are particle ids, the lower first, since indices change with every
 // sort, with removals between steps, and with merges and splits at the end of each; the spring pass finds them in an id
 // table it builds every substep. A spring whose end has gone, by a removal or a merge, goes in the next spring pass.
 typedef struct b2fSpring
@@ -709,9 +709,10 @@ struct b2fFluid
 	b2Array( int ) cellAwake;
 	// The pairs the density pass finds, B2F_PAIRS_PER_PARTICLE a particle it covers: the awake particles at their own
 	// index, then the shell in its order. OfferSprings and ShellWakes read them in the same pass, ShellWakes the index
-	// only, FormSprings after it, and the move pass after that. They live for one b2fRelaxDensity call, which grows the array when it covers
-	// more particles than it has room for, to a quarter more than it needs and at most B2F_PAIRS_PER_PARTICLE for each
-	// particle of capacity (GrowPairs). The array never shrinks, as the particles' room does not.
+	// only, FormSprings after it, and the move pass after that. They live for one b2fRelaxDensity call, which grows the
+	// array when it covers more particles than it has room for, to a quarter more than it needs and at most
+	// B2F_PAIRS_PER_PARTICLE for each particle of capacity (GrowPairs). The array never shrinks, as the particles'
+	// room does not.
 	b2Array( b2fPair ) pairs;
 	// The cells near an awake body this substep are those marked with holdSerial, when holdMarked
 	b2Array( int ) cellHold;

@@ -320,8 +320,8 @@ void b2fSpringGroups( b2fFluid* f, bool settle )
 		parent[i] = i;
 		group[i] = 0;
 	}
-	// Every spring once, for its pair. A spring whose end has gone, or is of another liquid, joins nothing: the next spring
-	// pass removes it without working it out.
+	// Every spring once, for its pair. A spring whose end has gone, or is of another liquid, joins nothing: the next
+	// spring pass removes it without working it out.
 	const b2fSpring* springs = f->springs.data;
 	for ( int s = 0; s < f->springs.count; ++s )
 	{
