@@ -7,6 +7,7 @@
 #include "core.h"
 #include "fluid.h"
 #include "physics_world.h"
+#include "platform.h"
 #include "recording.h"
 
 b2LiquidDef b2DefaultLiquidDef( void )
@@ -376,6 +377,9 @@ b2fFluid* b2fMakeFluid( b2World* world, const b2FluidDef* def, int capacity )
 #undef B2F_ALLOC_SORTED
 	f->contacts = b2AllocZero( n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
 	f->pairs = b2Alloc( n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
+	f->marked = b2CreateBitSet( (uint32_t)n );
+	f->axisBits[0] = b2CreateBitSet( 1024 );
+	f->axisBits[1] = b2CreateBitSet( 1024 );
 	b2fBuildWallTable( f );
 	return f;
 }
@@ -416,6 +420,7 @@ void b2FreeFluid( b2fFluid* f )
 #undef B2F_FREE_SORTED
 	b2Free( f->contacts, n * B2F_CONTACTS_PER_PARTICLE * sizeof( b2fContact ) );
 	b2Free( f->pairs, n * B2F_PAIRS_PER_PARTICLE * sizeof( b2fPair ) );
+	b2DestroyBitSet( &f->marked );
 	if ( f->springs != NULL )
 	{
 		b2Free( f->springs, n * sizeof( b2fSprings ) );
@@ -467,11 +472,7 @@ void b2FreeFluid( b2fFluid* f )
 	for ( int i = 0; i < 2; ++i )
 	{
 		b2fFreeAxis( f->partAxes + i );
-		if ( f->axisBits[i] != NULL )
-		{
-			b2DestroyBitSet( f->axisBits[i] );
-			b2Free( f->axisBits[i], sizeof( b2BitSet ) );
-		}
+		b2DestroyBitSet( f->axisBits + i );
 	}
 	b2fFreeState( f );
 	b2Free( f, sizeof( b2fFluid ) );
@@ -612,26 +613,47 @@ bool b2fGrow( b2fFluid* f, int needed )
 	return true;
 }
 
+void b2fClearMarks( b2fFluid* f )
+{
+	b2SetBitCountAndClear( &f->marked, (uint32_t)f->count );
+}
+
 // Compaction keeps the order. The size pass, which removes particles itself, runs right after a substep's sort, so
 // no grid has to outlast a removal; what B2F_CARRIED_FIELDS lists is read across one, so it goes with each particle.
 int b2fRemoveMarked( b2fFluid* f )
 {
-	int n = f->count, kept = 0;
-	for ( int i = 0; i < n; ++i )
+	const b2BitSet* marked = &f->marked;
+	int n = f->count;
+	B2_ASSERT( (uint32_t)n <= 64 * marked->blockCount );
+
+	// The particles before the first mark stay where they are
+	int first = n;
+	for ( uint32_t block = 0; block < marked->blockCount; ++block )
 	{
-		if ( f->marked[i] )
+		if ( marked->bits[block] != 0 )
 		{
+			int bit = (int)( 64 * block + b2CTZ64( marked->bits[block] ) );
+			first = bit < n ? bit : n;
+			break;
+		}
+	}
+
+	// The awake particles still come first, fewer by those removed among them, and they and the asleep ones are filed
+	// again before the next substep
+	int active = f->activeCount < n ? f->activeCount : n, removed = 0, kept = first;
+	for ( int i = first; i < n; ++i )
+	{
+		if ( b2GetBit( marked, (uint32_t)i ) )
+		{
+			removed += i < active ? 1 : 0;
 			continue;
 		}
-		if ( kept != i )
+		b2fCopyParticle( f, kept, i );
+		if ( f->adaptMass != NULL )
 		{
-			b2fCopyParticle( f, kept, i );
-			if ( f->adaptMass != NULL )
-			{
 #define B2F_CARRY_FIELD( type, name ) f->name[kept] = f->name[i];
-				B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
+			B2F_CARRIED_FIELDS( B2F_CARRY_FIELD )
 #undef B2F_CARRY_FIELD
-			}
 		}
 		kept += 1;
 	}
@@ -642,13 +664,6 @@ int b2fRemoveMarked( b2fFluid* f )
 	}
 	f->count = kept;
 	f->gridStale = f->gridStale || kept < n;
-	// The awake particles still come first, fewer by those removed among them, and they and the asleep ones are filed
-	// again before the next substep
-	int active = f->activeCount < n ? f->activeCount : n, removed = 0;
-	for ( int i = 0; i < active; ++i )
-	{
-		removed += f->marked[i] ? 1 : 0;
-	}
 	f->activeCount = active - removed;
 	f->settledCount = kept - f->activeCount < f->settledCount ? kept - f->activeCount : f->settledCount;
 	return n - kept;
@@ -677,12 +692,15 @@ int b2fPickLiquid( b2fFluid* f, b2LiquidId liquidId )
 // Marks the particles a call picks, at most maxCount, the first in the fluid's order, and clears the mark on the rest
 static void MarkInside( b2fFluid* f, int liquid, const b2fOutline* outline, int maxCount )
 {
+	b2fClearMarks( f );
 	int count = 0;
-	for ( int i = 0; i < f->count; ++i )
+	for ( int i = 0; i < f->count && count < maxCount; ++i )
 	{
-		bool picked = count < maxCount && b2fPicks( f, liquid, outline, i );
-		f->marked[i] = picked ? 1 : 0;
-		count += picked ? 1 : 0;
+		if ( b2fPicks( f, liquid, outline, i ) )
+		{
+			b2SetBit( &f->marked, (uint32_t)i );
+			count += 1;
+		}
 	}
 }
 
@@ -796,9 +814,13 @@ void b2DestroyLiquid( b2LiquidId liquidId )
 		return;
 	}
 
+	b2fClearMarks( f );
 	for ( int i = 0; i < f->count; ++i )
 	{
-		f->marked[i] = f->liquid[i] == index ? 1 : 0;
+		if ( f->liquid[i] == index )
+		{
+			b2SetBit( &f->marked, (uint32_t)i );
+		}
 	}
 	b2fRemoveMarked( f );
 	b2fDestroyEmitters( f, index );

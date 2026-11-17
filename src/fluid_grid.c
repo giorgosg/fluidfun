@@ -81,11 +81,6 @@ void b2fFreeAxis( b2fAxis* axis )
 
 void b2fBeginAxis( b2fFluid* f, int which, b2fAxisLayout* layout, b2fCoord lo, b2fCoord hi, float cell )
 {
-	if ( f->axisBits[which] == NULL )
-	{
-		f->axisBits[which] = b2Alloc( sizeof( b2BitSet ) );
-		*f->axisBits[which] = b2CreateBitSet( 1024 );
-	}
 	int binCells = B2F_AXIS_BIN_CELLS;
 	double extent = (double)( hi - lo );
 	while ( extent / ( (double)binCells * (double)cell ) >= (double)( B2F_AXIS_BINS - 1 ) )
@@ -99,7 +94,7 @@ void b2fBeginAxis( b2fFluid* f, int which, b2fAxisLayout* layout, b2fCoord lo, b
 		.binCells = binCells,
 		.inverseBin = 1.0 / ( (double)binCells * (double)cell ),
 		.binCount = (uint32_t)( extent / ( (double)binCells * (double)cell ) ) + 1,
-		.bits = f->axisBits[which],
+		.bits = f->axisBits + which,
 	};
 	b2SetBitCountAndClear( layout->bits, layout->binCount );
 }

@@ -814,10 +814,14 @@ static void ChangeSizes( b2fFluid* f, float elapsed, bool settle )
 	// rest are, so liquid that has settled has none to change, and one whose size changes wakes, with what it splits
 	// into. Keeping them out of the pass instead left an awake particle beside sleeping ones with only one neighbour to
 	// trade mass with, and the two passed it back and forth every step, each moving 4 cm and back at 1.5 m/s.
+	b2fClearMarks( f );
 	for ( int i = 0; i < n; ++i )
 	{
-		f->marked[i] = f->adaptMass[i] <= 0.0f ? 1 : 0;
-		if ( f->marked[i] == 0 )
+		if ( f->adaptMass[i] <= 0.0f )
+		{
+			b2SetBit( &f->marked, (uint32_t)i );
+		}
+		else
 		{
 			f->size[i] = fineSize * sqrtf( f->adaptMass[i] / fineArea );
 		}
