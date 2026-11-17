@@ -575,17 +575,10 @@ static int64_t SquareOf( b2fCoord v, b2fCoord origin, double side )
 
 // Boxes to gather shapes in when liquid lies outside the bulk: the bulk grown by grow, then for each square four times
 // grow a side, in order along rows, the bounds of the particles outside the bulk in it, grown the same. Every particle
-// is in one of them. At most one box more than there are particles outside the bulk, on the world's arena, which the
-// caller frees.
-static b2AABB* GatherBoxes( const b2fFluid* f, const b2fBox* bulk, float grow, int* boxCount )
+// is in one of them. At most one box more than the particles outside the bulk, as b2fFindBulk counted them, which are
+// at most one in B2F_BULK_OUTSIDE. On the world's arena, which the caller frees.
+static b2AABB* GatherBoxes( const b2fFluid* f, const b2fBox* bulk, int outside, float grow, int* boxCount )
 {
-	int outside = 0;
-	for ( int i = 0; i < f->count; ++i )
-	{
-		b2Pos p = f->pos[i];
-		outside += p.x < bulk->minX || p.x > bulk->maxX || p.y < bulk->minY || p.y > bulk->maxY ? 1 : 0;
-	}
-
 	b2Stack* stack = &f->world->stack;
 	b2AABB* boxes = b2StackAlloc( stack, ( 1 + outside ) * (int)sizeof( b2AABB ), "gather boxes" );
 	b2Pos origin = { bulk->minX, bulk->minY };
@@ -604,6 +597,7 @@ static b2AABB* GatherBoxes( const b2fFluid* f, const b2fBox* bulk, float grow, i
 			squares[k++] = ( b2fSquare ){ SquareOf( p.y, bulk->minY, side ), SquareOf( p.x, bulk->minX, side ), p.x, p.y };
 		}
 	}
+	B2_ASSERT( k == outside );
 	qsort( squares, (size_t)k, sizeof( b2fSquare ), CompareSquares );
 
 	for ( int first = 0; first < k; )
@@ -698,13 +692,13 @@ void b2fGatherShapes( b2fFluid* f )
 		int boxCount = 1;
 		b2AABB single;
 		b2AABB* boxes = &single;
-		int parts = 1;
+		int parts = 1, outside = 0;
 		bool bulkOnly = false;
 		if ( b2fFitsGrid( &all, f->cellSize, border, f->count ) == false )
 		{
 			// Boxes over parts more than two margins apart do not overlap
 			parts = b2fFindParts( f, f->cellSize, (int)ceilf( 2.0f * grow / f->cellSize ) + 1 );
-			bulkOnly = parts == 1 && b2fFindBulk( f, NULL, 0, f->count, f->cellSize, border, &all, &bulk );
+			bulkOnly = parts == 1 && b2fFindBulk( f, NULL, 0, f->count, f->cellSize, border, &all, &bulk, &outside );
 		}
 		if ( parts > 1 )
 		{
@@ -718,7 +712,7 @@ void b2fGatherShapes( b2fFluid* f )
 		}
 		else
 		{
-			boxes = GatherBoxes( f, &bulk, grow, &boxCount );
+			boxes = GatherBoxes( f, &bulk, outside, grow, &boxCount );
 		}
 
 		// Every shape, in the order b2World_OverlapAABB would give them: the trees of static, kinematic and dynamic

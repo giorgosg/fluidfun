@@ -152,8 +152,9 @@ typedef struct b2FluidDef
 	/// springs add 280 to 296, and a build for large worlds 32 more. So the default of 1,000,000 is up to 0.56 GB, or
 	/// 0.85 GB with springs. While it doubles it briefly holds the old arrays as well. A capacity above this is kept as
 	/// the most. The fluid allocates through Box2D, so b2SetAllocator and b2GetByteCount include it. Its scratch
-	/// within a step, up to 40 bytes a particle or 48 for large worlds, comes from the world's arena
-	/// (b2Capacity::arenaByteCount), which keeps the room it grew to until the world is destroyed, also after the
+	/// within a step comes from the world's arena (b2Capacity::arenaByteCount): about 16 bytes a particle while spawned
+	/// liquid settles, plus about 5 (6 for large worlds) with liquid outside the bulk its grid covers, or up to 64 KB
+	/// with liquid in parts far apart. The arena keeps the room it grew to until the world is destroyed, also after the
 	/// fluid is.
 	int maxCapacity;
 	/// Let still liquid fall asleep, as bodies do: a particle slower than 3 cm/s for half a second holds still and

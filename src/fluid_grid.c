@@ -264,7 +264,8 @@ static b2fBox Bounds( const b2fFluid* f, const int* list, int first, int last )
 	return box;
 }
 
-bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk )
+bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float cell, int border, b2fBox* all, b2fBox* bulk,
+				  int* outside )
 {
 	b2fBox box = Bounds( f, list, first, last );
 	*all = box;
@@ -296,16 +297,20 @@ bool b2fFindBulk( const b2fFluid* f, const int* list, int first, int last, float
 
 	// Liquid split into parts of similar size has no bulk: filed into edge cells, the rest would cost more than larger
 	// cells do
-	int outside = 0;
+	int count = 0;
 	FOR_RUN( list, first, last, i )
 	{
 		b2Pos p = f->pos[i];
-		outside += p.x < bulk->minX || p.x > bulk->maxX || p.y < bulk->minY || p.y > bulk->maxY ? 1 : 0;
+		count += p.x < bulk->minX || p.x > bulk->maxX || p.y < bulk->minY || p.y > bulk->maxY ? 1 : 0;
 	}
-	if ( outside > ( last - first ) / B2F_BULK_OUTSIDE )
+	if ( count > ( last - first ) / B2F_BULK_OUTSIDE )
 	{
 		*bulk = box;
 		return false;
+	}
+	if ( outside != NULL )
+	{
+		*outside = count;
 	}
 	return true;
 }
@@ -485,7 +490,7 @@ static void BuildGrid( b2fFluid* f, b2fGrid* grid, const int* list, int first, i
 	{
 		if ( GridFits( &box, cs, border, cellLimit ) == false )
 		{
-			grid->bulkOnly = b2fFindBulk( f, list, first, last, cs, border, &grid->all, &box );
+			grid->bulkOnly = b2fFindBulk( f, list, first, last, cs, border, &grid->all, &box, NULL );
 		}
 		while ( true )
 		{
