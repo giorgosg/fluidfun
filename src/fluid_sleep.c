@@ -124,6 +124,15 @@ static void FindAwakeCell( b2fFluid* f, int i )
 	}
 }
 
+#if !defined( NDEBUG ) || defined( B2_ENABLE_ASSERT )
+// Whether a shell particle's cell is its cell in the current grid of awake particles, which the substep searches from
+static bool HasAwakeCell( const b2fFluid* f, int i )
+{
+	int cx, cy;
+	return f->activeCount == 0 || f->cell[i] == b2fGridCell( &f->grid, f->pos[i], &cx, &cy );
+}
+#endif
+
 void b2fAddShell( b2fFluid* f, int i )
 {
 	f->inShell[i] = 1;
@@ -132,6 +141,7 @@ void b2fAddShell( b2fFluid* f, int i )
 	{
 		FindAwakeCell( f, i );
 	}
+	B2_ASSERT( HasAwakeCell( f, i ) );
 }
 
 // For each row of the awake particles' grid, a running count of the cells holding a particle
@@ -158,8 +168,9 @@ static void CellRowTask( int start, int end, int worker, void* context )
 // An asleep particle is in the shell if some cell of its search window in the awake particles' grid holds a particle,
 // which takes in every awake particle within its reach, since the window finds pairs from both sides. One outside the
 // bounds of the awake particles by more than any reach is not, unless it was just filed asleep. Every shell particle
-// gets its cell in this grid, since the substep searches the grid from it; one left with a cell from an older grid
-// reads the wrong neighbours, or past the grid's end.
+// gets its cell in this grid, since the substep searches the grid from it. Cells are not carried when particles are
+// filed, so without this a particle just filed far out holds whatever cell its slot last held; searched from there,
+// a window inside the grid finds only particles out of reach, but one off the grid's edge reads outside it.
 static void ShellTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
@@ -174,9 +185,14 @@ static void ShellTask( int start, int end, int worker, void* context )
 		bool shell = filed && ( f->asleep[i] & B2F_ASLEEP_NEW ) != 0;
 		b2Pos p = f->pos[i];
 		float s = b2fLatticeSize( f->size[i] ), reach = s + ( grid->largest > s ? grid->largest : s ) + grid->cell;
-		if ( a > 0 && p.x >= box.minX - reach && p.x <= box.maxX + reach && p.y >= box.minY - reach && p.y <= box.maxY + reach )
+		bool near = a > 0 && p.x >= box.minX - reach && p.x <= box.maxX + reach && p.y >= box.minY - reach &&
+					p.y <= box.maxY + reach;
+		if ( a > 0 && ( near || shell ) )
 		{
 			FindAwakeCell( f, i );
+		}
+		if ( near )
+		{
 			int r = grid->uniformWindow > 0 ? grid->uniformWindow : f->window[i];
 			int cx = f->cell[i] % width, cy = f->cell[i] / width;
 			for ( int row = cy - r; row <= cy + r && shell == false; ++row )
@@ -184,10 +200,6 @@ static void ShellTask( int start, int end, int worker, void* context )
 				const int* counts = f->cellAwake.data + row * stride;
 				shell = counts[cx + r + 1] > counts[cx - r];
 			}
-		}
-		else if ( a > 0 && shell )
-		{
-			FindAwakeCell( f, i );
 		}
 		f->inShell[i] = shell ? 1 : 0;
 	}
@@ -217,6 +229,7 @@ void b2fFindShell( b2fFluid* f, b2SubStepContext* context )
 	{
 		if ( f->inShell[i] )
 		{
+			B2_ASSERT( HasAwakeCell( f, i ) );
 			f->shell[f->shellCount++] = i;
 		}
 	}
