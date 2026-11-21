@@ -157,7 +157,9 @@ static void CellRowTask( int start, int end, int worker, void* context )
 
 // An asleep particle is in the shell if some cell of its search window in the awake particles' grid holds a particle,
 // which takes in every awake particle within its reach, since the window finds pairs from both sides. One outside the
-// bounds of the awake particles by more than any reach is not.
+// bounds of the awake particles by more than any reach is not, unless it was just filed asleep. Every shell particle
+// gets its cell in this grid, since the substep searches the grid from it; one left with a cell from an older grid
+// reads the wrong neighbours, or past the grid's end.
 static void ShellTask( int start, int end, int worker, void* context )
 {
 	(void)worker;
@@ -182,6 +184,10 @@ static void ShellTask( int start, int end, int worker, void* context )
 				const int* counts = f->cellAwake.data + row * stride;
 				shell = counts[cx + r + 1] > counts[cx - r];
 			}
+		}
+		else if ( a > 0 && shell )
+		{
+			FindAwakeCell( f, i );
 		}
 		f->inShell[i] = shell ? 1 : 0;
 	}
